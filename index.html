@@ -1,0 +1,3134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CrystalNexus - Crystal Structure Analysis Platform</title>
+    <script src="https://3dmol.csb.pitt.edu/build/3Dmol-min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f5f5f5;
+            overflow: hidden;
+        }
+        
+        /* Header */
+        .header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 60px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            z-index: 1000;
+        }
+        
+        .header h1 {
+            font-size: 20px;
+            font-weight: 600;
+        }
+        
+        .server-status {
+            margin-left: auto;
+            font-size: 12px;
+            padding: 4px 12px;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.2);
+        }
+        
+        /* Main Container */
+        .main-container {
+            display: flex;
+            position: fixed;
+            top: 60px;
+            left: 0;
+            right: 0;
+            bottom: 0;
+        }
+        
+        /* Sidebar Menu */
+        .sidebar {
+            width: 350px;
+            background: white;
+            box-shadow: 2px 0 4px rgba(0,0,0,0.1);
+            overflow-y: auto;
+            z-index: 100;
+        }
+        
+        .sidebar-section {
+            padding: 20px;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .sidebar-section:last-child {
+            border-bottom: none;
+        }
+        
+        .sidebar-section h3 {
+            margin-bottom: 15px;
+            color: #333;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        
+        /* File Operations Section */
+        
+        .file-input {
+            margin-bottom: 15px;
+        }
+        
+        .file-input label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 500;
+        }
+        
+        .file-input input[type="file"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: white;
+        }
+        
+        .btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            margin-right: 8px;
+            margin-bottom: 8px;
+            transition: background 0.2s;
+        }
+        
+        .btn:hover {
+            background: #0056b3;
+        }
+        
+        .btn-secondary {
+            background: #6c757d;
+        }
+        
+        .btn-secondary:hover {
+            background: #545b62;
+        }
+        
+        .btn-success {
+            background: #28a745;
+        }
+        
+        .btn-success:hover {
+            background: #1e7e34;
+        }
+        
+        /* Atom Editing Section */
+        .atom-editing {
+            background: #fff9e6;
+        }
+        
+        .simplified-atom-editing {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .edit-row {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        .edit-row label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #495057;
+        }
+        
+        #executeBtn {
+            margin-top: 5px;
+            font-weight: 600;
+        }
+        
+        .atom-selection {
+            margin-bottom: 15px;
+        }
+        
+        .selection-method {
+            margin-bottom: 10px;
+        }
+        
+        .selection-method label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 500;
+        }
+        
+        .atom-label-select-large {
+            width: 100%;
+            padding: 6px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 13px;
+            background: white;
+            margin-bottom: 8px;
+        }
+        
+        .btn-primary {
+            background: #007bff;
+            border-color: #007bff;
+            color: white;
+            width: 100%;
+        }
+        
+        .btn-primary:hover {
+            background: #0056b3;
+            border-color: #004085;
+        }
+        
+        .selected-atoms-info {
+            background: #e9ecef;
+            padding: 8px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            font-size: 13px;
+        }
+        
+        .edit-operations {
+            border-top: 1px solid #dee2e6;
+            padding-top: 15px;
+            margin-top: 15px;
+        }
+        
+        .edit-section {
+            margin-bottom: 15px;
+        }
+        
+        .edit-section:last-child {
+            margin-bottom: 0;
+        }
+        
+        .element-selector {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 5px;
+        }
+        
+        .element-select {
+            width: 100%;
+            padding: 6px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 12px;
+            background: white;
+        }
+        
+        .btn-danger {
+            background: #dc3545;
+            border-color: #dc3545;
+        }
+        
+        .btn-danger:hover {
+            background: #c82333;
+            border-color: #bd2130;
+        }
+
+        /* Supercell Control */
+        .supercell-controls {
+            background: #f0f8ff;
+        }
+        
+        .multiplier-row {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            margin-top: 5px;
+        }
+        
+        .axis-label {
+            font-weight: 500;
+            color: #495057;
+            min-width: 15px;
+        }
+        
+        .multiplier-input-compact {
+            width: 50px;
+            padding: 4px;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            font-size: 12px;
+            text-align: center;
+        }
+        
+        .supercell-info {
+            background: #e9ecef;
+            padding: 8px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-size: 12px;
+            color: #495057;
+        }
+        
+        
+        /* Structure Information Section */
+        .structure-info {
+            background: #e9ecef;
+        }
+        
+        .info-content {
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        
+        .info-content strong {
+            color: #333;
+        }
+        
+        /* Message Display */
+        .messages {
+            margin-top: 15px;
+        }
+        
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            display: none;
+            font-size: 13px;
+        }
+        
+        .success {
+            background: #d4edda;
+            color: #155724;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            display: none;
+            font-size: 13px;
+        }
+        
+        .loading {
+            background: #fff3cd;
+            color: #856404;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            display: none;
+            font-size: 13px;
+        }
+        
+        /* Viewer Area */
+        .viewer-area {
+            flex: 1;
+            position: relative;
+            background: #000;
+        }
+        
+        .drop-zone {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 123, 255, 0.1);
+            border: 3px dashed #007bff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            color: #007bff;
+            z-index: 1000;
+            display: none;
+        }
+        
+        .drop-zone.active {
+            display: flex;
+        }
+        
+        #viewer {
+            width: 100%;
+            height: 100%;
+            background: #000;
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .sidebar {
+                width: 100%;
+                height: 50%;
+            }
+            
+            .main-container {
+                flex-direction: column;
+            }
+            
+            .viewer-area {
+                height: 50%;
+            }
+        }
+        
+        /* Scrollbar Customization */
+        .sidebar::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        .sidebar::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        
+        .sidebar::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 3px;
+        }
+        
+        .sidebar::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8;
+        }
+        
+        /* Initial Setup Modal */
+        .setup-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+        }
+        
+        .setup-modal.hidden {
+            display: none;
+        }
+        
+        .setup-window {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            width: 500px;
+            max-width: 90vw;
+            max-height: 80vh;
+            overflow-y: auto;
+            animation: modalFadeIn 0.3s ease-out;
+        }
+        
+        @keyframes modalFadeIn {
+            from {
+                opacity: 0;
+                transform: scale(0.9) translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+        
+        .setup-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 12px 12px 0 0;
+            text-align: center;
+        }
+        
+        .setup-header h2 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 600;
+        }
+        
+        .setup-content {
+            padding: 30px;
+        }
+        
+        .setup-step {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+        
+        .setup-step.active {
+            border-color: #007bff;
+            background: #f8f9ff;
+        }
+        
+        .setup-step.completed {
+            border-color: #28a745;
+            background: #f8fff9;
+        }
+        
+        .setup-step h3 {
+            margin: 0 0 15px 0;
+            color: #333;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .step-number {
+            width: 24px;
+            height: 24px;
+            background: #6c757d;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .setup-step.active .step-number {
+            background: #007bff;
+        }
+        
+        .setup-step.completed .step-number {
+            background: #28a745;
+        }
+        
+        .setup-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .sample-file-info {
+            background: #e9ecef;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 15px 0;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .supercell-inputs {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin: 15px 0;
+        }
+        
+        .multiplier-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .multiplier-label {
+            font-weight: 600;
+            color: #495057;
+        }
+        
+        .multiplier-input {
+            width: 60px;
+            padding: 8px;
+            border: 2px solid #dee2e6;
+            border-radius: 4px;
+            text-align: center;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        
+        .multiplier-input:focus {
+            outline: none;
+            border-color: #007bff;
+        }
+        
+        .final-actions {
+            text-align: center;
+            padding: 20px 0;
+        }
+        
+        /* File Selection Methods */
+        .file-source-selection {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #e9ecef;
+        }
+        
+        .radio-option {
+            margin-bottom: 10px;
+        }
+        
+        .radio-option:last-child {
+            margin-bottom: 0;
+        }
+        
+        .radio-label {
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            font-weight: 500;
+            color: #495057;
+            transition: color 0.2s ease;
+        }
+        
+        .radio-label:hover {
+            color: #007bff;
+        }
+        
+        .radio-label input[type="radio"] {
+            margin-right: 10px;
+            transform: scale(1.2);
+        }
+        
+        .radio-text {
+            font-size: 14px;
+        }
+        
+        /* File Input Section */
+        .file-input-section {
+            margin: 15px 0;
+            padding: 15px;
+            border: 2px dashed #dee2e6;
+            border-radius: 8px;
+            text-align: center;
+            transition: all 0.2s ease;
+        }
+        
+        .file-input-section:hover {
+            border-color: #007bff;
+            background: rgba(0, 123, 255, 0.02);
+        }
+        
+        .file-input-btn {
+            padding: 12px 24px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        
+        /* Sample File Selection */
+        .sample-file-select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            font-size: 14px;
+            background: white;
+            cursor: pointer;
+            transition: border-color 0.2s ease;
+        }
+        
+        .sample-file-select:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+        }
+        
+        .sample-file-item {
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            background: #f8f9fa;
+        }
+        
+        .sample-file-item:hover {
+            border-color: #007bff;
+            background: #e3f2fd;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(0, 123, 255, 0.15);
+        }
+        
+        .sample-file-item h5 {
+            margin: 0 0 8px 0;
+            color: #007bff;
+            font-weight: 600;
+        }
+        
+        .sample-file-item p {
+            margin: 4px 0;
+            font-size: 13px;
+            color: #495057;
+        }
+        
+        /* Sample File Preview - Removed (no longer needed) */
+        
+        .loading-status {
+            transition: opacity 0.3s ease-out;
+        }
+        
+        /* File Analysis Information */
+        .file-analysis {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px;
+        }
+        
+        .file-analysis h5 {
+            margin: 0 0 10px 0;
+            color: #007bff;
+            font-weight: 600;
+        }
+        
+        .file-analysis p {
+            margin: 5px 0;
+            font-size: 13px;
+            color: #495057;
+        }
+        
+        .file-analysis ul {
+            margin: 5px 0;
+            padding-left: 20px;
+        }
+        
+        .file-analysis li {
+            font-size: 12px;
+            color: #6c757d;
+            margin: 2px 0;
+        }
+        
+        /* Initial State of Main Content */
+        .main-content-hidden {
+            opacity: 0.3;
+            pointer-events: none;
+        }
+        
+        /* Header Menu */
+        .header-menu {
+            position: relative;
+            margin-left: auto;
+            margin-right: 20px;
+        }
+        
+        .dropdown {
+            position: relative;
+            display: inline-block;
+        }
+        
+        .dropdown-btn {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        
+        .dropdown-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+        
+        .dropdown-content {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: 100%;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            z-index: 1000;
+            min-width: 180px;
+            border: 1px solid #e0e0e0;
+        }
+        
+        .dropdown-content.show {
+            display: block;
+        }
+        
+        .dropdown-item {
+            padding: 8px 12px;
+            font-size: 12px;
+            color: #333;
+        }
+        
+        .dropdown-item label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-weight: 500;
+        }
+        
+        .dropdown-item span {
+            font-weight: 600;
+            color: #495057;
+        }
+        
+        .dropdown-divider {
+            height: 1px;
+            background: #e9ecef;
+            margin: 4px 0;
+        }
+        
+        .style-btn {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            margin: 2px;
+            transition: background 0.2s;
+            width: calc(100% - 4px);
+            text-align: left;
+        }
+        
+        .style-btn:hover {
+            background: #e9ecef;
+        }
+        
+        /* Compact Controls for 3D Display Area */
+        .viewer-controls {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            display: flex;
+            gap: 8px;
+            z-index: 100;
+        }
+        
+        .compact-btn {
+            width: 36px;
+            height: 36px;
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        
+        .compact-btn:hover {
+            background: #f8f9fa;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+        }
+        
+        .compact-btn:active {
+            transform: translateY(0);
+        }
+        
+        /* Confirmation Modal */
+        .confirm-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10000;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s ease;
+        }
+        
+        .confirm-modal.show {
+            opacity: 1;
+            visibility: visible;
+        }
+        
+        .confirm-dialog {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            width: 400px;
+            max-width: 90vw;
+            transform: scale(0.9) translateY(-20px);
+            transition: all 0.3s ease;
+        }
+        
+        .confirm-modal.show .confirm-dialog {
+            transform: scale(1) translateY(0);
+        }
+        
+        .confirm-header {
+            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 12px 12px 0 0;
+            text-align: center;
+        }
+        
+        .confirm-body {
+            padding: 20px;
+            text-align: center;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        
+        .confirm-footer {
+            padding: 0 20px 20px;
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+        
+        .confirm-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+            min-width: 80px;
+        }
+        
+        .confirm-btn-primary {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .confirm-btn-primary:hover {
+            background: #c82333;
+        }
+        
+        .confirm-btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .confirm-btn-secondary:hover {
+            background: #545b62;
+        }
+    </style>
+</head>
+<body>
+    <!-- Confirmation Modal -->
+    <div class="confirm-modal" id="confirmModal">
+        <div class="confirm-dialog">
+            <div class="confirm-header">
+                <h3 id="confirmTitle">確認</h3>
+            </div>
+            <div class="confirm-body">
+                <p id="confirmMessage">この操作を実行しますか？</p>
+            </div>
+            <div class="confirm-footer">
+                <button class="confirm-btn confirm-btn-secondary" onclick="closeConfirmModal()">キャンセル</button>
+                <button class="confirm-btn confirm-btn-primary" id="confirmOkBtn">実行</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- File Selection Modal -->
+    <div class="setup-modal" id="fileSelectModal">
+        <div class="setup-window">
+            <div class="setup-header">
+                <h2>📁 File Selection</h2>
+            </div>
+            <div class="setup-content">
+                <p>Please select a crystal structure file in CIF format.</p>
+                
+                <!-- File Selection Methods -->
+                <div class="file-source-selection">
+                    <div class="radio-option">
+                        <label class="radio-label">
+                            <input type="radio" name="fileSource" value="upload" onchange="toggleFileSource()" checked>
+                            <span class="radio-text">📁 Upload File</span>
+                        </label>
+                    </div>
+                    <div class="radio-option">
+                        <label class="radio-label">
+                            <input type="radio" name="fileSource" value="sample" onchange="toggleFileSource()">
+                            <span class="radio-text">📋 Select Sample File</span>
+                        </label>
+                    </div>
+                </div>
+                
+                <!-- File Upload -->
+                <div id="uploadSection" class="file-input-section">
+                    <input type="file" id="modalCifFile" accept=".cif" style="display: none;">
+                    <button class="btn btn-primary file-input-btn" onclick="document.getElementById('modalCifFile').click()">
+                        📁 Select CIF File
+                    </button>
+                </div>
+                
+                <!-- Sample File Selection -->
+                <div id="sampleSection" class="file-input-section" style="display: none;">
+                    <select id="sampleFileSelect" class="sample-file-select" onchange="selectSampleFileFromDropdown()">
+                        <option value="">Please select a sample file</option>
+                        <!-- Dynamically Generated -->
+                    </select>
+                    <div id="sampleFilesContainer" style="margin-top: 15px;">
+                        <!-- Display Detailed Information -->
+                    </div>
+                </div>
+                
+                <!-- Selected File Information -->
+                <div id="selectedFileInfo" style="display: none;">
+                    <h4>Selected File Information</h4>
+                    <div id="fileAnalysisInfo">
+                        <!-- Dynamically Generated -->
+                    </div>
+                    <div class="setup-buttons" style="margin-top: 15px;">
+                        <button class="btn btn-success" onclick="confirmFileSelection()" id="confirmFileBtn">
+                            ✅ Use This File
+                        </button>
+                        <button class="btn btn-secondary" onclick="resetFileSelection()">
+                            🔄 Reset Selection
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Supercell Configuration Modal -->
+    <div class="setup-modal hidden" id="supercellModal">
+        <div class="setup-window">
+            <div class="setup-header">
+                <h2>🔬 Supercell Configuration</h2>
+            </div>
+            <div class="setup-content">
+                <p>Set the expansion ratio for the supercell to extend the crystal structure.</p>
+                
+                <div class="supercell-inputs">
+                    <div class="multiplier-group">
+                        <label class="multiplier-label">a-axis</label>
+                        <input type="number" id="modalAMult" class="multiplier-input" value="2" min="1" max="5">
+                    </div>
+                    <div class="multiplier-group">
+                        <label class="multiplier-label">b-axis</label>
+                        <input type="number" id="modalBMult" class="multiplier-input" value="2" min="1" max="5">
+                    </div>
+                    <div class="multiplier-group">
+                        <label class="multiplier-label">c-axis</label>
+                        <input type="number" id="modalCMult" class="multiplier-input" value="2" min="1" max="5">
+                    </div>
+                </div>
+                
+                <div class="setup-buttons">
+                    <button class="btn btn-success" onclick="createSupercellFromModal()" id="createSupercellBtn">
+                        🔬 Create Supercell
+                    </button>
+                    <button class="btn btn-primary" onclick="skipSupercellFromModal()" id="skipSupercellBtn">
+                        ⏭️ Start Without Supercell
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <div class="header" id="mainHeader">
+        <h1>CrystalNexus</h1>
+        
+        <!-- Header Menu -->
+        <div class="header-menu">
+            <div class="dropdown">
+                <button class="dropdown-btn" onclick="toggleDropdown()">
+                    ⚙️ 表示設定 ▼
+                </button>
+                <div class="dropdown-content" id="headerDropdown">
+                    <div class="dropdown-item">
+                        <label>
+                            <input type="checkbox" id="headerUnitCellToggle" checked onchange="toggleUnitCellFromHeader()">
+                            📦 ユニットセル表示
+                        </label>
+                    </div>
+                    <div class="dropdown-divider"></div>
+                    <div class="dropdown-item">
+                        <span>表示スタイル:</span>
+                    </div>
+                    <div class="dropdown-item">
+                        <button class="style-btn" onclick="setMoleculeStyleFromHeader('sphere')">🔵 球体</button>
+                    </div>
+                    <div class="dropdown-item">
+                        <button class="style-btn" onclick="setMoleculeStyleFromHeader('stick')">📏 棒</button>
+                    </div>
+                    <div class="dropdown-item">
+                        <button class="style-btn" onclick="setMoleculeStyleFromHeader('ball_stick')">⚫ 球棒</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="server-status" id="serverStatus">
+            接続確認中...
+        </div>
+    </div>
+    
+    <!-- Main Container -->
+    <div class="main-container" id="mainContainer">
+        <!-- Sidebar Menu -->
+        <div class="sidebar">
+            
+            <!-- Atom Editing Section -->
+            <div class="sidebar-section atom-editing">
+                <h3>🔧 Atom Editing</h3>
+                
+                <!-- Simplified Atom Editing -->
+                <div class="simplified-atom-editing">
+                    <div class="edit-row">
+                        <label><strong>Atom Selection:</strong></label>
+                        <select id="atomLabelSelect" class="atom-label-select-large">
+                            <option value="">-- Select Atom Label --</option>
+                        </select>
+                    </div>
+                    
+                    <div class="edit-row">
+                        <label><strong>Operation:</strong></label>
+                        <select id="operationSelect" class="element-select">
+                            <!-- Options dynamically populated by JavaScript -->
+                        </select>
+                    </div>
+                    
+                    <div class="edit-row">
+                        <button class="btn btn-success" onclick="executeAtomOperation()" id="executeBtn" disabled>
+                            ⚡ Execute
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            
+            <!-- Structure Information Section -->
+            <div class="sidebar-section structure-info">
+                <h3>📊 構造情報</h3>
+                <div class="info-content" id="structureInfo">
+                    Please load a CIF file.
+                </div>
+                
+                <!-- Reset Button (for Main Window) -->
+                <div class="reset-section" id="resetSection" style="display:none;">
+                    <div class="control-buttons">
+                        <button class="btn btn-secondary" onclick="resetToOriginal()" id="mainResetBtn">🔄 Reset to Post-Supercell State</button>
+                    </div>
+                </div>
+                
+                <!-- Message Display -->
+                <div class="messages">
+                    <div class="error" id="errorMsg"></div>
+                    <div class="success" id="successMsg"></div>
+                    <div class="loading" id="loadingMsg"></div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Viewer Area -->
+        <div class="viewer-area" id="viewerContainer">
+            <!-- Compact Controls Above 3D Display Area -->
+            <div class="viewer-controls">
+                <button class="compact-btn" onclick="resetViewCompact()" title="視点リセット">
+                    🔄
+                </button>
+                <button class="compact-btn" onclick="cycleStyleCompact()" title="表示スタイル切替" id="styleToggleBtn">
+                    🔵
+                </button>
+                <button class="compact-btn" onclick="toggleUnitCellCompact()" title="ユニットセル表示" id="unitCellToggleBtn">
+                    📦
+                </button>
+            </div>
+            
+            <div class="drop-zone" id="dropZone">
+                CIFファイルをここにドロップしてください
+            </div>
+            <div id="viewer"></div>
+        </div>
+    </div>
+
+    <script>
+        let viewer;
+        let currentStyle = 'sphere';
+        let showUnitCell = true;
+        let currentCifContent = '';
+        // Dynamic server URL detection based on current page
+        const SERVER_BASE_URL = `${window.location.protocol}//${window.location.hostname}:${window.location.port || (window.location.protocol === 'https:' ? '443' : '80')}`;
+        
+        // Atom editing variables
+        let selectedAtoms = [];
+        let currentAtomInfo = []; // Atom information from server
+        
+        // Track supercell information
+        let currentSupercellMetadata = null;
+        
+        // currentAtomInfo保護機能
+        let atomInfoBackup = null;
+        let supercellAtomCount = null;
+        
+        // 全元素のリスト（原子番号順）
+        const PERIODIC_TABLE = [
+            {symbol: 'H', name: 'Hydrogen', number: 1},
+            {symbol: 'He', name: 'Helium', number: 2},
+            {symbol: 'Li', name: 'Lithium', number: 3},
+            {symbol: 'Be', name: 'Beryllium', number: 4},
+            {symbol: 'B', name: 'Boron', number: 5},
+            {symbol: 'C', name: 'Carbon', number: 6},
+            {symbol: 'N', name: 'Nitrogen', number: 7},
+            {symbol: 'O', name: 'Oxygen', number: 8},
+            {symbol: 'F', name: 'Fluorine', number: 9},
+            {symbol: 'Ne', name: 'Neon', number: 10},
+            {symbol: 'Na', name: 'Sodium', number: 11},
+            {symbol: 'Mg', name: 'Magnesium', number: 12},
+            {symbol: 'Al', name: 'Aluminum', number: 13},
+            {symbol: 'Si', name: 'Silicon', number: 14},
+            {symbol: 'P', name: 'Phosphorus', number: 15},
+            {symbol: 'S', name: 'Sulfur', number: 16},
+            {symbol: 'Cl', name: 'Chlorine', number: 17},
+            {symbol: 'Ar', name: 'Argon', number: 18},
+            {symbol: 'K', name: 'Potassium', number: 19},
+            {symbol: 'Ca', name: 'Calcium', number: 20},
+            {symbol: 'Sc', name: 'Scandium', number: 21},
+            {symbol: 'Ti', name: 'Titanium', number: 22},
+            {symbol: 'V', name: 'Vanadium', number: 23},
+            {symbol: 'Cr', name: 'Chromium', number: 24},
+            {symbol: 'Mn', name: 'Manganese', number: 25},
+            {symbol: 'Fe', name: 'Iron', number: 26},
+            {symbol: 'Co', name: 'Cobalt', number: 27},
+            {symbol: 'Ni', name: 'Nickel', number: 28},
+            {symbol: 'Cu', name: 'Copper', number: 29},
+            {symbol: 'Zn', name: 'Zinc', number: 30},
+            {symbol: 'Ga', name: 'Gallium', number: 31},
+            {symbol: 'Ge', name: 'Germanium', number: 32},
+            {symbol: 'As', name: 'Arsenic', number: 33},
+            {symbol: 'Se', name: 'Selenium', number: 34},
+            {symbol: 'Br', name: 'Bromine', number: 35},
+            {symbol: 'Kr', name: 'Krypton', number: 36},
+            {symbol: 'Rb', name: 'Rubidium', number: 37},
+            {symbol: 'Sr', name: 'Strontium', number: 38},
+            {symbol: 'Y', name: 'Yttrium', number: 39},
+            {symbol: 'Zr', name: 'Zirconium', number: 40},
+            {symbol: 'Nb', name: 'Niobium', number: 41},
+            {symbol: 'Mo', name: 'Molybdenum', number: 42},
+            {symbol: 'Tc', name: 'Technetium', number: 43},
+            {symbol: 'Ru', name: 'Ruthenium', number: 44},
+            {symbol: 'Rh', name: 'Rhodium', number: 45},
+            {symbol: 'Pd', name: 'Palladium', number: 46},
+            {symbol: 'Ag', name: 'Silver', number: 47},
+            {symbol: 'Cd', name: 'Cadmium', number: 48},
+            {symbol: 'In', name: 'Indium', number: 49},
+            {symbol: 'Sn', name: 'Tin', number: 50},
+            {symbol: 'Sb', name: 'Antimony', number: 51},
+            {symbol: 'Te', name: 'Tellurium', number: 52},
+            {symbol: 'I', name: 'Iodine', number: 53},
+            {symbol: 'Xe', name: 'Xenon', number: 54},
+            {symbol: 'Cs', name: 'Cesium', number: 55},
+            {symbol: 'Ba', name: 'Barium', number: 56},
+            {symbol: 'La', name: 'Lanthanum', number: 57},
+            {symbol: 'Ce', name: 'Cerium', number: 58},
+            {symbol: 'Pr', name: 'Praseodymium', number: 59},
+            {symbol: 'Nd', name: 'Neodymium', number: 60},
+            {symbol: 'Pm', name: 'Promethium', number: 61},
+            {symbol: 'Sm', name: 'Samarium', number: 62},
+            {symbol: 'Eu', name: 'Europium', number: 63},
+            {symbol: 'Gd', name: 'Gadolinium', number: 64},
+            {symbol: 'Tb', name: 'Terbium', number: 65},
+            {symbol: 'Dy', name: 'Dysprosium', number: 66},
+            {symbol: 'Ho', name: 'Holmium', number: 67},
+            {symbol: 'Er', name: 'Erbium', number: 68},
+            {symbol: 'Tm', name: 'Thulium', number: 69},
+            {symbol: 'Yb', name: 'Ytterbium', number: 70},
+            {symbol: 'Lu', name: 'Lutetium', number: 71},
+            {symbol: 'Hf', name: 'Hafnium', number: 72},
+            {symbol: 'Ta', name: 'Tantalum', number: 73},
+            {symbol: 'W', name: 'Tungsten', number: 74},
+            {symbol: 'Re', name: 'Rhenium', number: 75},
+            {symbol: 'Os', name: 'Osmium', number: 76},
+            {symbol: 'Ir', name: 'Iridium', number: 77},
+            {symbol: 'Pt', name: 'Platinum', number: 78},
+            {symbol: 'Au', name: 'Gold', number: 79},
+            {symbol: 'Hg', name: 'Mercury', number: 80},
+            {symbol: 'Tl', name: 'Thallium', number: 81},
+            {symbol: 'Pb', name: 'Lead', number: 82},
+            {symbol: 'Bi', name: 'Bismuth', number: 83},
+            {symbol: 'Po', name: 'Polonium', number: 84},
+            {symbol: 'At', name: 'Astatine', number: 85},
+            {symbol: 'Rn', name: 'Radon', number: 86},
+            {symbol: 'Fr', name: 'Francium', number: 87},
+            {symbol: 'Ra', name: 'Radium', number: 88},
+            {symbol: 'Ac', name: 'Actinium', number: 89},
+            {symbol: 'Th', name: 'Thorium', number: 90},
+            {symbol: 'Pa', name: 'Protactinium', number: 91},
+            {symbol: 'U', name: 'Uranium', number: 92}
+        ];
+        
+        // サーバー接続確認
+        async function checkServerStatus() {
+            try {
+                const response = await fetch(`${SERVER_BASE_URL}/health`);
+                const data = await response.json();
+                
+                if (data.status === 'healthy') {
+                    document.getElementById('serverStatus').innerHTML = '✅ サーバー接続OK';
+                    document.getElementById('serverStatus').style.background = 'rgba(40, 167, 69, 0.8)';
+                    return true;
+                } else {
+                    throw new Error(data.error || 'Server unhealthy');
+                }
+            } catch (error) {
+                document.getElementById('serverStatus').innerHTML = '❌ サーバー接続エラー';
+                document.getElementById('serverStatus').style.background = 'rgba(220, 53, 69, 0.8)';
+                console.error('Server status check failed:', error);
+                return false;
+            }
+        }
+        
+        // Enhanced server API for CIF analysis with fallback
+        async function parseMetadataWithServer(cifContent) {
+            showLoading('サーバーでCIF解析中...');
+            
+            try {
+                const response = await fetch(`${SERVER_BASE_URL}/parse_cif`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        cif_content: cifContent
+                    }),
+                    timeout: 30000 // 30 second timeout
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `HTTP ${response.status}`);
+                }
+                
+                const data = await response.json();
+                hideLoading();
+                
+                if (data.success) {
+                    let message = 'サーバーでのCIF解析が完了しました';
+                    if (data.warnings && data.warnings.length > 0) {
+                        message += ` (警告: ${data.warnings.length}件)`;
+                    }
+                    showSuccess(message);
+                    console.log('Server analysis result:', data);
+                    return data;
+                } else {
+                    throw new Error(data.error || 'Server parsing failed');
+                }
+                
+            } catch (error) {
+                hideLoading();
+                console.error('Server parsing error:', error);
+                
+                // Enhanced error handling with specific messages
+                let errorMessage = 'サーバー解析エラー: ';
+                if (error.name === 'TypeError' && error.message.includes('fetch')) {
+                    errorMessage += 'サーバーに接続できません';
+                } else if (error.message.includes('timeout')) {
+                    errorMessage += 'タイムアウトしました';
+                } else if (error.message.includes('too large')) {
+                    errorMessage += 'ファイルサイズが大きすぎます';
+                } else {
+                    errorMessage += error.message;
+                }
+                
+                showError(errorMessage);
+                return null;
+            }
+        }
+        
+        // Fallback parsing using client-side methods
+        async function parseWithFallback(cifContent, filename) {
+            try {
+                // Try server first
+                const serverResult = await parseMetadataWithServer(cifContent);
+                if (serverResult && serverResult.success) {
+                    return serverResult;
+                }
+                
+                // Fallback to manual CIF analysis
+                console.log('Falling back to manual CIF analysis');
+                showLoading('クライアント側で手動CIF解析中...');
+                
+                const manualResult = performManualCifAnalysis(cifContent, filename);
+                if (manualResult && manualResult.success) {
+                    hideLoading();
+                    showSuccess('手動CIF解析が完了しました');
+                    return manualResult;
+                }
+                
+                // Final fallback to basic 3Dmol.js parsing
+                console.log('Falling back to basic 3Dmol.js parsing');
+                showLoading('クライアント側で基本解析中...');
+                
+                const model = viewer.getModel(0);
+                if (model) {
+                    const atoms = model.selectedAtoms({});
+                    const elementCounts = {};
+                    atoms.forEach(atom => {
+                        const element = atom.elem || atom.element || 'Unknown';
+                        elementCounts[element] = (elementCounts[element] || 0) + 1;
+                    });
+                    
+                    const formula = Object.entries(elementCounts)
+                        .map(([element, count]) => count > 1 ? `${element}${count}` : element)
+                        .join('');
+                    
+                    hideLoading();
+                    showSuccess('クライアント側での基本解析が完了しました');
+                    
+                    return {
+                        success: true,
+                        formula: formula,
+                        space_group: '取得できません',
+                        crystal_system: '取得できません',
+                        atom_count: atoms.length,
+                        lattice_parameters: null,
+                        volume: null,
+                        density: null,
+                        atom_info: [],
+                        fallback_mode: true
+                    };
+                }
+                
+                throw new Error('No model available for fallback parsing');
+                
+            } catch (error) {
+                hideLoading();
+                console.error('All parsing methods failed:', error);
+                showError('すべての解析方法が失敗しました');
+                return null;
+            }
+        }
+        
+        // 3Dmol.jsビューアーを初期化
+        function initViewer() {
+            viewer = $3Dmol.createViewer('viewer', {
+                defaultcolors: $3Dmol.elementColors.rasmol
+            });
+            console.log('3Dmol.js viewer initialized');
+        }
+        
+        // CIFファイルを読み込んで表示
+        async function loadCIF(cifContent, filename = '', supercellData = null) {
+            try {
+                currentCifContent = cifContent;
+                
+                // スーパーセルメタデータを更新
+                console.log('🔍 loadCIF() デバッグ - supercellData:', supercellData);
+                console.log('🔍 loadCIF() デバッグ - supercellData.is_supercell:', supercellData ? supercellData.is_supercell : 'supercellData is null');
+                
+                if (supercellData && supercellData.is_supercell) {
+                    currentSupercellMetadata = {
+                        multipliers: supercellData.multipliers,
+                        original_atoms: supercellData.original_atoms,
+                        is_supercell: true,
+                        supercell_info: supercellData.supercell_info
+                    };
+                    console.log('Supercell metadata saved:', currentSupercellMetadata);
+                    
+                    // スーパーセルの場合、メインウィンドウのリセットボタンを表示
+                    document.getElementById('resetSection').style.display = 'block';
+                } else {
+                    currentSupercellMetadata = null;
+                    
+                    // 元ファイルを保存（スーパーセルでない場合のみ）
+                    if (!originalCifContent) {
+                        originalCifContent = cifContent;
+                        originalFilename = filename;
+                        console.log('Original CIF content saved for reset functionality');
+                        console.log('Saved filename:', filename);
+                        console.log('Saved content length:', cifContent ? cifContent.length : 0);
+                    } else {
+                        console.log('Original CIF content already exists, not overwriting');
+                    }
+                    
+                    // 通常のファイルの場合、リセットボタンを非表示
+                    document.getElementById('resetSection').style.display = 'none';
+                }
+                
+                // ビューアーをクリア
+                viewer.removeAllModels();
+                
+                // CIFファイルを解析して分子モデルを追加
+                viewer.addModel(cifContent, 'cif', {
+                    doAssembly: true,
+                    duplicateAssemblyAtoms: true,
+                    normalizeAssembly: true
+                });
+                
+                // スタイルを適用
+                setMoleculeStyle();
+                
+                // ユニットセルを表示（原子操作後も確実に表示）
+                viewer.addUnitCell();
+                showUnitCell = true; // 強制的にONに設定
+                
+                // 視点を調整（標準的な斜め角度）
+                viewer.zoomTo();
+                viewer.rotate(45, 'y');  // Y軸周りに45度回転
+                viewer.rotate(-30, 'x'); // X軸周りに-30度回転（少し上から見下ろす）
+                viewer.render();
+                
+                // 原子選択機能のデータを初期化
+                setTimeout(() => {
+                    console.log('Atom selection data initialized');
+                }, 200);
+                
+                // サーバーで構造情報を解析（スーパーセルデータも渡す）
+                await updateStructureInfoWithServer(cifContent, filename, supercellData);
+                
+                // Atom label selector is initialized within updateStructureInfoWithServer
+                
+                hideAllMessages();
+                console.log('CIF loaded successfully');
+                
+            } catch (error) {
+                showError('CIFファイルの読み込みに失敗しました: ' + error.message);
+                console.error('CIF loading error:', error);
+            }
+        }
+        
+        // 分子のスタイルを設定
+        function setMoleculeStyle() {
+            viewer.removeAllSurfaces();
+            if (currentStyle === 'sphere') {
+                viewer.setStyle({}, {sphere: {}});
+            } else if (currentStyle === 'stick') {
+                viewer.setStyle({}, {stick: {radius: 0.2}});
+            } else if (currentStyle === 'ball_stick') {
+                viewer.setStyle({}, {sphere: {scale: 0.7}, stick: {radius: 0.15}});
+            }
+        }
+        
+        // サーバーを使用して構造情報を更新
+        async function updateStructureInfoWithServer(cifContent, filename, supercellData = null) {
+            console.log('🔍 updateStructureInfoWithServer() デバッグ - supercellData:', supercellData);
+            console.log('🔍 updateStructureInfoWithServer() デバッグ - supercellData.is_supercell:', supercellData ? supercellData.is_supercell : 'supercellData is null');
+            
+            // Default values
+            let formula = 'Analyzing...';
+            let spaceGroup = 'Analyzing...';
+            let latticeParams = 'Analyzing...';
+            let atomCount = 'Analyzing...';
+            let crystalSystem = 'Analyzing...';
+            let volume = 'Analyzing...';
+            let density = 'Analyzing...';
+            let supercellInfo = '';
+            
+            // スーパーセルの場合は、CIF解析をスキップして直接スーパーセル情報を使用
+            if (supercellData && supercellData.is_supercell && supercellData.supercell_info) {
+                const scInfo = supercellData.supercell_info;
+                const mult = supercellData.multipliers;
+                
+                // スーパーセル情報で完全に置き換え（実績のあるpymatgenライブラリから直接取得）
+                formula = scInfo.formula || 'Not available';
+                spaceGroup = scInfo.space_group || 'Not available';
+                crystalSystem = scInfo.crystal_system || 'Not available';
+                atomCount = scInfo.atom_count?.toString() || 'Not available';
+                volume = scInfo.volume ? `${scInfo.volume.toFixed(3)} Ų` : 'Not available';
+                density = scInfo.density ? `${scInfo.density} g/cm³` : 'Not available';
+                
+                // スーパーセルの原子情報を保存
+                currentAtomInfo = scInfo.atom_info || [];
+                
+                // 🔒 重要: スーパーセル情報をバックアップ
+                atomInfoBackup = [...currentAtomInfo]; // ディープコピー
+                supercellAtomCount = currentAtomInfo.length;
+                
+                console.log('✅ SUPERCELL MODE: スーパーセル原子情報を設定');
+                console.log('🔒 バックアップ作成: ', supercellAtomCount, '個の原子をバックアップ');
+                console.log('Received supercell atom info from server:', currentAtomInfo);
+                console.log('Setting currentAtomInfo for supercell with', currentAtomInfo.length, 'atoms');
+                console.log('Sample atom labels:', currentAtomInfo.slice(0, 10).map(a => a.label));
+                
+                // 格子定数はpymatgenから直接取得したスーパーセルのもの
+                if (scInfo.lattice_parameters) {
+                    const lp = scInfo.lattice_parameters;
+                    latticeParams = `a=${lp.a?.toFixed(4)}Å, b=${lp.b?.toFixed(4)}Å, c=${lp.c?.toFixed(4)}Å<br/>α=${lp.alpha?.toFixed(2)}°, β=${lp.beta?.toFixed(2)}°, γ=${lp.gamma?.toFixed(2)}°`;
+                }
+                
+                // スーパーセル情報は通常の構造情報として表示（特別な注記は不要）
+                supercellInfo = '';
+                
+            } else {
+                // 通常の結晶の場合のみCIF解析を実行
+                const serverData = await parseWithFallback(cifContent, filename);
+                
+                if (serverData && serverData.success) {
+                    formula = serverData.formula || 'Not available';
+                    spaceGroup = serverData.space_group || 'Not available';
+                    crystalSystem = serverData.crystal_system || 'Not available';
+                    atomCount = serverData.atom_count?.toString() || 'Not available';
+                    volume = serverData.volume ? `${serverData.volume.toFixed(3)} Ų` : 'Not available';
+                    density = serverData.density ? `${serverData.density} g/cm³` : 'Not available';
+                    
+                    // 原子情報を保存（スーパーセル状態の保護機能付き）
+                    const newAtomInfo = serverData.atom_info || [];
+                    
+                    // スーパーセル状態の場合、currentAtomInfoの上書きを防ぐ
+                    if (currentSupercellMetadata && currentSupercellMetadata.is_supercell) {
+                        console.warn('🚨 SUPERCELL PROTECTION: 通常のCIF解析によるcurrentAtomInfo上書きをブロック');
+                        console.warn(`   現在のスーパーセル原子数: ${currentAtomInfo.length}個`);
+                        console.warn(`   新しい解析結果原子数: ${newAtomInfo.length}個`);
+                        console.warn('   → currentAtomInfoはスーパーセル情報を維持します');
+                    } else {
+                        currentAtomInfo = newAtomInfo;
+                        console.log('Received atom info from server:', currentAtomInfo);
+                        console.log('Setting currentAtomInfo for normal CIF with', currentAtomInfo.length, 'atoms');
+                    }
+                    
+                    if (serverData.lattice_parameters) {
+                        const lp = serverData.lattice_parameters;
+                        latticeParams = `a=${lp.a?.toFixed(4)}Å, b=${lp.b?.toFixed(4)}Å, c=${lp.c?.toFixed(4)}Å<br/>α=${lp.alpha?.toFixed(2)}°, β=${lp.beta?.toFixed(2)}°, γ=${lp.gamma?.toFixed(2)}°`;
+                    } else {
+                        console.warn('格子定数データが取得できませんでした:', serverData);
+                    }
+                } else {
+                    // サーバーが使用できない場合は基本情報のみ表示
+                    formula = 'Not available (server error)';
+                    spaceGroup = 'Not available (server error)';
+                    latticeParams = 'Not available (server error)';
+                    crystalSystem = 'Not available (server error)';
+                    volume = 'Not available (server error)';
+                    density = 'Not available (server error)';
+                    
+                    // 3Dmol.jsから原子数のみ取得を試行
+                    try {
+                        const model = viewer.getModel(0);
+                        if (model) {
+                            const atoms = model.selectedAtoms({});
+                            atomCount = atoms.length.toString();
+                        }
+                    } catch (e) {
+                        console.error('Error getting atom count:', e);
+                    }
+                }
+            }
+            
+            const info = `
+                <strong>Filename:</strong> ${filename || 'Unknown'}<br/>
+                <strong>Chemical Formula:</strong> ${formula}<br/>
+                <strong>Space Group:</strong> ${spaceGroup}<br/>
+                <strong>Crystal System:</strong> ${crystalSystem}<br/>
+                <strong>Lattice Parameters:</strong> ${latticeParams}<br/>
+                <strong>Cell Volume:</strong> ${volume}<br/>
+                <strong>Density:</strong> ${density}<br/>
+                <strong>Atom Count:</strong> ${atomCount}<br/>
+                ${supercellInfo}
+                <hr style="margin: 10px 0; border: 0; border-top: 1px solid #ddd;"/>
+                <strong>Display Style:</strong> ${currentStyle}<br/>
+                <strong>Unit Cell:</strong> ${showUnitCell ? 'Visible' : 'Hidden'}
+            `;
+            
+            document.getElementById('structureInfo').innerHTML = info;
+            
+            // Ensure atom selection is updated after structure info is set
+            console.log('About to initialize atom label selector from updateStructureInfoWithServer');
+            initializeAtomLabelSelector();
+        }
+        
+        
+        // 視点をリセット（標準的な斜め角度に設定）
+        function resetView() {
+            if (viewer && viewer.getModel(0)) {
+                // 3Dmol.jsの推奨方法でビューをリセット
+                viewer.zoomTo();
+                viewer.center();
+                
+                // 標準的な斜め角度を設定（見やすい視点）
+                // 右上から斜めに見下ろす角度（結晶構造の標準的な視点）
+                viewer.rotate(45, 'y');  // Y軸周りに45度回転
+                viewer.rotate(-30, 'x'); // X軸周りに-30度回転（少し上から見下ろす）
+                
+                viewer.render();
+                console.log('View reset to standard oblique angle applied');
+            } else {
+                console.warn('No model loaded for view reset');
+            }
+        }
+        
+        // ユニットセル表示の切り替え
+        function toggleUnitCell() {
+            showUnitCell = !showUnitCell;
+            
+            // ボタンの状態を更新
+            updateUnitCellButton();
+            
+            if (viewer.getModel(0)) {
+                // 既存のモデルがある場合、ユニットセルの表示/非表示を切り替え
+                viewer.removeAllShapes(); // 既存のユニットセル等を削除
+                
+                if (showUnitCell) {
+                    viewer.addUnitCell();
+                }
+                
+                viewer.render();
+                
+                // 構造情報の表示も更新（スーパーセル情報を保持）
+                if (currentCifContent) {
+                    let filename = selectedFileName || 'Structure.cif';
+                    // スーパーセルメタデータがある場合は保持して渡す
+                    const preservedSupercellData = currentSupercellMetadata ? {
+                        is_supercell: true,
+                        multipliers: currentSupercellMetadata.multipliers,
+                        supercell_info: currentSupercellMetadata.supercell_info
+                    } : null;
+                    updateStructureInfoWithServer(currentCifContent, filename, preservedSupercellData);
+                }
+            }
+        }
+        
+        // 表示スタイルを変更
+        function changeStyle() {
+            const styles = ['sphere', 'stick', 'ball_stick'];
+            const currentIndex = styles.indexOf(currentStyle);
+            currentStyle = styles[(currentIndex + 1) % styles.length];
+            
+            if (viewer.getModel(0)) {
+                setMoleculeStyle();
+                viewer.render();
+                
+                if (currentCifContent) {
+                    let filename = selectedFileName || 'Structure.cif';
+                    // スーパーセルメタデータがある場合は保持して渡す
+                    const preservedSupercellData = currentSupercellMetadata ? {
+                        is_supercell: true,
+                        multipliers: currentSupercellMetadata.multipliers,
+                        supercell_info: currentSupercellMetadata.supercell_info
+                    } : null;
+                    updateStructureInfoWithServer(currentCifContent, filename, preservedSupercellData);
+                }
+            }
+        }
+        
+        // ドラッグ&ドロップ機能
+        function setupDragAndDrop() {
+            const viewerContainer = document.getElementById('viewerContainer');
+            const dropZone = document.getElementById('dropZone');
+            
+            viewerContainer.addEventListener('dragover', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.classList.add('active');
+            });
+            
+            viewerContainer.addEventListener('dragleave', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (!viewerContainer.contains(e.relatedTarget)) {
+                    dropZone.classList.remove('active');
+                }
+            });
+            
+            viewerContainer.addEventListener('drop', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.classList.remove('active');
+                
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    const file = files[0];
+                    if (file.name.toLowerCase().endsWith('.cif')) {
+                        const reader = new FileReader();
+                        reader.onload = function(e) {
+                            loadCIF(e.target.result, file.name);
+                        };
+                        reader.readAsText(file);
+                    } else {
+                        showError('Please select a CIF file (.cif).');
+                    }
+                }
+            });
+        }
+        
+        // メッセージ表示関数
+        function showError(message) {
+            hideAllMessages();
+            const errorDiv = document.getElementById('errorMsg');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            console.error('Error:', message);
+        }
+        
+        function showSuccess(message) {
+            hideAllMessages();
+            const successDiv = document.getElementById('successMsg');
+            successDiv.textContent = message;
+            successDiv.style.display = 'block';
+            console.log('Success:', message);
+            setTimeout(hideAllMessages, 3000); // 3秒後に自動非表示
+        }
+        
+        
+        function showLoading(message) {
+            hideAllMessages();
+            const loadingDiv = document.getElementById('loadingMsg');
+            loadingDiv.textContent = message;
+            loadingDiv.style.display = 'block';
+        }
+        
+        function hideLoading() {
+            document.getElementById('loadingMsg').style.display = 'none';
+        }
+        
+        function hideAllMessages() {
+            document.getElementById('errorMsg').style.display = 'none';
+            document.getElementById('successMsg').style.display = 'none';
+            document.getElementById('loadingMsg').style.display = 'none';
+        }
+        
+        
+        
+        // 元の構造にリセット機能
+        let originalCifContent = null;
+        let originalFilename = '';
+        let supercellCifContent = null;
+        let supercellFilename = '';
+        let supercellData = null;
+        
+        async function resetToOriginal() {
+            console.log('Reset function called');
+            console.log('supercellCifContent exists:', !!supercellCifContent);
+            console.log('supercellCifContent length:', supercellCifContent ? supercellCifContent.length : 0);
+            console.log('supercellFilename:', supercellFilename);
+            
+            if (!supercellCifContent) {
+                showError('スーパーセル状態が保存されていません。スーパーセルを再作成してください。');
+                return;
+            }
+            
+            showLoading('スーパーセル作成直後の状態に戻しています...');
+            
+            try {
+                // スーパーセル状態に戻す（原子編集前の状態）
+                await loadCIF(supercellCifContent, supercellFilename, supercellData);
+                
+                hideLoading();
+                showSuccess('Restored to post-supercell state');
+                
+                console.log('Reset to supercell state');
+                
+            } catch (error) {
+                hideLoading();
+                showError('リセットに失敗しました: ' + error.message);
+                console.error('Reset error:', error);
+            }
+        }
+        
+        
+        // Atom editing functionality
+        function initializeAtomEditing() {
+            // Initialize operation selection box
+            const operationSelect = document.getElementById('operationSelect');
+            if (operationSelect) {
+                operationSelect.innerHTML = '<option value="">-- Select Operation --</option>';
+                
+                // Delete option
+                const deleteOption = document.createElement('option');
+                deleteOption.value = 'DELETE';
+                deleteOption.textContent = '🗑️ Delete';
+                operationSelect.appendChild(deleteOption);
+                
+                // Replace options for all elements
+                PERIODIC_TABLE.forEach(element => {
+                    const option = document.createElement('option');
+                    option.value = element.symbol;
+                    option.textContent = `${element.symbol} (${element.name})`;
+                    operationSelect.appendChild(option);
+                });
+            }
+            
+            // Initialize atom label selection box
+            initializeAtomLabelSelector();
+            
+            // Add event listeners
+            setupAtomEditingListeners();
+        }
+        
+        // Set up atom editing event listeners
+        function setupAtomEditingListeners() {
+            const atomSelect = document.getElementById('atomLabelSelect');
+            const operationSelect = document.getElementById('operationSelect');
+            const executeBtn = document.getElementById('executeBtn');
+            
+            if (!atomSelect || !operationSelect || !executeBtn) return;
+            
+            function updateExecuteButton() {
+                const atomSelected = atomSelect.value !== '';
+                const operationSelected = operationSelect.value !== '';
+                executeBtn.disabled = !(atomSelected && operationSelected);
+            }
+            
+            atomSelect.addEventListener('change', updateExecuteButton);
+            operationSelect.addEventListener('change', updateExecuteButton);
+        }
+        
+        function initializeAtomLabelSelector() {
+            console.log('🔧 initializeAtomLabelSelector() 開始');
+            console.log('🔍 currentAtomInfo:', currentAtomInfo);
+            console.log('🔍 currentAtomInfo type:', typeof currentAtomInfo);
+            console.log('🔍 currentAtomInfo length:', currentAtomInfo ? currentAtomInfo.length : 'null/undefined');
+            console.log('🔍 Array.isArray(currentAtomInfo):', Array.isArray(currentAtomInfo));
+            
+            const atomLabelSelect = document.getElementById('atomLabelSelect');
+            if (!atomLabelSelect) {
+                console.error('❌ atomLabelSelect element not found');
+                return;
+            }
+            
+            // より堅牢な条件チェック
+            if (currentAtomInfo && Array.isArray(currentAtomInfo) && currentAtomInfo.length > 0) {
+                atomLabelSelect.innerHTML = '<option value="">-- Select Atom Label --</option>';
+                
+                // Get unique labels and corresponding atoms
+                const labelGroups = {};
+                currentAtomInfo.forEach(atom => {
+                    const label = atom.label;
+                    if (!labelGroups[label]) {
+                        labelGroups[label] = [];
+                    }
+                    labelGroups[label].push(atom);
+                });
+                
+                // Sort labels and add options
+                const sortedLabels = Object.keys(labelGroups).sort();
+                console.log('Label groups found:', labelGroups);
+                
+                sortedLabels.forEach(label => {
+                    const atoms = labelGroups[label];
+                    const option = document.createElement('option');
+                    option.value = label;
+                    option.textContent = label;
+                    
+                    atomLabelSelect.appendChild(option);
+                    console.log('✅ Added label option:', label);
+                });
+                
+                console.log(`✅ initializeAtomLabelSelector() 完了: ${sortedLabels.length}個の選択肢を追加`);
+            } else {
+                // currentAtomInfoが無効な場合、バックアップからの復旧を試行
+                console.error('❌ initializeAtomLabelSelector() 失敗: currentAtomInfoが無効');
+                console.error('   currentAtomInfo:', currentAtomInfo);
+                console.error('   Array.isArray:', Array.isArray(currentAtomInfo));
+                console.error('   length:', currentAtomInfo ? currentAtomInfo.length : 'N/A');
+                
+                // 🔒 バックアップからの復旧を試行
+                if (atomInfoBackup && Array.isArray(atomInfoBackup) && atomInfoBackup.length > 0) {
+                    console.warn('🔄 バックアップからの復旧を試行');
+                    console.warn(`   バックアップ: ${atomInfoBackup.length}個の原子`);
+                    
+                    currentAtomInfo = [...atomInfoBackup]; // バックアップから復旧
+                    
+                    // 復旧後、再帰的に初期化を試行
+                    console.warn('🔄 復旧後、再初期化を実行');
+                    initializeAtomLabelSelector();
+                    return;
+                } else {
+                    console.error('❌ バックアップも利用できません');
+                    // デフォルトの空メッセージを表示
+                    atomLabelSelect.innerHTML = '<option value="">-- No atoms available --</option>';
+                }
+            }
+        }
+        
+        function selectAtomByLabel() {
+            const selectedLabel = document.getElementById('atomLabelSelect').value;
+            if (!selectedLabel) {
+                showError('Please select an atom label');
+                return;
+            }
+            
+            if (currentAtomInfo.length === 0) {
+                showError('Atom information not loaded');
+                return;
+            }
+            
+            // Get all atoms with the specified label
+            const atomsWithLabel = currentAtomInfo.filter(atom => atom.label === selectedLabel);
+            if (atomsWithLabel.length === 0) {
+                showError(`Atoms with label ${selectedLabel} not found`);
+                return;
+            }
+            
+            let addedCount = 0;
+            atomsWithLabel.forEach(atomInfo => {
+                const atomId = `${atomInfo.index}_${atomInfo.element}_${atomInfo.coords.join('_')}`;
+                
+                // Add only if not already selected
+                const selectedIndex = selectedAtoms.findIndex(a => a.id === atomId);
+                if (selectedIndex < 0) {
+                    selectedAtoms.push({
+                        id: atomId,
+                        atomInfo: atomInfo,
+                        element: atomInfo.element,
+                        position: {
+                            x: atomInfo.coords[0],
+                            y: atomInfo.coords[1], 
+                            z: atomInfo.coords[2]
+                        },
+                        index: atomInfo.index,
+                        label: atomInfo.label
+                    });
+                    addedCount++;
+                }
+            });
+            
+            if (addedCount > 0) {
+                updateSelectionInfo();
+                updateAtomStyles();
+                showSuccess(`ラベル ${selectedLabel} の原子 ${addedCount} 個を選択しました`);
+            } else {
+                showError(`ラベル ${selectedLabel} の原子は既に選択されています`);
+            }
+        }
+        
+        
+        
+        function updateAtomStyles() {
+            if (!viewer || !viewer.getModel(0)) return;
+            
+            try {
+                // 全ての原子のスタイルをリセット
+                setMoleculeStyle();
+                
+                // 選択された原子をハイライト表示
+                selectedAtoms.forEach(atomData => {
+                    // 座標ベースで原子を特定してハイライト
+                    const pos = atomData.position;
+                    
+                    // 3Dmol.jsの座標系に合わせて選択（許容誤差を持たせる）
+                    const tolerance = 0.1;
+                    const selection = {
+                        and: [
+                            {x: {$gte: pos.x - tolerance, $lte: pos.x + tolerance}},
+                            {y: {$gte: pos.y - tolerance, $lte: pos.y + tolerance}},
+                            {z: {$gte: pos.z - tolerance, $lte: pos.z + tolerance}}
+                        ]
+                    };
+                    
+                    // 選択された原子を赤色でハイライト
+                    viewer.addStyle(selection, {
+                        sphere: {
+                            color: 'red',
+                            scale: 1.3
+                        }
+                    });
+                });
+                
+                viewer.render();
+                console.log('Updated atom styles, highlighted', selectedAtoms.length, 'atoms');
+            } catch (error) {
+                console.error('Error updating atom styles:', error);
+                // 座標ベース選択が失敗した場合のフォールバック
+                console.log('Fallback: trying index-based selection');
+                try {
+                    setMoleculeStyle();
+                    selectedAtoms.forEach(atomData => {
+                        // インデックスベースの選択を試行
+                        const selection = {serial: atomData.index + 1}; // 3Dmol.jsはserial 1から開始
+                        viewer.addStyle(selection, {
+                            sphere: {
+                                color: 'red',
+                                scale: 1.3
+                            }
+                        });
+                    });
+                    viewer.render();
+                } catch (fallbackError) {
+                    console.error('Fallback highlighting also failed:', fallbackError);
+                }
+            }
+        }
+        
+        
+        function updateSelectionInfo() {
+            const countSpan = document.getElementById('selectedAtomsCount');
+            if (selectedAtoms.length === 0) {
+                countSpan.innerHTML = 'なし';
+            } else {
+                const elementCounts = {};
+                let detailText = '';
+                
+                selectedAtoms.forEach((atomData, i) => {
+                    const element = atomData.element;
+                    elementCounts[element] = (elementCounts[element] || 0) + 1;
+                    
+                    if (i < 5) { // 最初の5個の詳細を表示
+                        const label = atomData.label || 'N/A';
+                        detailText += `<br/>・原子${atomData.index}: ${label} (${element}) [${atomData.position.x.toFixed(2)}, ${atomData.position.y.toFixed(2)}, ${atomData.position.z.toFixed(2)}]`;
+                    }
+                });
+                
+                if (selectedAtoms.length > 5) {
+                    detailText += `<br/>・他 ${selectedAtoms.length - 5} 個...`;
+                }
+                
+                const countText = Object.entries(elementCounts)
+                    .map(([element, count]) => `${element}:${count}`)
+                    .join(', ');
+                    
+                countSpan.innerHTML = `${selectedAtoms.length}個 (${countText})${detailText}`;
+            }
+        }
+        
+        function clearSelection() {
+            // 全ての選択をクリア
+            selectedAtoms = [];
+            updateSelectionInfo();
+            updateAtomStyles();
+        }
+        
+        async function deleteSelectedAtoms() {
+            if (selectedAtoms.length === 0) {
+                showError('No atoms selected for deletion');
+                return;
+            }
+            
+            if (!confirm(`Delete ${selectedAtoms.length} selected atoms?`)) {
+                return;
+            }
+            
+            showLoading('Deleting atoms...');
+            
+            try {
+                const atomIndices = selectedAtoms.map(atom => atom.index);
+                
+                const response = await fetch(`${SERVER_BASE_URL}/delete_atoms`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        cif_content: currentCifContent,
+                        atom_indices: atomIndices
+                    })
+                });
+                
+                const data = await response.json();
+                hideLoading();
+                
+                if (data.success) {
+                    // 新しい構造を読み込み
+                    await loadCIF(data.modified_cif, 'Modified_Structure.cif');
+                    clearSelection();
+                    showSuccess(`${atomIndices.length} atoms deleted (${data.original_atom_count}→${data.modified_atom_count})`);
+                } else {
+                    showError('Atom deletion error: ' + data.error);
+                }
+                
+            } catch (error) {
+                hideLoading();
+                showError('Failed to delete atoms: ' + error.message);
+                console.error('Delete atoms error:', error);
+            }
+        }
+        
+        async function replaceSelectedAtoms() {
+            if (selectedAtoms.length === 0) {
+                showError('No atoms selected for replacement');
+                return;
+            }
+            
+            const newElement = document.getElementById('replaceElement').value;
+            if (!newElement) {
+                showError('Please select replacement element');
+                return;
+            }
+            
+            if (!confirm(`Replace ${selectedAtoms.length} selected atoms with ${newElement}?`)) {
+                return;
+            }
+            
+            showLoading('Replacing atoms...');
+            
+            try {
+                const atomIndices = selectedAtoms.map(atom => atom.index);
+                
+                const response = await fetch(`${SERVER_BASE_URL}/replace_atoms`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        cif_content: currentCifContent,
+                        atom_indices: atomIndices,
+                        new_element: newElement
+                    })
+                });
+                
+                const data = await response.json();
+                hideLoading();
+                
+                if (data.success) {
+                    // 新しい構造を読み込み
+                    await loadCIF(data.modified_cif, 'Modified_Structure.cif');
+                    clearSelection();
+                    showSuccess(`${atomIndices.length} atoms replaced with ${newElement}`);
+                } else {
+                    showError('Atom replacement error: ' + data.error);
+                }
+                
+            } catch (error) {
+                hideLoading();
+                showError('Failed to replace atoms: ' + error.message);
+                console.error('Replace atoms error:', error);
+            }
+        }
+
+        // モーダル関連の変数
+        let modalStep = 1;
+        let modalCifContent = '';
+        let selectedFileName = '';
+        let setupCompleted = false;
+        
+        // モーダルでサンプルファイルを読み込み
+        async function loadSampleFileModal() {
+            try {
+                const response = await fetch('BaTiO3.cif');
+                const cifContent = await response.text();
+                
+                modalCifContent = cifContent;
+                
+                // ステップ1完了、ステップ2をアクティブにする
+                completeStep1();
+                showSuccess('サンプルファイル (BaTiO3) を読み込みました');
+                
+            } catch (error) {
+                showError('サンプルファイルの読み込みに失敗しました: ' + error.message);
+            }
+        }
+        
+        // モーダルファイル選択時の処理を設定
+        function setupModalFileInput() {
+            document.getElementById('modalCifFile').addEventListener('change', async function(event) {
+                const file = event.target.files[0];
+                if (file) {
+                    try {
+                        showLoading(`Analyzing file "${file.name}"...`);
+                        
+                        const reader = new FileReader();
+                        reader.onload = async function(e) {
+                            modalCifContent = e.target.result;
+                            selectedFileName = file.name;
+                            
+                            // ファイル解析（Enhanced endpointを優先使用）
+                            try {
+                                const response = await fetch(`${SERVER_BASE_URL}/parse_cif`, {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/json',
+                                    },
+                                    body: JSON.stringify({
+                                        cif_content: modalCifContent
+                                    })
+                                });
+                                
+                                if (!response.ok) {
+                                    throw new Error(`Analysis failed: ${response.status}`);
+                                }
+                                
+                                const fileInfo = await response.json();
+                                hideLoading();
+                                
+                                showFileAnalysis(fileInfo, file.name);
+                                showSuccess(`File "${file.name}" loaded and analyzed successfully`);
+                                completeFileLoading();
+                                
+                            } catch (error) {
+                                hideLoading();
+                                console.error('CIF解析エラー詳細:', error);
+                                console.log('リクエストURL:', `${SERVER_BASE_URL}/parse_cif`);
+                                console.log('CIF内容長:', modalCifContent ? modalCifContent.length : 0);
+                                console.log('CIF先頭部分:', modalCifContent ? modalCifContent.substring(0, 200) : 'なし');
+                                
+                                // エラーの詳細を表示して解析失敗の原因を特定
+                                showError(`File analysis error: ${error.message}. Check console logs for details.`);
+                                
+                                // フォールバック解析を試行
+                                console.log('Starting fallback analysis...');
+                                const fallbackInfo = await performFallbackAnalysis(modalCifContent, file.name);
+                                showFileAnalysis(fallbackInfo, file.name);
+                                completeFileLoading();
+                            }
+                        };
+                        reader.readAsText(file);
+                        
+                    } catch (error) {
+                        hideLoading();
+                        showError('Failed to read file: ' + error.message);
+                    }
+                }
+            });
+        }
+        
+        // ファイル読み込み完了処理
+        function completeFileLoading() {
+            console.log('File loading completed');
+        }
+        
+        // フォールバック解析機能（Pymatgen使用の強化版）
+        async function performFallbackAnalysis(cifContent, filename) {
+            console.log('Performing fallback analysis...');
+            
+            try {
+                // まず、サーバー側でのPymatgen強化解析を試行
+                const enhancedResponse = await fetch(`${SERVER_BASE_URL}/parse_cif`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        cif_content: cifContent,
+                        enhanced_mode: true,
+                        fallback_enabled: true
+                    })
+                });
+                
+                if (enhancedResponse.ok) {
+                    const enhancedData = await enhancedResponse.json();
+                    if (enhancedData.success) {
+                        console.log('Pymatgen強化解析成功:', enhancedData);
+                        return enhancedData;
+                    }
+                }
+            } catch (enhancedError) {
+                console.log('Pymatgen強化解析も失敗:', enhancedError);
+            }
+            
+            // 手動解析（正規表現による基本情報抽出）
+            return performManualCifAnalysis(cifContent, filename);
+        }
+        
+        // 手動CIF解析（正規表現ベース）
+        function performManualCifAnalysis(cifContent, filename) {
+            console.log('手動CIF解析実行中...');
+            
+            const result = {
+                formula: 'Unknown',
+                space_group: 'Unknown', 
+                crystal_system: 'Unknown',
+                atom_count: 0,
+                lattice_parameters: {a: 0, b: 0, c: 0, alpha: 90, beta: 90, gamma: 90},
+                success: false,
+                analysis_method: 'manual_regex'
+            };
+            
+            try {
+                // 化学式抽出
+                const formulaMatch = cifContent.match(/_chemical_formula_structural\s+(.+)/i) || 
+                                   cifContent.match(/_chemical_formula_sum\s+['"]?([^'"\\n]+)['"]?/i);
+                if (formulaMatch) {
+                    result.formula = formulaMatch[1].trim().replace(/['"]/g, '');
+                }
+                
+                // 空間群抽出
+                const spaceGroupMatch = cifContent.match(/_symmetry_space_group_name_H-M\s+(.+)/i) ||
+                                       cifContent.match(/_space_group_name_H-M_alt\s+(.+)/i);
+                if (spaceGroupMatch) {
+                    result.space_group = spaceGroupMatch[1].trim().replace(/['"]/g, '');
+                }
+                
+                // 格子定数抽出
+                const latticeA = cifContent.match(/_cell_length_a\s+([\d.]+)/i);
+                const latticeB = cifContent.match(/_cell_length_b\s+([\d.]+)/i);
+                const latticeC = cifContent.match(/_cell_length_c\s+([\d.]+)/i);
+                const angleAlpha = cifContent.match(/_cell_angle_alpha\s+([\d.]+)/i);
+                const angleBeta = cifContent.match(/_cell_angle_beta\s+([\d.]+)/i);
+                const angleGamma = cifContent.match(/_cell_angle_gamma\s+([\d.]+)/i);
+                
+                if (latticeA) result.lattice_parameters.a = parseFloat(latticeA[1]);
+                if (latticeB) result.lattice_parameters.b = parseFloat(latticeB[1]);
+                if (latticeC) result.lattice_parameters.c = parseFloat(latticeC[1]);
+                if (angleAlpha) result.lattice_parameters.alpha = parseFloat(angleAlpha[1]);
+                if (angleBeta) result.lattice_parameters.beta = parseFloat(angleBeta[1]);
+                if (angleGamma) result.lattice_parameters.gamma = parseFloat(angleGamma[1]);
+                
+                // Enhanced atom counting from _atom_site_ section
+                let atomCount = 0;
+                let inAtomSiteLoop = false;
+                let foundAtomSiteHeaders = false;
+                
+                const lines = cifContent.split('\n'); // Fixed: use single \n, not \\n
+                
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    
+                    // Detect _atom_site_ headers
+                    if (line.includes('_atom_site_type_symbol') || 
+                        line.includes('_atom_site_label') || 
+                        line.includes('_atom_site_fract_x')) {
+                        foundAtomSiteHeaders = true;
+                        continue;
+                    }
+                    
+                    // Start counting after headers are found
+                    if (foundAtomSiteHeaders && !inAtomSiteLoop) {
+                        inAtomSiteLoop = true;
+                        continue;
+                    }
+                    
+                    // Count atom data lines
+                    if (inAtomSiteLoop && line) {
+                        // Stop if we hit next loop or section
+                        if (line.startsWith('loop_') || 
+                            (line.startsWith('_') && !line.includes('_atom_site_')) ||
+                            line.startsWith('data_')) {
+                            break;
+                        }
+                        
+                        // Skip comments
+                        if (line.startsWith('#')) continue;
+                        
+                        // Count valid atom lines (should have at least 7 fields for typical CIF)
+                        const parts = line.split(/\s+/);
+                        if (parts.length >= 6) { // type, label, multiplicity, x, y, z minimum
+                            atomCount++;
+                            console.log(`Found atom: ${parts[0]} ${parts[1]} at line ${i+1}`);
+                        }
+                    }
+                }
+                
+                // Fallback: try simpler pattern matching
+                if (atomCount === 0) {
+                    console.log('Fallback atom counting...');
+                    const atomLinePattern = /^\s*([A-Za-z]+[0-9]*[+-]?)\s+([A-Za-z]+[0-9]*)\s+[0-9]+\s+[\d.-]+\s+[\d.-]+\s+[\d.-]+\s+[\d.-]+/;
+                    for (const line of lines) {
+                        if (atomLinePattern.test(line)) {
+                            atomCount++;
+                            console.log(`Fallback found atom: ${line.trim()}`);
+                        }
+                    }
+                }
+                
+                result.atom_count = atomCount;
+                console.log(`Total atoms counted: ${atomCount}`);
+                
+                // Extract atom information for atom selection
+                result.atom_info = [];
+                let atomSiteFound = false;
+                let atomHeaders = [];
+                
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    
+                    // Find atom site headers
+                    if (line.includes('_atom_site_type_symbol') || 
+                        line.includes('_atom_site_label')) {
+                        // Parse atom site headers
+                        let headerIndex = i;
+                        while (headerIndex < lines.length && lines[headerIndex].trim().startsWith('_atom_site_')) {
+                            atomHeaders.push(lines[headerIndex].trim());
+                            headerIndex++;
+                        }
+                        atomSiteFound = true;
+                        i = headerIndex - 1; // Skip processed headers
+                        continue;
+                    }
+                    
+                    // Parse atom data after headers are found
+                    if (atomSiteFound && line && !line.startsWith('_') && !line.startsWith('loop_') && !line.startsWith('#')) {
+                        const parts = line.split(/\s+/);
+                        if (parts.length >= 6) {
+                            // Extract atom information based on standard CIF format
+                            const atomInfo = {
+                                type_symbol: parts[0] || 'Unknown',
+                                label: parts[1] || 'Unknown',  // This is _atom_site_label (2nd column)
+                                multiplicity: parseInt(parts[2]) || 1,
+                                fract_x: parseFloat(parts[3]) || 0,
+                                fract_y: parseFloat(parts[4]) || 0,
+                                fract_z: parseFloat(parts[5]) || 0,
+                                occupancy: parseFloat(parts[6]) || 1
+                            };
+                            result.atom_info.push(atomInfo);
+                            console.log(`Extracted atom: ${atomInfo.label} (${atomInfo.type_symbol})`);
+                        }
+                    }
+                    
+                    // Stop at next section
+                    if (atomSiteFound && (line.startsWith('loop_') || line.startsWith('data_'))) {
+                        break;
+                    }
+                }
+                
+                console.log(`Extracted ${result.atom_info.length} atoms for selection`);
+                
+                // Crystal system estimation (from lattice parameters)
+                if (result.lattice_parameters.a > 0) {
+                    const {a, b, c, alpha, beta, gamma} = result.lattice_parameters;
+                    const tolerance = 0.01;
+                    
+                    if (Math.abs(a - b) < tolerance && Math.abs(b - c) < tolerance && 
+                        Math.abs(alpha - 90) < tolerance && Math.abs(beta - 90) < tolerance && Math.abs(gamma - 90) < tolerance) {
+                        result.crystal_system = 'cubic';
+                    } else if (Math.abs(a - b) < tolerance && Math.abs(alpha - 90) < tolerance && 
+                              Math.abs(beta - 90) < tolerance && Math.abs(gamma - 90) < tolerance) {
+                        result.crystal_system = 'tetragonal';
+                    } else if (Math.abs(alpha - 90) < tolerance && Math.abs(beta - 90) < tolerance && Math.abs(gamma - 90) < tolerance) {
+                        result.crystal_system = 'orthorhombic';
+                    } else {
+                        result.crystal_system = 'triclinic';
+                    }
+                }
+                
+                result.success = true;
+                console.log('手動解析結果:', result);
+                
+            } catch (error) {
+                console.error('手動解析エラー:', error);
+            }
+            
+            return result;
+        }
+        
+        // スーパーセルをスキップしてビューアーを開始
+        async function skipSupercellFromModal() {
+            console.log('Skipping supercell creation...');
+            
+            if (!modalCifContent) {
+                showError('ファイルが読み込まれていません');
+                console.error('No CIF content loaded in modal');
+                return;
+            }
+            
+            console.log('Skipping supercell, starting with original structure...');
+            
+            // 元の構造データでビューアーを初期化
+            await initializeViewerWithData(modalCifContent, selectedFileName || 'Original_Structure.cif', null);
+            closeSupercellModal();
+            
+            
+            // スーパーセルをスキップした場合は編集セクションを無効化しない
+            setupCompleted = true;
+        }
+        
+        // モーダルからスーパーセル作成
+        async function createSupercellFromModal() {
+            console.log('Creating supercell from modal...');
+            
+            if (!modalCifContent) {
+                showError('ファイルが読み込まれていません');
+                console.error('No CIF content loaded in modal');
+                return;
+            }
+            
+            const aMult = parseInt(document.getElementById('modalAMult').value);
+            const bMult = parseInt(document.getElementById('modalBMult').value);
+            const cMult = parseInt(document.getElementById('modalCMult').value);
+            
+            console.log(`Supercell parameters: ${aMult}×${bMult}×${cMult}`);
+            console.log(`CIF content length: ${modalCifContent.length} characters`);
+            
+            showLoading(`スーパーセル作成中 (${aMult}×${bMult}×${cMult})...`);
+            
+            try {
+                // スーパーセル作成前に元ファイルを保存
+                if (!originalCifContent) {
+                    originalCifContent = modalCifContent;
+                    originalFilename = selectedFileName || 'original.cif';
+                    console.log('Original CIF saved before supercell creation');
+                    console.log('Saved filename:', originalFilename);
+                    console.log('Saved content length:', originalCifContent.length);
+                }
+                
+                console.log('Sending supercell creation request...');
+                const response = await fetch(`${SERVER_BASE_URL}/create_supercell`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        cif_content: modalCifContent,
+                        a_multiplier: aMult,
+                        b_multiplier: bMult,
+                        c_multiplier: cMult
+                    })
+                });
+                
+                console.log(`Response status: ${response.status}`);
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('Server error response:', errorText);
+                    hideLoading();
+                    showError(`サーバーエラー (${response.status}): ${errorText}`);
+                    return;
+                }
+                
+                const data = await response.json();
+                console.log('Supercell response:', data);
+                hideLoading();
+                
+                if (data.success) {
+                    console.log('Supercell data received:', data);
+                    
+                    // スーパーセル状態を保存（リセット用）
+                    supercellCifContent = data.supercell_cif;
+                    supercellFilename = selectedFileName ? `Supercell_${aMult}x${bMult}x${cMult}_${selectedFileName}` : `Supercell_${aMult}x${bMult}x${cMult}.cif`;
+                    supercellData = data;
+                    console.log('Supercell state saved for reset functionality');
+                    console.log('Supercell filename:', supercellFilename);
+                    console.log('Supercell CIF length:', supercellCifContent.length);
+                    
+                    // スーパーセルデータにis_supercellフラグを追加
+                    const supercellDataWithFlag = {
+                        ...data,
+                        is_supercell: true
+                    };
+                    console.log('🔧 スーパーセルデータにis_supercellフラグを追加:', supercellDataWithFlag);
+                    
+                    // 即座にモーダルを閉じてビューアーを初期化（スーパーセルデータ付き）
+                    await initializeViewerWithData(data.supercell_cif, supercellFilename, supercellDataWithFlag);
+                    closeSupercellModal();
+                    disableEditingSections();
+                    setupCompleted = true;
+                    
+                } else {
+                    showError('スーパーセル作成エラー: ' + data.error);
+                }
+                
+            } catch (error) {
+                hideLoading();
+                showError('スーパーセル作成に失敗しました: ' + error.message);
+            }
+        }
+        
+        // ファイル選択モーダルを閉じる
+        function closeFileSelectModal() {
+            const modal = document.getElementById('fileSelectModal');
+            modal.classList.add('hidden');
+        }
+        
+        // スーパーセルモーダルを閉じる
+        function closeSupercellModal() {
+            const modal = document.getElementById('supercellModal');
+            modal.classList.add('hidden');
+        }
+        
+        
+        
+        // ファイル解析情報を表示
+        function showFileAnalysis(fileInfo, filename) {
+            const infoDiv = document.getElementById('fileAnalysisInfo');
+            const selectedDiv = document.getElementById('selectedFileInfo');
+            
+            infoDiv.innerHTML = `
+                <div class="file-analysis">
+                    <h5>📁 ${filename}</h5>
+                    <p><strong>Formula:</strong> ${fileInfo.formula}</p>
+                    <p><strong>Space Group:</strong> ${fileInfo.space_group}</p>
+                    <p><strong>Crystal System:</strong> ${fileInfo.crystal_system}</p>
+                    <p><strong>Atom Count:</strong> ${fileInfo.atom_count}</p>
+                    <p><strong>Lattice Parameters:</strong></p>
+                    <ul>
+                        <li>a = ${fileInfo.lattice_parameters.a.toFixed(4)} Å</li>
+                        <li>b = ${fileInfo.lattice_parameters.b.toFixed(4)} Å</li>
+                        <li>c = ${fileInfo.lattice_parameters.c.toFixed(4)} Å</li>
+                        <li>α = ${fileInfo.lattice_parameters.alpha.toFixed(2)}°</li>
+                        <li>β = ${fileInfo.lattice_parameters.beta.toFixed(2)}°</li>
+                        <li>γ = ${fileInfo.lattice_parameters.gamma.toFixed(2)}°</li>
+                    </ul>
+                </div>
+            `;
+            
+            selectedDiv.style.display = 'block';
+            
+            // サンプルファイル一覧を非表示
+            document.getElementById('sampleFilesList').style.display = 'none';
+        }
+        
+        // ファイル選択をリセット
+        function resetFileSelection() {
+            modalCifContent = '';
+            selectedFileName = '';
+            
+            document.getElementById('selectedFileInfo').style.display = 'none';
+            document.getElementById('sampleFilesList').style.display = 'none';
+        }
+        
+        // ファイル選択方法の切り替え
+        function toggleFileSource() {
+            const uploadRadio = document.querySelector('input[name="fileSource"][value="upload"]');
+            const sampleRadio = document.querySelector('input[name="fileSource"][value="sample"]');
+            const uploadSection = document.getElementById('uploadSection');
+            const sampleSection = document.getElementById('sampleSection');
+            
+            if (uploadRadio.checked) {
+                uploadSection.style.display = 'block';
+                sampleSection.style.display = 'none';
+                // サンプルファイル選択をリセット
+                document.getElementById('sampleFileSelect').value = '';
+                document.getElementById('sampleFilesContainer').innerHTML = '';
+            } else if (sampleRadio.checked) {
+                uploadSection.style.display = 'none';
+                sampleSection.style.display = 'block';
+                // サンプルファイル一覧を自動読み込み
+                loadSampleFilesIfNeeded();
+            }
+            
+            // 選択されたファイル情報をリセット
+            resetFileSelection();
+        }
+        
+        // サンプルファイル一覧を必要に応じて読み込み
+        async function loadSampleFilesIfNeeded() {
+            const selectElement = document.getElementById('sampleFileSelect');
+            
+            // 既に読み込み済みの場合はスキップ
+            if (selectElement.options.length > 1) {
+                return;
+            }
+            
+            try {
+                showLoading('Loading sample files...');
+                const response = await fetch(`${SERVER_BASE_URL}/sample_files`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const responseData = await response.json();
+                hideLoading();
+                
+                const sampleFiles = responseData.files || [];
+                
+                if (sampleFiles.length === 0) {
+                    selectElement.innerHTML = '<option value="">No sample files found</option>';
+                } else {
+                    // ドロップダウンオプションを生成
+                    selectElement.innerHTML = '<option value="">Please select a sample file</option>' +
+                        sampleFiles.map(file => `
+                            <option value="${file.filename}" data-file='${JSON.stringify(file)}'>
+                                ${file.display_name} (${file.formula})
+                            </option>
+                        `).join('');
+                }
+                
+            } catch (error) {
+                hideLoading();
+                showError('Failed to load sample files: ' + error.message);
+            }
+        }
+        
+        // ドロップダウンからサンプルファイルを選択
+        async function selectSampleFileFromDropdown() {
+            const selectElement = document.getElementById('sampleFileSelect');
+            const selectedOption = selectElement.options[selectElement.selectedIndex];
+            
+            if (!selectedOption.value) {
+                // ファイル情報をクリア
+                document.getElementById('sampleFilesContainer').innerHTML = '';
+                return;
+            }
+            
+            try {
+                const fileData = JSON.parse(selectedOption.getAttribute('data-file'));
+                const filename = selectedOption.value;
+                
+                // Clear any previous preview content
+                const container = document.getElementById('sampleFilesContainer');
+                container.innerHTML = '';
+                
+                // Load file directly
+                showLoading(`Loading sample file "${filename}"...`);
+                const response = await fetch(`${SERVER_BASE_URL}/sample_cif/${filename}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const cifContent = await response.text();
+                hideLoading();
+                
+                modalCifContent = cifContent;
+                selectedFileName = filename;
+                
+                // CIF content analysis (same as file upload - using enhanced logic)
+                try {
+                    showLoading(`Analyzing sample file "${filename}"...`);
+                    
+                    // First try: enhanced endpoint (will fail, but consistent with upload logic)
+                    try {
+                        const response = await fetch(`${SERVER_BASE_URL}/parse_cif`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                cif_content: modalCifContent
+                            })
+                        });
+                        
+                        if (!response.ok) {
+                            throw new Error(`Enhanced analysis failed: ${response.status}`);
+                        }
+                        
+                        const fileInfo = await response.json();
+                        hideLoading();
+                        
+                        showFileAnalysis(fileInfo, filename);
+                        showSuccess(`Sample file "${filename}" loaded and analyzed successfully`);
+                        
+                    } catch (error) {
+                        hideLoading();
+                        console.error('Enhanced CIF analysis error:', error);
+                        console.log('Fallback analysis starting...');
+                        
+                        // Fallback analysis (same as file upload)
+                        const fallbackInfo = await performFallbackAnalysis(modalCifContent, filename);
+                        showFileAnalysis(fallbackInfo, filename);
+                        showSuccess(`Sample file "${filename}" loaded and analyzed successfully`);
+                    }
+                    
+                } catch (error) {
+                    hideLoading();
+                    console.error('Sample CIF analysis critical error:', error);
+                    showError(`Failed to analyze sample file: ${error.message}`);
+                }
+                
+            } catch (error) {
+                hideLoading();
+                showError('Failed to load sample file: ' + error.message);
+            }
+        }
+        
+        // ファイル選択を確定
+        function confirmFileSelection() {
+            if (!modalCifContent) {
+                showError('No file selected');
+                return;
+            }
+            
+            // ファイル選択モーダルを閉じる
+            closeFileSelectModal();
+            
+            // スーパーセル設定モーダルを表示
+            const supercellModal = document.getElementById('supercellModal');
+            supercellModal.classList.remove('hidden');
+        }
+        
+        // ビューアーをデータで初期化
+        async function initializeViewerWithData(cifContent, filename, supercellData) {
+            currentCifContent = cifContent;
+            await loadCIF(cifContent, filename, supercellData);
+            
+            // メインコンテンツを表示
+            showMainContent();
+        }
+        
+        // メインコンテンツを表示
+        function showMainContent() {
+            const header = document.getElementById('mainHeader');
+            const container = document.getElementById('mainContainer');
+            
+            if (header) header.classList.remove('main-content-hidden');
+            if (container) container.classList.remove('main-content-hidden');
+        }
+        
+        // 編集セクションを無効化
+        function disableEditingSections() {
+            // 削除されたセクションなので何もしない
+        }
+        
+        // 原子操作の実行
+        async function executeAtomOperation() {
+            const atomLabel = document.getElementById('atomLabelSelect').value;
+            const operation = document.getElementById('operationSelect').value;
+            
+            if (!atomLabel || !operation) {
+                showError('Please select atom and operation');
+                return;
+            }
+            
+            console.log(`Executing operation: ${operation} on atom: ${atomLabel}`);
+            
+            // Get atom indices corresponding to selected atom label
+            const selectedAtomsByLabel = currentAtomInfo.filter(atom => atom.label === atomLabel);
+            if (selectedAtomsByLabel.length === 0) {
+                showError('Selected atoms not found');
+                return;
+            }
+            
+            const atomIndices = selectedAtomsByLabel.map(atom => atom.index);
+            
+            if (operation === 'DELETE') {
+                // Delete operation
+                await performDeleteOperation(atomIndices, atomLabel);
+            } else {
+                // Replace operation
+                await performReplaceOperation(atomIndices, atomLabel, operation);
+            }
+        }
+        
+        // Execute delete operation
+        async function performDeleteOperation(atomIndices, atomLabel) {
+            // 材料専門ユーザーのため確認不要、即座に実行
+            console.log(`Deleting ${atomLabel} atoms:`, atomIndices);
+            showLoading(`Deleting ${atomLabel}...`);
+            try {
+                const requestBody = {
+                    cif_content: currentCifContent,
+                    atom_indices: atomIndices
+                };
+                
+                // スーパーセルメタデータがある場合は追加
+                if (currentSupercellMetadata) {
+                    requestBody.supercell_metadata = currentSupercellMetadata;
+                    console.log('Sending supercell metadata with delete request:', currentSupercellMetadata);
+                }
+                
+                const response = await fetch(`${SERVER_BASE_URL}/delete_atoms`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
+                
+                const data = await response.json();
+                hideLoading();
+                
+                if (data.success) {
+                    // 修正された構造をスーパーセル情報付きで読み込み
+                    const modifiedSupercellData = data.modified_structure_info && data.modified_structure_info.is_supercell 
+                        ? {
+                            is_supercell: true,
+                            multipliers: data.modified_structure_info.supercell_multipliers,
+                            original_atoms: data.modified_structure_info.original_unit_cell_atoms,
+                            supercell_info: data.modified_structure_info
+                        } : null;
+                    
+                    await loadCIF(data.modified_cif, 'Modified_Structure.cif', modifiedSupercellData);
+                    showSuccess(`${atomLabel} deleted (${data.original_atom_count}→${data.modified_atom_count} atoms)`);
+                    resetAtomEditingSelections();
+                } else {
+                    showError('Atom deletion error: ' + data.error);
+                }
+            } catch (error) {
+                hideLoading();
+                showError('Failed to delete atoms: ' + error.message);
+            }
+        }
+        
+        // 置換操作の実行
+        async function performReplaceOperation(atomIndices, atomLabel, newElement) {
+            // 材料専門ユーザーのため確認不要、即座に実行
+            console.log(`Replacing ${atomLabel} atoms with ${newElement}:`, atomIndices);
+            showLoading(`Replacing ${atomLabel} with ${newElement}...`);
+            try {
+                const requestBody = {
+                    cif_content: currentCifContent,
+                    atom_indices: atomIndices,
+                    new_element: newElement
+                };
+                
+                // スーパーセルメタデータがある場合は追加
+                if (currentSupercellMetadata) {
+                    requestBody.supercell_metadata = currentSupercellMetadata;
+                    console.log('Sending supercell metadata with replace request:', currentSupercellMetadata);
+                }
+                
+                const response = await fetch(`${SERVER_BASE_URL}/replace_atoms`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
+                
+                const data = await response.json();
+                hideLoading();
+                
+                if (data.success) {
+                    // 修正された構造をスーパーセル情報付きで読み込み
+                    const modifiedSupercellData = data.modified_structure_info && data.modified_structure_info.is_supercell 
+                        ? {
+                            is_supercell: true,
+                            multipliers: data.modified_structure_info.supercell_multipliers,
+                            original_atoms: data.modified_structure_info.original_unit_cell_atoms,
+                            supercell_info: data.modified_structure_info
+                        } : null;
+                    
+                    await loadCIF(data.modified_cif, 'Modified_Structure.cif', modifiedSupercellData);
+                    showSuccess(`${atomLabel} replaced with ${newElement} (${data.modified_atom_count} atoms)`);
+                    resetAtomEditingSelections();
+                } else {
+                    showError('Atom replacement error: ' + data.error);
+                }
+            } catch (error) {
+                hideLoading();
+                showError('Failed to replace atoms: ' + error.message);
+            }
+        }
+        
+        // Reset atom editing selections
+        function resetAtomEditingSelections() {
+            const atomSelect = document.getElementById('atomLabelSelect');
+            const operationSelect = document.getElementById('operationSelect');
+            const executeBtn = document.getElementById('executeBtn');
+            
+            if (atomSelect) atomSelect.value = '';
+            if (operationSelect) operationSelect.value = '';
+            if (executeBtn) executeBtn.disabled = true;
+        }
+        
+        // ヘッダードロップダウンの制御
+        function toggleDropdown() {
+            const dropdown = document.getElementById('headerDropdown');
+            dropdown.classList.toggle('show');
+        }
+        
+        // ドロップダウン外クリックで閉じる
+        window.onclick = function(event) {
+            if (!event.target.matches('.dropdown-btn')) {
+                const dropdowns = document.getElementsByClassName('dropdown-content');
+                for (let i = 0; i < dropdowns.length; i++) {
+                    const openDropdown = dropdowns[i];
+                    if (openDropdown.classList.contains('show')) {
+                        openDropdown.classList.remove('show');
+                    }
+                }
+            }
+        }
+        
+        // ヘッダーからのユニットセル切替
+        function toggleUnitCellFromHeader() {
+            toggleUnitCell();
+            // ドロップダウンを閉じる
+            document.getElementById('headerDropdown').classList.remove('show');
+        }
+        
+        // ヘッダーからのスタイル設定
+        function setMoleculeStyleFromHeader(style) {
+            currentStyle = style;
+            setMoleculeStyle();
+            viewer.render();
+            updateStyleButton();
+            // ドロップダウンを閉じる
+            document.getElementById('headerDropdown').classList.remove('show');
+        }
+        
+        // コンパクトボタンからの視点リセット
+        function resetViewCompact() {
+            resetView();
+        }
+        
+        // コンパクトボタンからのユニットセル切替
+        function toggleUnitCellCompact() {
+            toggleUnitCell();
+            // ユニットセル状態に応じてボタンの表示を更新
+            updateUnitCellButton();
+        }
+        
+        // ユニットセルボタンの表示を更新
+        function updateUnitCellButton() {
+            const btn = document.getElementById('unitCellToggleBtn');
+            if (btn) {
+                if (showUnitCell) {
+                    btn.innerHTML = '📦';
+                    btn.title = 'ユニットセル表示（ON）';
+                    btn.style.backgroundColor = '#007bff';
+                    btn.style.color = 'white';
+                } else {
+                    btn.innerHTML = '📦';
+                    btn.title = 'ユニットセル表示（OFF）';
+                    btn.style.backgroundColor = '';
+                    btn.style.color = '';
+                }
+            }
+        }
+        
+        // コンパクトボタンからのスタイル切替
+        function cycleStyleCompact() {
+            const styles = ['sphere', 'stick', 'ball_stick'];
+            const currentIndex = styles.indexOf(currentStyle);
+            const nextIndex = (currentIndex + 1) % styles.length;
+            
+            currentStyle = styles[nextIndex];
+            setMoleculeStyle();
+            viewer.render();
+            updateStyleButton();
+        }
+        
+        // スタイルボタンの表示更新
+        function updateStyleButton() {
+            const btn = document.getElementById('styleToggleBtn');
+            if (btn) {
+                switch(currentStyle) {
+                    case 'sphere':
+                        btn.textContent = '🔵';
+                        btn.title = '球体 → 棒';
+                        break;
+                    case 'stick':
+                        btn.textContent = '📏';
+                        btn.title = '棒 → 球棒';
+                        break;
+                    case 'ball_stick':
+                        btn.textContent = '⚫';
+                        btn.title = '球棒 → 球体';
+                        break;
+                }
+            }
+        }
+        
+        // カスタム確認ダイアログ
+        function showConfirmDialog(title, message, onConfirm) {
+            const modal = document.getElementById('confirmModal');
+            const titleEl = document.getElementById('confirmTitle');
+            const messageEl = document.getElementById('confirmMessage');
+            const okBtn = document.getElementById('confirmOkBtn');
+            
+            titleEl.textContent = title;
+            messageEl.textContent = message;
+            
+            // 前のイベントリスナーを削除
+            const newOkBtn = okBtn.cloneNode(true);
+            okBtn.parentNode.replaceChild(newOkBtn, okBtn);
+            
+            // 新しいイベントリスナーを追加
+            newOkBtn.addEventListener('click', function() {
+                closeConfirmModal();
+                onConfirm();
+            });
+            
+            modal.classList.add('show');
+        }
+        
+        function closeConfirmModal() {
+            document.getElementById('confirmModal').classList.remove('show');
+        }
+        
+        // ページ読み込み時の初期化
+        document.addEventListener('DOMContentLoaded', async function() {
+            // まずビューアーを初期化
+            initViewer();
+            setupDragAndDrop();
+            initializeAtomEditing();
+            setupModalFileInput();
+            
+            // サーバー接続確認
+            const serverAvailable = await checkServerStatus();
+            
+            if (serverAvailable) {
+                console.log('Server is available, using server-side parsing');
+                // サーバーが利用可能な場合のみファイル選択モーダルを表示
+                // モーダルは既に表示されている（hidden クラスなし）
+            } else {
+                console.log('Server is not available, using client-side only');
+                // サーバーが利用できない場合はモーダルを閉じる
+                closeFileSelectModal();
+                showError('サーバーに接続できません。基本機能のみ利用可能です。');
+            }
+        });
+    </script>
+</body>
+</html>
