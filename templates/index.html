@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CrystalNexus</title>
+    <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f5f5f5;
+        }
+
+        .header {
+            background-color: #2c3e50;
+            color: white;
+            text-align: center;
+            padding: 20px;
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        .main-container {
+            display: flex;
+            height: calc(100vh - 80px);
+        }
+
+        .left-panel {
+            width: 300px;
+            background-color: white;
+            border-right: 1px solid #ddd;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .center-panel {
+            flex: 1;
+            background-color: white;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .right-panel {
+            width: 300px;
+            background-color: white;
+            border-left: 1px solid #ddd;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .panel-section {
+            margin-bottom: 30px;
+            padding: 15px;
+            border: 1px solid #e0e0e0;
+            border-radius: 5px;
+            background-color: #fafafa;
+        }
+
+        .panel-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #2c3e50;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 5px;
+        }
+
+        .viewer-container {
+            width: 100%;
+            height: 600px;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            background-color: #f9f9f9;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #666;
+            font-size: 18px;
+        }
+
+        .modal {
+            display: block;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+        }
+
+        .modal-content {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            width: 500px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            text-align: left;
+            margin-bottom: 25px;
+            font-size: 22px;
+            font-weight: bold;
+            color: #2c3e50;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+
+        .file-selection {
+            margin-bottom: 25px;
+        }
+
+        .radio-option {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+            padding: 12px;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            background-color: #fafafa;
+            transition: background-color 0.2s ease;
+            cursor: pointer;
+        }
+
+        .radio-option:hover {
+            background-color: #f0f0f0;
+        }
+
+        .radio-option.selected {
+            background-color: #e8f4fd;
+            border-color: #3498db;
+        }
+
+        .radio-option input[type="radio"] {
+            margin-right: 12px;
+            margin-left: 0;
+            width: 16px;
+            height: 16px;
+        }
+
+        .radio-option label {
+            margin: 0;
+            font-weight: 500;
+            color: #2c3e50;
+            cursor: pointer;
+            flex: 1;
+        }
+
+        .file-input-section {
+            margin-left: 28px;
+            margin-top: 10px;
+        }
+
+        .file-selection select,
+        .file-selection input[type="file"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+
+        .file-selection select:focus,
+        .file-selection input[type="file"]:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+        }
+
+        .crystal-info {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            font-size: 13px;
+            border-left: 4px solid #3498db;
+        }
+
+        .crystal-info strong {
+            color: #2c3e50;
+            font-size: 14px;
+        }
+
+        .supercell-section {
+            margin-top: 25px;
+            padding: 20px;
+            background-color: #fafafa;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .supercell-title {
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: #2c3e50;
+            font-size: 16px;
+        }
+
+        .supercell-inputs {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 15px;
+            margin: 15px 0;
+        }
+
+        .supercell-input-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .supercell-inputs label {
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #2c3e50;
+            font-size: 14px;
+        }
+
+        .supercell-inputs input {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            text-align: center;
+        }
+
+        .supercell-inputs input:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+        }
+
+        .button {
+            background-color: #3498db;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            width: 100%;
+            margin-top: 25px;
+            transition: all 0.2s ease;
+        }
+
+        .button:hover:not(:disabled) {
+            background-color: #2980b9;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(52, 152, 219, 0.3);
+        }
+
+        .button:active:not(:disabled) {
+            transform: translateY(0);
+            box-shadow: 0 2px 4px rgba(52, 152, 219, 0.3);
+        }
+
+        .button:disabled {
+            background-color: #bdc3c7;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .mock-text {
+            color: #7f8c8d;
+            font-style: italic;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .element-selector {
+            margin-bottom: 15px;
+        }
+
+        .element-selector label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #2c3e50;
+            font-size: 14px;
+        }
+
+        .element-selector select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            background-color: white;
+            cursor: pointer;
+        }
+
+        .element-selector select:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+        }
+
+        .element-selector select:disabled {
+            background-color: #f5f5f5;
+            cursor: not-allowed;
+            color: #999;
+        }
+
+        .operation-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .operation-button {
+            flex: 1;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .substitute-button {
+            background-color: #f39c12;
+            color: white;
+        }
+
+        .substitute-button:hover:not(:disabled) {
+            background-color: #e67e22;
+        }
+
+        .delete-button {
+            background-color: #e74c3c;
+            color: white;
+        }
+
+        .delete-button:hover:not(:disabled) {
+            background-color: #c0392b;
+        }
+
+        .operation-button:disabled {
+            background-color: #bdc3c7;
+            cursor: not-allowed;
+        }
+
+        .operation-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .operation-title {
+            font-weight: bold;
+            margin-bottom: 12px;
+            color: #2c3e50;
+            font-size: 14px;
+        }
+
+        .operation-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .control-group label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #34495e;
+        }
+
+        .control-group select {
+            padding: 6px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 13px;
+            background-color: white;
+        }
+
+        .execute-button {
+            background-color: #27ae60;
+            color: white;
+            padding: 10px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            margin-top: 10px;
+        }
+
+        .execute-button:hover:not(:disabled) {
+            background-color: #219a52;
+        }
+
+        .execute-button:disabled {
+            background-color: #bdc3c7;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        CrystalNexus
+    </div>
+
+    <div class="main-container">
+        <div class="left-panel">
+            <div class="panel-section">
+                <div class="panel-title">Reset</div>
+                <div class="mock-text">Reset to original structure</div>
+            </div>
+            
+            <div class="panel-section">
+                <div class="panel-title">Structure Operations</div>
+                <div id="structure-operations-content" class="mock-text">Element substitution and deletion controls</div>
+            </div>
+            
+            <div class="panel-section">
+                <div class="panel-title">Crystal Information</div>
+                <div id="main-crystal-info" class="mock-text">Structure details will be displayed here</div>
+            </div>
+        </div>
+
+        <div class="center-panel">
+            <div class="viewer-container" id="viewer-container">
+                <div class="mock-text">Crystal structure will be displayed here using 3Dmol.js</div>
+            </div>
+        </div>
+
+        <div class="right-panel">
+            <div class="panel-section">
+                <div class="panel-title">CHGNet Calculation</div>
+                <div class="mock-text">
+                    <button class="button" disabled>Calculate Properties</button>
+                    <br><br>
+                    Free energy, forces, and other properties will be displayed here
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Window -->
+    <div id="cifModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                Select CIF File
+            </div>
+            
+            <div class="file-selection">
+                <div class="radio-option selected" data-value="sample">
+                    <input type="radio" name="file-source" value="sample" checked id="radio-sample">
+                    <label for="radio-sample">Use sample CIF file</label>
+                </div>
+                <div class="file-input-section">
+                    <select id="sampleFileSelect">
+                        <option value="">Loading sample files...</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="file-selection">
+                <div class="radio-option" data-value="upload">
+                    <input type="radio" name="file-source" value="upload" id="radio-upload">
+                    <label for="radio-upload">Upload your own CIF file</label>
+                </div>
+                <div class="file-input-section">
+                    <input type="file" id="uploadFile" accept=".cif" disabled>
+                </div>
+            </div>
+            
+            <div id="crystalInfo" class="crystal-info hidden">
+                <strong>Crystal Information:</strong>
+                <div id="infoContent"></div>
+            </div>
+            
+            <div id="supercellSection" class="supercell-section hidden">
+                <div class="supercell-title">Supercell Configuration</div>
+                <div class="supercell-inputs">
+                    <div class="supercell-input-group">
+                        <label for="supercell-a">a-direction:</label>
+                        <input type="number" id="supercell-a" value="1" min="1" max="10">
+                    </div>
+                    <div class="supercell-input-group">
+                        <label for="supercell-b">b-direction:</label>
+                        <input type="number" id="supercell-b" value="1" min="1" max="10">
+                    </div>
+                    <div class="supercell-input-group">
+                        <label for="supercell-c">c-direction:</label>
+                        <input type="number" id="supercell-c" value="1" min="1" max="10">
+                    </div>
+                </div>
+            </div>
+            
+            <button id="confirmButton" class="button" disabled>Confirm</button>
+        </div>
+    </div>
+
+    <script>
+        let currentCrystalData = null;
+        let supercellData = null;
+        let chgnetElements = [];
+
+        // Initialize the application
+        document.addEventListener('DOMContentLoaded', function() {
+            loadSampleFiles();
+            loadCHGnetElements();
+            setupEventListeners();
+        });
+
+        function setupEventListeners() {
+            // Radio option visual feedback
+            document.querySelectorAll('.radio-option').forEach(option => {
+                option.addEventListener('click', function() {
+                    const radio = this.querySelector('input[type="radio"]');
+                    radio.checked = true;
+                    
+                    // Update visual state
+                    document.querySelectorAll('.radio-option').forEach(opt => opt.classList.remove('selected'));
+                    this.classList.add('selected');
+                    
+                    // Trigger change event
+                    radio.dispatchEvent(new Event('change'));
+                });
+            });
+
+            // File source radio buttons
+            document.querySelectorAll('input[name="file-source"]').forEach(radio => {
+                radio.addEventListener('change', function() {
+                    const uploadFile = document.getElementById('uploadFile');
+                    const sampleSelect = document.getElementById('sampleFileSelect');
+                    
+                    if (this.value === 'upload') {
+                        uploadFile.disabled = false;
+                        sampleSelect.disabled = true;
+                    } else {
+                        uploadFile.disabled = true;
+                        sampleSelect.disabled = false;
+                    }
+                    
+                    resetAnalysis();
+                });
+            });
+
+            // Sample file selection
+            document.getElementById('sampleFileSelect').addEventListener('change', function() {
+                if (this.value) {
+                    analyzeSampleFile(this.value);
+                } else {
+                    resetAnalysis();
+                }
+            });
+
+            // File upload
+            document.getElementById('uploadFile').addEventListener('change', function() {
+                if (this.files.length > 0) {
+                    analyzeUploadedFile(this.files[0]);
+                } else {
+                    resetAnalysis();
+                }
+            });
+
+            // Confirm button
+            document.getElementById('confirmButton').addEventListener('click', function() {
+                if (currentCrystalData) {
+                    createSupercell();
+                }
+            });
+        }
+
+        async function loadSampleFiles() {
+            try {
+                const response = await fetch('/api/sample-cif-files');
+                const data = await response.json();
+                
+                const select = document.getElementById('sampleFileSelect');
+                select.innerHTML = '<option value="">Select a sample file...</option>';
+                
+                data.files.forEach(file => {
+                    const option = document.createElement('option');
+                    option.value = file;
+                    option.textContent = file;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading sample files:', error);
+                document.getElementById('sampleFileSelect').innerHTML = '<option value="">Error loading files</option>';
+            }
+        }
+
+        async function analyzeSampleFile(filename) {
+            try {
+                const response = await fetch('/api/analyze-cif-sample', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ filename: filename })
+                });
+                
+                const data = await response.json();
+                displayCrystalInfo(data);
+            } catch (error) {
+                console.error('Error analyzing sample file:', error);
+                alert('Error analyzing CIF file');
+            }
+        }
+
+        async function analyzeUploadedFile(file) {
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                const response = await fetch('/api/analyze-cif-upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                displayCrystalInfo(data);
+            } catch (error) {
+                console.error('Error analyzing uploaded file:', error);
+                alert('Error analyzing CIF file');
+            }
+        }
+
+        function displayCrystalInfo(data) {
+            currentCrystalData = data;
+            
+            const infoContent = document.getElementById('infoContent');
+            // Display information in the same order as ZrO2test.py
+            infoContent.innerHTML = `
+                <div style="margin-bottom: 15px;">
+                    <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Basic Structure Information:</div>
+                    <div><strong>Formula:</strong> ${data.formula}</div>
+                    <div><strong>Number of atoms:</strong> ${data.num_atoms}</div>
+                    <div><strong>Density:</strong> ${data.density.toFixed(4)} g/cm³</div>
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Lattice Parameters:</div>
+                    <div style="margin-left: 10px;">
+                        a = ${data.lattice_parameters.a.toFixed(5)} Å<br>
+                        b = ${data.lattice_parameters.b.toFixed(5)} Å<br>
+                        c = ${data.lattice_parameters.c.toFixed(5)} Å<br>
+                        α = ${data.lattice_parameters.alpha.toFixed(5)}°<br>
+                        β = ${data.lattice_parameters.beta.toFixed(5)}°<br>
+                        γ = ${data.lattice_parameters.gamma.toFixed(5)}°<br>
+                        Volume = ${data.volume.toFixed(5)} Ų
+                    </div>
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Symmetry Information:</div>
+                    <div><strong>International notation:</strong> ${data.space_group}</div>
+                    <div><strong>Space group number:</strong> ${data.space_group_number}</div>
+                    <div><strong>Point group:</strong> ${data.point_group}</div>
+                    <div><strong>Crystal system:</strong> ${data.crystal_system}</div>
+                </div>
+            `;
+            
+            document.getElementById('crystalInfo').classList.remove('hidden');
+            document.getElementById('supercellSection').classList.remove('hidden');
+            document.getElementById('confirmButton').disabled = false;
+        }
+
+        function resetAnalysis() {
+            currentCrystalData = null;
+            document.getElementById('crystalInfo').classList.add('hidden');
+            document.getElementById('supercellSection').classList.add('hidden');
+            document.getElementById('confirmButton').disabled = true;
+        }
+
+        async function createSupercell() {
+            const aSize = document.getElementById('supercell-a').value;
+            const bSize = document.getElementById('supercell-b').value;
+            const cSize = document.getElementById('supercell-c').value;
+            
+            try {
+                const response = await fetch('/api/create-supercell', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        crystal_data: currentCrystalData,
+                        supercell_size: [parseInt(aSize), parseInt(bSize), parseInt(cSize)]
+                    })
+                });
+                
+                const result = await response.json();
+                
+                // Store supercell data
+                supercellData = result;
+                
+                // Close modal and proceed to main application
+                document.getElementById('cifModal').style.display = 'none';
+                
+                // Complete data deletion and display supercell info
+                completeDataDeletion();
+                displaySupercellInfo();
+                
+                // Load element labels for operations
+                loadElementLabels();
+                
+                // Initialize 3D viewer (mock for now)
+                initializeViewer();
+                
+            } catch (error) {
+                console.error('Error creating supercell:', error);
+                alert('Error creating supercell');
+            }
+        }
+
+        function completeDataDeletion() {
+            // Complete deletion of original crystal data
+            currentCrystalData = null;
+            
+            // Clear all modal content
+            document.getElementById('infoContent').innerHTML = '';
+            document.getElementById('sampleFileSelect').selectedIndex = 0;
+            document.getElementById('uploadFile').value = '';
+            
+            // Reset supercell inputs
+            document.getElementById('supercell-a').value = '1';
+            document.getElementById('supercell-b').value = '1';
+            document.getElementById('supercell-c').value = '1';
+            
+            // Clear any temporary variables and references
+            if (window.tempCrystalAnalysis) {
+                delete window.tempCrystalAnalysis;
+            }
+            
+            // Force garbage collection suggestion
+            if (window.gc) {
+                window.gc();
+            }
+            
+            console.log('✓ Complete data deletion performed:');
+            console.log('  - currentCrystalData set to null');
+            console.log('  - Modal content cleared');
+            console.log('  - Form inputs reset');
+            console.log('  - Temporary variables deleted');
+            console.log('  - Memory cleanup suggested');
+        }
+
+        function displaySupercellInfo() {
+            if (!supercellData) return;
+            
+            const original = supercellData.original_data;
+            const supercell = supercellData.supercell_info;
+            
+            // Calculate supercell lattice parameters (scaled by supercell dimensions)
+            const aSize = supercell.size[0];
+            const bSize = supercell.size[1];
+            const cSize = supercell.size[2];
+            
+            const supercellLattice = {
+                a: original.lattice_parameters.a * aSize,
+                b: original.lattice_parameters.b * bSize,
+                c: original.lattice_parameters.c * cSize,
+                alpha: original.lattice_parameters.alpha,
+                beta: original.lattice_parameters.beta,
+                gamma: original.lattice_parameters.gamma
+            };
+            
+            // Calculate supercell density (mass increases, volume increases, density may change)
+            const supercellDensity = original.density; // Same density for same material
+            
+            const infoElement = document.getElementById('main-crystal-info');
+            infoElement.classList.remove('mock-text');
+            infoElement.innerHTML = `
+                <div style="margin-bottom: 15px;">
+                    <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Supercell Structure Information:</div>
+                    <div><strong>Formula:</strong> ${supercell.formula}</div>
+                    <div><strong>Supercell size:</strong> ${aSize} × ${bSize} × ${cSize}</div>
+                    <div><strong>Total atoms:</strong> ${supercell.num_sites}</div>
+                    <div><strong>Density:</strong> ${supercellDensity.toFixed(4)} g/cm³</div>
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Supercell Lattice Parameters:</div>
+                    <div style="margin-left: 10px;">
+                        a = ${supercellLattice.a.toFixed(5)} Å<br>
+                        b = ${supercellLattice.b.toFixed(5)} Å<br>
+                        c = ${supercellLattice.c.toFixed(5)} Å<br>
+                        α = ${supercellLattice.alpha.toFixed(5)}°<br>
+                        β = ${supercellLattice.beta.toFixed(5)}°<br>
+                        γ = ${supercellLattice.gamma.toFixed(5)}°<br>
+                        Volume = ${supercell.volume.toFixed(5)} Ų
+                    </div>
+                </div>
+                
+                <div style="font-size: 12px; color: #7f8c8d; font-style: italic;">
+                    Note: Symmetry information excluded for supercell structure
+                </div>
+            `;
+        }
+
+        async function loadCHGnetElements() {
+            try {
+                const response = await fetch('/api/chgnet-elements');
+                const data = await response.json();
+                chgnetElements = data.elements || [];
+                console.log(`Loaded ${chgnetElements.length} CHGnet supported elements`);
+            } catch (error) {
+                console.error('Error loading CHGnet elements:', error);
+                chgnetElements = [];
+            }
+        }
+
+        async function loadElementLabels() {
+            if (!supercellData) return;
+            
+            try {
+                const response = await fetch('/api/get-element-labels', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        crystal_data: supercellData.original_data,
+                        supercell_size: supercellData.supercell_info.size
+                    })
+                });
+                
+                const labelData = await response.json();
+                displayStructureOperations(labelData.labels);
+                
+            } catch (error) {
+                console.error('Error loading element labels:', error);
+                displayStructureOperations([]);
+            }
+        }
+
+        function displayStructureOperations(labels) {
+            const operationsElement = document.getElementById('structure-operations-content');
+            operationsElement.classList.remove('mock-text');
+            
+            if (labels.length === 0) {
+                operationsElement.innerHTML = '<div style="color: #e74c3c;">No element labels available</div>';
+                return;
+            }
+            
+            const chgnetOptions = chgnetElements.map(element => 
+                `<option value="${element}">${element}</option>`
+            ).join('');
+            
+            operationsElement.innerHTML = `
+                <div class="element-selector">
+                    <label for="element-dropdown">Select Atom to Modify:</label>
+                    <select id="element-dropdown">
+                        <option value="">Choose an atom...</option>
+                        ${labels.map(label => `<option value="${label}">${label}</option>`).join('')}
+                    </select>
+                </div>
+                
+                <div class="operation-section">
+                    <div class="operation-title">Operation</div>
+                    <div class="operation-controls">
+                        <div class="control-group">
+                            <label for="substitute-element">Action:</label>
+                            <select id="substitute-element" disabled>
+                                <option value="">Select operation...</option>
+                                <option value="DELETE">🗑️ Delete selected atom</option>
+                                <optgroup label="Replace with CHGnet elements:">
+                                    ${chgnetOptions}
+                                </optgroup>
+                            </select>
+                        </div>
+                        <div style="font-size: 12px; color: #7f8c8d; margin-top: 8px;">
+                            Choose to delete the selected atom or replace it with a CHGnet-supported element
+                        </div>
+                    </div>
+                </div>
+                
+                <button class="execute-button" id="execute-btn" disabled>
+                    Execute Operation
+                </button>
+                
+                <div style="margin-top: 15px; font-size: 12px; color: #7f8c8d;">
+                    Available operations: ${labels.length} atoms | ${chgnetElements.length} CHGnet elements + deletion
+                </div>
+            `;
+            
+            // Add event listeners
+            setupOperationListeners();
+        }
+
+        function setupOperationListeners() {
+            const atomDropdown = document.getElementById('element-dropdown');
+            const operationSelect = document.getElementById('substitute-element');
+            const executeBtn = document.getElementById('execute-btn');
+            
+            atomDropdown.addEventListener('change', function() {
+                const selected = this.value;
+                operationSelect.disabled = !selected;
+                updateExecuteButton();
+            });
+            
+            operationSelect.addEventListener('change', function() {
+                updateExecuteButton();
+            });
+            
+            executeBtn.addEventListener('click', function() {
+                const selectedAtom = atomDropdown.value;
+                const selectedOperation = operationSelect.value;
+                
+                if (selectedAtom && selectedOperation) {
+                    if (selectedOperation === 'DELETE') {
+                        handleDeletion(selectedAtom);
+                    } else {
+                        handleSubstitution(selectedAtom, selectedOperation);
+                    }
+                }
+            });
+        }
+
+        function updateExecuteButton() {
+            const atomDropdown = document.getElementById('element-dropdown');
+            const operationSelect = document.getElementById('substitute-element');
+            const executeBtn = document.getElementById('execute-btn');
+            
+            const selectedAtom = atomDropdown.value;
+            const selectedOperation = operationSelect.value;
+            
+            // Enable if both atom and operation are selected
+            executeBtn.disabled = !selectedAtom || !selectedOperation;
+            
+            // Update button text based on operation
+            if (selectedAtom && selectedOperation) {
+                if (selectedOperation === 'DELETE') {
+                    executeBtn.textContent = `🗑️ Delete ${selectedAtom}`;
+                    executeBtn.style.backgroundColor = '#e74c3c'; // Red for deletion
+                } else {
+                    executeBtn.textContent = `🔄 ${selectedAtom} → ${selectedOperation}`;
+                    executeBtn.style.backgroundColor = '#27ae60'; // Green for substitution
+                }
+            } else {
+                executeBtn.textContent = 'Execute Operation';
+                executeBtn.style.backgroundColor = '#27ae60'; // Default green
+            }
+        }
+
+        function handleSubstitution(elementLabel, newElement) {
+            // Placeholder for substitution functionality
+            alert(`Substitution: ${elementLabel} → ${newElement}\n(CHGnet integration will be implemented next)`);
+            console.log(`Substitute ${elementLabel} with ${newElement}`);
+        }
+
+        function handleDeletion(elementLabel) {
+            // Placeholder for deletion functionality
+            alert(`Deletion: Remove ${elementLabel}\n(Implementation coming next)`);
+            console.log(`Delete ${elementLabel}`);
+        }
+
+        function initializeViewer() {
+            const container = document.getElementById('viewer-container');
+            container.innerHTML = '<div class="mock-text">3D crystal structure viewer initialized<br>(3Dmol.js integration pending)</div>';
+        }
+    </script>
+</body>
+</html>
