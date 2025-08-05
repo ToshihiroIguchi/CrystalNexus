@@ -360,26 +360,6 @@
             cursor: not-allowed;
         }
 
-        .operation-section {
-            margin-bottom: 20px;
-            padding: 15px;
-            background-color: #f8f9fa;
-            border-radius: 8px;
-            border: 1px solid #e0e0e0;
-        }
-
-        .operation-title {
-            font-weight: bold;
-            margin-bottom: 12px;
-            color: #2c3e50;
-            font-size: 14px;
-        }
-
-        .operation-controls {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
 
         .control-group {
             display: flex;
@@ -880,32 +860,20 @@
                     </select>
                 </div>
                 
-                <div class="operation-section">
-                    <div class="operation-title">Operation</div>
-                    <div class="operation-controls">
-                        <div class="control-group">
-                            <label for="substitute-element">Action:</label>
-                            <select id="substitute-element" disabled>
-                                <option value="">Select operation...</option>
-                                <option value="DELETE">🗑️ Delete selected atom</option>
-                                <optgroup label="Replace with CHGnet elements:">
-                                    ${chgnetOptions}
-                                </optgroup>
-                            </select>
-                        </div>
-                        <div style="font-size: 12px; color: #7f8c8d; margin-top: 8px;">
-                            Choose to delete the selected atom or replace it with a CHGnet-supported element
-                        </div>
-                    </div>
+                <div class="control-group" style="margin-bottom: 15px;">
+                    <label for="substitute-element">Action:</label>
+                    <select id="substitute-element" disabled>
+                        <option value="">Select operation...</option>
+                        <option value="DELETE">🗑️ Delete atom</option>
+                        <optgroup label="Substitute with:">
+                            ${chgnetOptions}
+                        </optgroup>
+                    </select>
                 </div>
                 
                 <button class="execute-button" id="execute-btn" disabled>
-                    Execute Operation
+                    Execute
                 </button>
-                
-                <div style="margin-top: 15px; font-size: 12px; color: #7f8c8d;">
-                    Available operations: ${labels.length} atoms | ${chgnetElements.length} CHGnet elements + deletion
-                </div>
             `;
             
             // Add event listeners
@@ -955,14 +923,14 @@
             // Update button text based on operation
             if (selectedAtom && selectedOperation) {
                 if (selectedOperation === 'DELETE') {
-                    executeBtn.textContent = `🗑️ Delete ${selectedAtom}`;
+                    executeBtn.textContent = `Delete ${selectedAtom}`;
                     executeBtn.style.backgroundColor = '#e74c3c'; // Red for deletion
                 } else {
-                    executeBtn.textContent = `🔄 ${selectedAtom} → ${selectedOperation}`;
+                    executeBtn.textContent = `${selectedAtom} → ${selectedOperation}`;
                     executeBtn.style.backgroundColor = '#27ae60'; // Green for substitution
                 }
             } else {
-                executeBtn.textContent = 'Execute Operation';
+                executeBtn.textContent = 'Execute';
                 executeBtn.style.backgroundColor = '#27ae60'; // Default green
             }
         }
