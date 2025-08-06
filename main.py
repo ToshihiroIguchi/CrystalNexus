@@ -273,6 +273,56 @@ async def get_chgnet_elements():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting CHGnet elements: {str(e)}")
 
+@app.post("/api/recalculate-density")
+async def recalculate_density(request: dict):
+    """
+    Recalculate density using pymatgen after atom operations
+    """
+    try:
+        formula = request.get("formula")
+        volume = request.get("volume")  # in Ų
+        lattice_parameters = request.get("lattice_parameters", {})
+        
+        if not all([formula, volume]):
+            raise HTTPException(status_code=400, detail="Missing required parameters: formula, volume")
+        
+        # Parse the formula to create a dummy structure for density calculation
+        import re
+        from pymatgen.core import Structure, Lattice, Element
+        from pymatgen.core.composition import Composition
+        
+        # Create composition from formula
+        comp = Composition(formula.replace(" ", ""))
+        
+        # Create dummy lattice with correct volume
+        # Use cubic lattice for simplicity (actual lattice shape doesn't affect density)
+        a = (volume) ** (1/3)  # Convert volume to lattice parameter
+        lattice = Lattice.cubic(a)
+        
+        # Get atomic masses and calculate density
+        total_mass = 0
+        for element, amount in comp.items():
+            atomic_mass = Element(element).atomic_mass
+            total_mass += atomic_mass * amount
+        
+        # Convert to g/cm³
+        # Density = mass (g/mol) / (volume (Ų) * N_A * 1e-24 (cm³/Ų))
+        avogadro = 6.02214076e23
+        volume_cm3 = volume * 1e-24  # Convert Ų to cm³
+        density = total_mass / (avogadro * volume_cm3)
+        
+        return {
+            "status": "success",
+            "density": density,
+            "formula": formula,
+            "volume": volume,
+            "total_mass": total_mass,
+            "calculation_method": "pymatgen_composition"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error recalculating density: {str(e)}")
+
 def calculate_supercell_formula(original_formula: str, scaling_factor: int) -> str:
     """
     Calculate supercell formula by scaling the original formula

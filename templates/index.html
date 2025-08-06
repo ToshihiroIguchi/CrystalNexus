@@ -402,6 +402,30 @@
             background-color: #bdc3c7;
             cursor: not-allowed;
         }
+
+        .reset-button {
+            background-color: #95a5a6;
+            color: white;
+            padding: 10px 14px;
+            border: none;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            margin-top: 10px;
+            flex-shrink: 0;
+        }
+
+        .reset-button:hover:not(:disabled) {
+            background-color: #7f8c8d;
+        }
+
+        .reset-button:disabled {
+            background-color: #ecf0f1;
+            color: #bdc3c7;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -411,11 +435,6 @@
 
     <div class="main-container">
         <div class="left-panel">
-            <div class="panel-section">
-                <div class="panel-title">Reset</div>
-                <div class="mock-text">Reset to original structure</div>
-            </div>
-            
             <div class="panel-section">
                 <div class="panel-title">Structure Operations</div>
                 <div id="structure-operations-content" class="mock-text">Element substitution and deletion controls</div>
@@ -505,6 +524,14 @@
         let currentCrystalData = null;
         let supercellData = null;
         let chgnetElements = [];
+        
+        // Immutable original data (never changes after modal closes)
+        let originalSupercellData = null;
+        let originalLabels = [];
+        
+        // Current working data (modified by operations)
+        let currentStructureData = null;
+        let currentLabels = [];
 
         // Initialize the application
         document.addEventListener('DOMContentLoaded', function() {
@@ -698,6 +725,17 @@
                 // Store supercell data
                 supercellData = result;
                 
+                // Store immutable original data (never changes)
+                originalSupercellData = JSON.parse(JSON.stringify(result));
+                
+                // Set initial density for supercell if not provided
+                if (!originalSupercellData.supercell_info.density) {
+                    originalSupercellData.supercell_info.density = currentCrystalData.density;
+                }
+                
+                // Initialize current working data (will be modified by operations)
+                currentStructureData = JSON.parse(JSON.stringify(originalSupercellData));
+                
                 // Close modal and proceed to main application
                 document.getElementById('cifModal').style.display = 'none';
                 
@@ -707,6 +745,12 @@
                 
                 // Load element labels for operations
                 loadElementLabels();
+                
+                // Enable reset button
+                const resetBtn = document.getElementById('reset-btn');
+                if (resetBtn) {
+                    resetBtn.disabled = false;
+                }
                 
                 // Initialize 3D viewer (mock for now)
                 initializeViewer();
@@ -769,8 +813,8 @@
                 gamma: original.lattice_parameters.gamma
             };
             
-            // Calculate supercell density (mass increases, volume increases, density may change)
-            const supercellDensity = original.density; // Same density for same material
+            // Calculate supercell density - use current density if available, otherwise original
+            const supercellDensity = supercell.density || original.density;
             
             const infoElement = document.getElementById('main-crystal-info');
             infoElement.classList.remove('mock-text');
@@ -830,10 +874,19 @@
                 });
                 
                 const labelData = await response.json();
-                displayStructureOperations(labelData.labels);
+                
+                // Store immutable original labels
+                originalLabels = [...labelData.labels];
+                
+                // Initialize current working labels
+                currentLabels = [...labelData.labels];
+                
+                displayStructureOperations(currentLabels);
                 
             } catch (error) {
                 console.error('Error loading element labels:', error);
+                originalLabels = [];
+                currentLabels = [];
                 displayStructureOperations([]);
             }
         }
@@ -871,9 +924,14 @@
                     </select>
                 </div>
                 
-                <button class="execute-button" id="execute-btn" disabled>
-                    Execute
-                </button>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <button class="execute-button" id="execute-btn" disabled>
+                        Execute
+                    </button>
+                    <button class="reset-button" id="reset-btn" disabled title="Reset to original structure">
+                        ↺ Reset
+                    </button>
+                </div>
             `;
             
             // Add event listeners
@@ -884,6 +942,7 @@
             const atomDropdown = document.getElementById('element-dropdown');
             const operationSelect = document.getElementById('substitute-element');
             const executeBtn = document.getElementById('execute-btn');
+            const resetBtn = document.getElementById('reset-btn');
             
             atomDropdown.addEventListener('change', function() {
                 const selected = this.value;
@@ -895,17 +954,38 @@
                 updateExecuteButton();
             });
             
-            executeBtn.addEventListener('click', function() {
+            executeBtn.addEventListener('click', async function(event) {
+                event.preventDefault(); // Prevent default button behavior
+                
                 const selectedAtom = atomDropdown.value;
                 const selectedOperation = operationSelect.value;
                 
                 if (selectedAtom && selectedOperation) {
-                    if (selectedOperation === 'DELETE') {
-                        handleDeletion(selectedAtom);
-                    } else {
-                        handleSubstitution(selectedAtom, selectedOperation);
+                    // Disable button during operation
+                    executeBtn.disabled = true;
+                    executeBtn.textContent = 'Processing...';
+                    
+                    try {
+                        if (selectedOperation === 'DELETE') {
+                            await handleDeletion(selectedAtom);
+                        } else {
+                            await handleSubstitution(selectedAtom, selectedOperation);
+                        }
+                    } catch (error) {
+                        console.error('Operation failed:', error);
+                        showNotification('Operation failed. Please try again.', 'error');
+                    } finally {
+                        // Re-enable button
+                        executeBtn.disabled = false;
+                        updateExecuteButton(); // Restore proper text
                     }
                 }
+            });
+            
+            // Reset button listener
+            resetBtn.addEventListener('click', function(event) {
+                event.preventDefault();
+                resetToOriginalStructure();
             });
         }
 
@@ -935,21 +1015,292 @@
             }
         }
 
-        function handleSubstitution(elementLabel, newElement) {
-            // Placeholder for substitution functionality
-            alert(`Substitution: ${elementLabel} → ${newElement}\n(CHGnet integration will be implemented next)`);
-            console.log(`Substitute ${elementLabel} with ${newElement}`);
+        async function handleSubstitution(elementLabel, newElement) {
+            if (!currentStructureData || currentLabels.length === 0) {
+                showNotification('No structure data available for modification', 'error');
+                return;
+            }
+            
+            // Find the atom index
+            const atomIndex = currentLabels.indexOf(elementLabel);
+            if (atomIndex === -1) {
+                showNotification(`Atom ${elementLabel} not found`, 'error');
+                return;
+            }
+            
+            // Update the structure data
+            await updateStructureForSubstitution(atomIndex, elementLabel, newElement);
+            
+            console.log(`✓ Substituted ${elementLabel} → ${newElement}`);
+            showNotification(`Successfully substituted ${elementLabel} → ${newElement}`, 'success');
         }
 
-        function handleDeletion(elementLabel) {
-            // Placeholder for deletion functionality
-            alert(`Deletion: Remove ${elementLabel}\n(Implementation coming next)`);
-            console.log(`Delete ${elementLabel}`);
+        async function handleDeletion(elementLabel) {
+            if (!currentStructureData || currentLabels.length === 0) {
+                showNotification('No structure data available for modification', 'error');
+                return;
+            }
+            
+            // Find the atom index
+            const atomIndex = currentLabels.indexOf(elementLabel);
+            if (atomIndex === -1) {
+                showNotification(`Atom ${elementLabel} not found`, 'error');
+                return;
+            }
+            
+            // Update the structure data
+            await updateStructureForDeletion(atomIndex, elementLabel);
+            
+            console.log(`✓ Deleted ${elementLabel}`);
+            showNotification(`Successfully deleted ${elementLabel}`, 'success');
+        }
+
+        async function updateStructureForSubstitution(atomIndex, oldLabel, newElement) {
+            // Update the formula by replacing one atom
+            const oldElement = oldLabel.replace(/\d+$/, ''); // Remove numbers to get element symbol
+            
+            // Update labels - replace the substituted atom label
+            currentLabels[atomIndex] = `${newElement}${atomIndex}`;
+            
+            // Recalculate formula
+            const newFormula = calculateNewFormula(oldElement, newElement);
+            currentStructureData.supercell_info.formula = newFormula;
+            
+            // Recalculate density using pymatgen
+            const newDensity = await recalculateDensityWithPymatgen(
+                newFormula,
+                currentStructureData.supercell_info.volume,
+                currentStructureData.original_data?.lattice_parameters || {}
+            );
+            
+            if (newDensity !== null) {
+                currentStructureData.supercell_info.density = newDensity;
+                console.log(`Updated density: ${newDensity.toFixed(4)} g/cm³`);
+            } else {
+                console.warn('Failed to recalculate density, keeping previous value');
+            }
+            
+            // Update displays
+            supercellData = currentStructureData; // For compatibility
+            displaySupercellInfo();
+            displayStructureOperations(currentLabels);
+            
+            console.log(`Updated formula: ${newFormula}`);
+        }
+
+        async function updateStructureForDeletion(atomIndex, deletedLabel) {
+            const deletedElement = deletedLabel.replace(/\d+$/, ''); // Remove numbers to get element symbol
+            
+            // Remove from labels array
+            currentLabels.splice(atomIndex, 1);
+            
+            // Update atom count
+            currentStructureData.supercell_info.num_sites = currentLabels.length;
+            
+            // Recalculate formula
+            const newFormula = calculateNewFormulaAfterDeletion(deletedElement);
+            currentStructureData.supercell_info.formula = newFormula;
+            
+            // Recalculate volume (approximation - actual volume would need structure recalculation)
+            const deletionRatio = currentLabels.length / (currentLabels.length + 1);
+            currentStructureData.supercell_info.volume *= deletionRatio;
+            
+            // Recalculate density using pymatgen
+            const newDensity = await recalculateDensityWithPymatgen(
+                newFormula,
+                currentStructureData.supercell_info.volume,
+                currentStructureData.original_data?.lattice_parameters || {}
+            );
+            
+            if (newDensity !== null) {
+                currentStructureData.supercell_info.density = newDensity;
+                console.log(`Updated density: ${newDensity.toFixed(4)} g/cm³`);
+            } else {
+                console.warn('Failed to recalculate density, keeping previous value');
+            }
+            
+            // Update displays
+            supercellData = currentStructureData; // For compatibility
+            displaySupercellInfo();
+            displayStructureOperations(currentLabels);
+            
+            console.log(`Updated formula: ${newFormula}`);
+            console.log(`Updated atom count: ${currentLabels.length}`);
+        }
+
+        function calculateNewFormula(oldElement, newElement) {
+            const currentFormula = currentStructureData.supercell_info.formula;
+            
+            // Parse current formula
+            const elementCounts = {};
+            const matches = currentFormula.match(/([A-Z][a-z]?)(\d+)/g) || [];
+            
+            matches.forEach(match => {
+                const element = match.replace(/\d+$/, '');
+                const count = parseInt(match.replace(/^[A-Z][a-z]?/, '')) || 1;
+                elementCounts[element] = count;
+            });
+            
+            // Update counts
+            elementCounts[oldElement] = (elementCounts[oldElement] || 0) - 1;
+            if (elementCounts[oldElement] <= 0) {
+                delete elementCounts[oldElement];
+            }
+            
+            elementCounts[newElement] = (elementCounts[newElement] || 0) + 1;
+            
+            // Rebuild formula
+            return Object.entries(elementCounts)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([element, count]) => `${element}${count}`)
+                .join(' ');
+        }
+
+        function calculateNewFormulaAfterDeletion(deletedElement) {
+            const currentFormula = currentStructureData.supercell_info.formula;
+            
+            // Parse current formula
+            const elementCounts = {};
+            const matches = currentFormula.match(/([A-Z][a-z]?)(\d+)/g) || [];
+            
+            matches.forEach(match => {
+                const element = match.replace(/\d+$/, '');
+                const count = parseInt(match.replace(/^[A-Z][a-z]?/, '')) || 1;
+                elementCounts[element] = count;
+            });
+            
+            // Decrease count for deleted element
+            elementCounts[deletedElement] = (elementCounts[deletedElement] || 0) - 1;
+            if (elementCounts[deletedElement] <= 0) {
+                delete elementCounts[deletedElement];
+            }
+            
+            // Rebuild formula
+            return Object.entries(elementCounts)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([element, count]) => `${element}${count}`)
+                .join(' ');
+        }
+
+
+        function resetToOriginalStructure() {
+            if (!originalSupercellData || originalLabels.length === 0) {
+                showNotification('No original data to reset to', 'warning');
+                return;
+            }
+            
+            // Restore current working data from immutable original data
+            currentStructureData = JSON.parse(JSON.stringify(originalSupercellData));
+            currentLabels = [...originalLabels];
+            
+            // Update displays
+            supercellData = currentStructureData; // For compatibility with existing display functions
+            displaySupercellInfo();
+            displayStructureOperations(currentLabels);
+            
+            console.log('✓ Structure reset to original state');
+            console.log(`  - Formula: ${currentStructureData.supercell_info.formula}`);
+            console.log(`  - Atoms: ${currentLabels.length}`);
+            showNotification('Structure reset to original state', 'info');
         }
 
         function initializeViewer() {
             const container = document.getElementById('viewer-container');
             container.innerHTML = '<div class="mock-text">3D crystal structure viewer initialized<br>(3Dmol.js integration pending)</div>';
+        }
+
+        async function recalculateDensityWithPymatgen(formula, volume, latticeParameters) {
+            /**
+             * Recalculate density using pymatgen backend API
+             */
+            try {
+                const response = await fetch('/api/recalculate-density', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        formula: formula,
+                        volume: volume,
+                        lattice_parameters: latticeParameters
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    return data.density;
+                } else {
+                    console.error('Error recalculating density:', data);
+                    return null;
+                }
+                
+            } catch (error) {
+                console.error('Error calling density recalculation API:', error);
+                return null;
+            }
+        }
+
+
+        function showNotification(message, type = 'info') {
+            // Remove existing notification if present
+            const existing = document.querySelector('.notification');
+            if (existing) {
+                existing.remove();
+            }
+            
+            // Create notification element
+            const notification = document.createElement('div');
+            notification.className = 'notification';
+            notification.textContent = message;
+            
+            // Set colors based on type
+            const colors = {
+                'success': { bg: '#2ecc71', text: 'white' },
+                'error': { bg: '#e74c3c', text: 'white' },
+                'warning': { bg: '#f39c12', text: 'white' },
+                'info': { bg: '#3498db', text: 'white' }
+            };
+            
+            const color = colors[type] || colors.info;
+            
+            // Style the notification
+            Object.assign(notification.style, {
+                position: 'fixed',
+                top: '20px',
+                right: '20px',
+                backgroundColor: color.bg,
+                color: color.text,
+                padding: '12px 20px',
+                borderRadius: '4px',
+                boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
+                zIndex: '10000',
+                fontSize: '14px',
+                maxWidth: '300px',
+                opacity: '0',
+                transform: 'translateY(-20px)',
+                transition: 'all 0.3s ease'
+            });
+            
+            // Add to page
+            document.body.appendChild(notification);
+            
+            // Animate in
+            setTimeout(() => {
+                notification.style.opacity = '1';
+                notification.style.transform = 'translateY(0)';
+            }, 10);
+            
+            // Remove after 3 seconds
+            setTimeout(() => {
+                notification.style.opacity = '0';
+                notification.style.transform = 'translateY(-20px)';
+                setTimeout(() => {
+                    if (notification.parentNode) {
+                        notification.parentNode.removeChild(notification);
+                    }
+                }, 300);
+            }, 3000);
         }
     </script>
 </body>

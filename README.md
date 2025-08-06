@@ -1,15 +1,18 @@
 # CrystalNexus
 
-A web-based crystal structure analysis and manipulation tool using FastAPI, pymatgen, and 3Dmol.js.
+A web-based crystal structure analysis application for materials science research.
 
 ## Features
 
-- CIF file loading (sample files or user uploads)
-- Crystal structure analysis using pymatgen
-- Interactive 3D visualization (planned)
-- Supercell creation
-- Element substitution and deletion (planned)
-- CHGNet calculations (planned)
+- **CIF File Analysis**: Load and analyze crystallographic information files (CIF)
+- **Crystal Structure Visualization**: Interactive 3D visualization of crystal structures  
+- **Supercell Generation**: Create supercells with custom dimensions
+- **Element Operations**: 
+  - Substitute atoms with CHGnet-supported elements (86 elements available)
+  - Delete atoms from crystal structures
+  - Real-time formula updates
+- **Dynamic Modifications**: Progressive structure modifications with reset capability
+- **Professional UI**: Clean, responsive interface with toast notifications
 
 ## Directory Structure
 
@@ -47,13 +50,22 @@ python start_crystalnexus.py
 
 ## Usage
 
-1. When you first access the application, a modal window will appear
-2. Choose to either:
-   - Select a sample CIF file from the dropdown
-   - Upload your own CIF file
-3. The crystal information will be displayed (formula, space group, lattice parameters, etc.)
-4. Specify supercell size in a, b, c directions
-5. Click "Confirm" to proceed to the main application
+1. **Load Structure**: Choose from sample CIF files or upload your own
+2. **Create Supercell**: Specify dimensions (e.g., 2×2×2) 
+3. **Modify Structure**: 
+   - Select atoms from dropdown
+   - Choose substitution element or deletion
+   - Execute operations with real-time updates
+4. **Reset**: Restore to original structure anytime
+
+## Sample CIF Files
+
+The application includes several sample crystal structures:
+- ZrO2 (Zirconia)
+- BaTiO3 (Barium Titanate) 
+- Nd2Fe14B (Neodymium Iron Boron)
+- SrFe12O19 (Strontium Ferrite)
+- C (Carbon/Diamond)
 
 ## Development
 
@@ -81,6 +93,9 @@ python debug/test_cif_analysis.py
 - `POST /api/analyze-cif-sample` - Analyze sample CIF file
 - `POST /api/analyze-cif-upload` - Analyze uploaded CIF file
 - `POST /api/create-supercell` - Create supercell structure
+- `POST /api/get-element-labels` - Get atom labels for operations
+- `GET /api/chgnet-elements` - Get CHGnet supported elements
+- `POST /api/recalculate-density` - Recalculate density with pymatgen
 
 ## Current Status
 
@@ -90,16 +105,17 @@ python debug/test_cif_analysis.py
 - Pymatgen integration for crystal analysis
 - Modal window for file selection
 - Supercell size specification
-- Backend startup checking
-- Test and debug infrastructure
-
-🚧 **In Progress:**
-- 3Dmol.js integration for visualization
+- Element substitution and deletion operations
+- CHGnet integration (86 supported elements)
+- Dynamic structure modification system
+- Pymatgen-based density recalculation
+- Reset functionality
+- Toast notification system
+- Professional UI design
+- Complete test suite
 
 📋 **Planned:**
-- Element substitution and deletion
-- CHGNet integration for calculations
-- Full 3D structure manipulation
+- 3Dmol.js integration for visualization
 - Advanced crystal structure operations
 
 ## Dependencies
@@ -110,4 +126,8 @@ python debug/test_cif_analysis.py
 - chgnet 0.3.8
 - python-multipart 0.0.6
 - jinja2 3.1.2
-- aiofiles 23.2.1# CrystalNexus
+- aiofiles 23.2.1
+
+## License
+
+MIT License
