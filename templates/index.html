@@ -104,8 +104,8 @@
             background-color: white;
             padding: 30px;
             border-radius: 10px;
-            width: 500px;
-            max-height: 80vh;
+            width: 650px;
+            max-height: 85vh;
             overflow-y: auto;
         }
 
@@ -188,6 +188,44 @@
             margin: 20px 0;
             font-size: 13px;
             border-left: 4px solid #3498db;
+            position: relative;
+            transition: all 0.3s ease;
+        }
+
+        .crystal-info.summary {
+            height: 45px;
+            overflow: hidden;
+            border-left: 4px solid #95a5a6;
+            cursor: pointer;
+        }
+
+        .crystal-info.detailed {
+            max-height: 280px;
+            overflow-y: auto;
+            border-left: 4px solid #3498db;
+        }
+
+        .expand-toggle {
+            position: absolute;
+            top: 10px;
+            right: 15px;
+            color: #3498db;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 16px;
+            user-select: none;
+        }
+
+        .crystal-info.summary .expand-toggle {
+            color: #95a5a6;
+        }
+
+        .crystal-info.summary:hover {
+            border-left-color: #3498db;
+        }
+
+        .crystal-info.summary:hover .expand-toggle {
+            color: #3498db;
         }
 
         .crystal-info strong {
@@ -196,18 +234,21 @@
         }
 
         .supercell-section {
-            margin-top: 25px;
+            margin-top: 15px;
             padding: 20px;
-            background-color: #fafafa;
+            background-color: #f8fff8;
             border-radius: 8px;
-            border: 1px solid #e0e0e0;
+            border: 2px solid #27ae60;
+            position: sticky;
+            bottom: 0;
+            box-shadow: 0 -2px 10px rgba(39, 174, 96, 0.1);
         }
 
         .supercell-title {
             font-weight: bold;
             margin-bottom: 15px;
-            color: #2c3e50;
-            font-size: 16px;
+            color: #27ae60;
+            font-size: 17px;
         }
 
         .supercell-inputs {
@@ -493,7 +534,8 @@
                 </div>
             </div>
             
-            <div id="crystalInfo" class="crystal-info hidden">
+            <div id="crystalInfo" class="crystal-info hidden summary">
+                <div class="expand-toggle" id="expandToggle">▼ Details</div>
                 <strong>Crystal Information:</strong>
                 <div id="infoContent"></div>
             </div>
@@ -694,14 +736,21 @@
                 </div>
             `;
             
-            document.getElementById('crystalInfo').classList.remove('hidden');
+            const crystalInfoElement = document.getElementById('crystalInfo');
+            crystalInfoElement.classList.remove('hidden');
             document.getElementById('supercellSection').classList.remove('hidden');
             document.getElementById('confirmButton').disabled = false;
+            
+            // Setup expand/collapse functionality
+            setupCrystalInfoToggle();
         }
 
         function resetAnalysis() {
             currentCrystalData = null;
-            document.getElementById('crystalInfo').classList.add('hidden');
+            const crystalInfoElement = document.getElementById('crystalInfo');
+            crystalInfoElement.classList.add('hidden');
+            crystalInfoElement.classList.remove('detailed');
+            crystalInfoElement.classList.add('summary');
             document.getElementById('supercellSection').classList.add('hidden');
             document.getElementById('confirmButton').disabled = true;
         }
@@ -1591,6 +1640,46 @@
                     }
                 }, 300);
             }, 3000);
+        }
+
+        function setupCrystalInfoToggle() {
+            const crystalInfoElement = document.getElementById('crystalInfo');
+            const toggleElement = document.getElementById('expandToggle');
+            
+            if (!crystalInfoElement || !toggleElement) return;
+            
+            // Add click handlers for both the toggle button and the summary area
+            const toggleHandler = function() {
+                if (crystalInfoElement.classList.contains('summary')) {
+                    // Expand to detailed view
+                    crystalInfoElement.classList.remove('summary');
+                    crystalInfoElement.classList.add('detailed');
+                    toggleElement.textContent = '▲ Collapse';
+                } else {
+                    // Collapse to summary view
+                    crystalInfoElement.classList.remove('detailed');
+                    crystalInfoElement.classList.add('summary');
+                    toggleElement.textContent = '▼ Details';
+                }
+            };
+            
+            // Remove existing listeners to prevent duplicates
+            const newToggleElement = toggleElement.cloneNode(true);
+            toggleElement.parentNode.replaceChild(newToggleElement, toggleElement);
+            
+            // Add click listener to toggle button
+            newToggleElement.addEventListener('click', function(e) {
+                e.stopPropagation();
+                toggleHandler();
+            });
+            
+            // Add click listener to the summary area (only when in summary mode)
+            crystalInfoElement.addEventListener('click', function(e) {
+                if (crystalInfoElement.classList.contains('summary') && 
+                    !e.target.classList.contains('expand-toggle')) {
+                    toggleHandler();
+                }
+            });
         }
     </script>
 </body>
