@@ -954,6 +954,11 @@
             const executeBtn = document.getElementById('execute-btn');
             const resetBtn = document.getElementById('reset-btn');
             
+            // Enable reset button if original data exists
+            if (resetBtn && originalSupercellData && originalLabels.length > 0) {
+                resetBtn.disabled = false;
+            }
+            
             atomDropdown.addEventListener('change', function() {
                 const selected = this.value;
                 operationSelect.disabled = !selected;
