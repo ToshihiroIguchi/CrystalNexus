@@ -532,6 +532,9 @@
         // Current working data (modified by operations)
         let currentStructureData = null;
         let currentLabels = [];
+        
+        // Atomic operations history for complete 3D visualization
+        window.atomicOperations = [];
 
         // Initialize the application
         document.addEventListener('DOMContentLoaded', function() {
@@ -735,6 +738,13 @@
                 
                 // Initialize current working data (will be modified by operations)
                 currentStructureData = JSON.parse(JSON.stringify(originalSupercellData));
+                
+                // Store filename and supercell size for 3D visualization
+                window.currentFilename = currentCrystalData.filename;
+                window.currentSupercellSize = [parseInt(aSize), parseInt(bSize), parseInt(cSize)];
+                
+                // Initialize empty operations history
+                window.atomicOperations = [];
                 
                 // Close modal and proceed to main application
                 document.getElementById('cifModal').style.display = 'none';
@@ -1028,6 +1038,19 @@
                 return;
             }
             
+            // Record operation in history
+            const oldElement = elementLabel.replace(/\d+$/, ''); // Remove numbers to get element symbol
+            window.atomicOperations.push({
+                action: "substitute",
+                index: atomIndex,
+                from: oldElement,
+                to: newElement,
+                timestamp: Date.now(),
+                label: elementLabel
+            });
+            
+            console.log(`📝 Recorded substitution: ${elementLabel} → ${newElement} (operation #${window.atomicOperations.length})`);
+            
             // Update the structure data
             await updateStructureForSubstitution(atomIndex, elementLabel, newElement);
             
@@ -1047,6 +1070,18 @@
                 showNotification(`Atom ${elementLabel} not found`, 'error');
                 return;
             }
+            
+            // Record operation in history
+            const deletedElement = elementLabel.replace(/\d+$/, ''); // Remove numbers to get element symbol
+            window.atomicOperations.push({
+                action: "delete",
+                index: atomIndex,
+                from: deletedElement,
+                timestamp: Date.now(),
+                label: elementLabel
+            });
+            
+            console.log(`📝 Recorded deletion: ${elementLabel} (operation #${window.atomicOperations.length})`);
             
             // Update the structure data
             await updateStructureForDeletion(atomIndex, elementLabel);
@@ -1084,6 +1119,9 @@
             supercellData = currentStructureData; // For compatibility
             displaySupercellInfo();
             displayStructureOperations(currentLabels);
+            
+            // Update 3D visualization
+            updateStructureVisualization();
             
             console.log(`Updated formula: ${newFormula}`);
         }
@@ -1123,6 +1161,9 @@
             supercellData = currentStructureData; // For compatibility
             displaySupercellInfo();
             displayStructureOperations(currentLabels);
+            
+            // Update 3D visualization
+            updateStructureVisualization();
             
             console.log(`Updated formula: ${newFormula}`);
             console.log(`Updated atom count: ${currentLabels.length}`);
@@ -1189,6 +1230,10 @@
                 return;
             }
             
+            // Clear operation history
+            window.atomicOperations = [];
+            console.log('📝 Cleared operation history');
+            
             // Restore current working data from immutable original data
             currentStructureData = JSON.parse(JSON.stringify(originalSupercellData));
             currentLabels = [...originalLabels];
@@ -1198,6 +1243,9 @@
             displaySupercellInfo();
             displayStructureOperations(currentLabels);
             
+            // Update 3D visualization
+            updateStructureVisualization();
+            
             console.log('✓ Structure reset to original state');
             console.log(`  - Formula: ${currentStructureData.supercell_info.formula}`);
             console.log(`  - Atoms: ${currentLabels.length}`);
@@ -1205,8 +1253,245 @@
         }
 
         function initializeViewer() {
+            console.log('🔄 Initializing 3D viewer...');
+            
             const container = document.getElementById('viewer-container');
-            container.innerHTML = '<div class="mock-text">3D crystal structure viewer initialized<br>(3Dmol.js integration pending)</div>';
+            if (!container) {
+                console.error('❌ viewer-container element not found');
+                return;
+            }
+            
+            // Create 3Dmol viewer container
+            container.innerHTML = `
+                <div id="3dmol-viewer" style="width: 100%; height: 400px; position: relative; border: 1px solid #ddd; background: white;"></div>
+                <div id="3d-status" style="margin-top: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #666;">
+                    <strong>3D Status:</strong> <span id="3d-status-text">Loading 3Dmol.js...</span>
+                </div>
+            `;
+            
+            console.log('✅ 3D viewer container created');
+            
+            // Load 3Dmol.js and initialize viewer
+            loadScript('https://3dmol.org/build/3Dmol.js', function() {
+                console.log('✅ 3Dmol.js loaded successfully');
+                updateStatus('Creating 3D viewer...', 'info');
+                
+                const element = document.getElementById('3dmol-viewer');
+                if (!element) {
+                    console.error('❌ 3dmol-viewer element not found');
+                    updateStatus('Error: Viewer element not found', 'error');
+                    return;
+                }
+                
+                // Create 3Dmol viewer with white background
+                const config = { backgroundColor: 'white' };
+                window.viewer3D = $3Dmol.createViewer(element, config);
+                
+                console.log('✅ 3Dmol.js viewer initialized');
+                updateStatus('3D viewer ready', 'success');
+                
+                // Load supercell visualization
+                loadSupercellVisualization();
+            });
+        }
+
+        function loadScript(src, callback) {
+            const script = document.createElement('script');
+            script.src = src;
+            script.onload = function() {
+                console.log(`✓ Script loaded successfully: ${src}`);
+                callback();
+            };
+            script.onerror = function() {
+                console.error(`✗ Failed to load script: ${src}`);
+                updateStatus('Failed to load 3Dmol.js library', 'error');
+            };
+            document.head.appendChild(script);
+        }
+
+        function updateStatus(message, type = 'info') {
+            const statusElement = document.getElementById('3d-status-text');
+            if (statusElement) {
+                statusElement.textContent = message;
+                const statusContainer = document.getElementById('3d-status');
+                if (statusContainer) {
+                    statusContainer.className = `status-${type}`;
+                }
+            }
+        }
+
+        async function loadSupercellVisualization() {
+            console.log('🔄 Loading supercell structure for 3D visualization');
+            
+            if (!window.viewer3D) {
+                console.warn('❌ 3D viewer not initialized yet');
+                updateStatus('3D viewer not ready', 'error');
+                return;
+            }
+            
+            if (!window.currentFilename || !window.currentSupercellSize) {
+                console.warn('❌ No filename or supercell size available');
+                updateStatus('No structure data available', 'error');
+                return;
+            }
+            
+            try {
+                updateStatus('Generating supercell CIF from original file...', 'info');
+                console.log(`📊 Using direct CIF generation approach`);
+                console.log(`📄 Filename: ${window.currentFilename}`);
+                console.log(`📐 Supercell size: ${window.currentSupercellSize}`);
+                
+                // Use new direct CIF generation API
+                const requestData = {
+                    filename: window.currentFilename,
+                    supercell_size: window.currentSupercellSize
+                };
+                
+                console.log('📡 Requesting supercell CIF from direct API...');
+                const response = await fetch('/api/generate-supercell-cif-direct', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(requestData)
+                });
+                
+                console.log(`📡 Response status: ${response.status} ${response.statusText}`);
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP ${response.status}: ${errorText}`);
+                }
+                
+                const cifData = await response.text();
+                console.log(`📄 Generated supercell CIF data: ${cifData.length} characters`);
+                
+                // Display structure using fastapiBT.py approach
+                console.log('🗑️ Clearing existing models');
+                window.viewer3D.clear();
+                
+                console.log('➕ Adding supercell CIF model');
+                window.viewer3D.addModel(cifData, 'cif');
+                
+                console.log('🎨 Setting ball-and-stick style');
+                window.viewer3D.setStyle({}, { 
+                    sphere: { scale: 0.3 }, 
+                    stick: { radius: 0.1 } 
+                });
+                
+                console.log('📦 Adding unit cell');
+                window.viewer3D.addUnitCell();
+                
+                console.log('🔍 Zooming and rendering');
+                window.viewer3D.zoomTo();
+                window.viewer3D.render();
+                
+                const sizeStr = window.currentSupercellSize.join('x');
+                updateStatus(`Supercell loaded: ${window.currentFilename} (${sizeStr})`, 'success');
+                console.log('✅ Successfully loaded 3D supercell visualization');
+                
+            } catch (error) {
+                console.error('❌ Error loading supercell 3D structure:', error);
+                updateStatus(`Error: ${error.message}`, 'error');
+                
+                // Fallback: show error message in viewer
+                const container = document.getElementById('3dmol-viewer');
+                if (container) {
+                    container.innerHTML = `
+                        <div style="display: flex; align-items: center; justify-content: center; height: 100%; color: #666; text-align: center; padding: 20px;">
+                            <div>
+                                <div style="font-size: 18px; margin-bottom: 10px;">⚠️</div>
+                                <div>Failed to load 3D structure</div>
+                                <div style="font-size: 12px; margin-top: 5px;">${error.message}</div>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+        }
+
+        async function updateStructureVisualization() {
+            if (!window.viewer3D || !window.currentFilename || !window.currentSupercellSize) {
+                console.log('3D viewer or structure parameters not available, skipping update');
+                return;
+            }
+            
+            try {
+                console.log('🔄 Updating 3D visualization with operation history');
+                console.log(`📋 Operations to apply: ${window.atomicOperations.length}`);
+                updateStatus('Updating 3D structure with atomic operations...', 'info');
+                
+                // Use operation history to regenerate complete structure
+                const requestData = {
+                    filename: window.currentFilename,
+                    supercell_size: window.currentSupercellSize,
+                    operations: window.atomicOperations
+                };
+                
+                console.log('📡 Requesting structure with operations from API...');
+                const response = await fetch('/api/generate-modified-structure-cif', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestData)
+                });
+                
+                console.log(`📡 Response status: ${response.status} ${response.statusText}`);
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP ${response.status}: ${errorText}`);
+                }
+                
+                const cifData = await response.text();
+                console.log(`📄 Generated modified CIF data: ${cifData.length} characters`);
+                
+                // Update 3D viewer with modified structure
+                console.log('🗑️ Clearing existing models');
+                window.viewer3D.clear();
+                
+                console.log('➕ Adding modified structure CIF model');
+                window.viewer3D.addModel(cifData, 'cif');
+                
+                console.log('🎨 Setting ball-and-stick style');
+                window.viewer3D.setStyle({}, { 
+                    sphere: { scale: 0.3 }, 
+                    stick: { radius: 0.1 } 
+                });
+                
+                console.log('📦 Adding unit cell');
+                window.viewer3D.addUnitCell();
+                
+                console.log('🔍 Zooming and rendering');
+                window.viewer3D.zoomTo();
+                window.viewer3D.render();
+                
+                const operationsText = window.atomicOperations.length > 0 
+                    ? `Modified (${window.atomicOperations.length} ops)` 
+                    : 'Original';
+                updateStatus(`${operationsText}: ${currentStructureData.supercell_info.formula}`, 'success');
+                console.log(`✅ 3D structure updated with ${window.atomicOperations.length} operations`);
+                
+            } catch (error) {
+                console.error('❌ Error updating 3D visualization:', error);
+                updateStatus('3D update failed', 'error');
+                
+                // Show error in status
+                const container = document.getElementById('3dmol-viewer');
+                if (container && error.message.includes('404')) {
+                    // Add overlay message about API issue
+                    const errorDiv = document.createElement('div');
+                    errorDiv.style.cssText = `
+                        position: absolute; top: 10px; right: 10px; z-index: 100;
+                        background: rgba(231, 76, 60, 0.9); color: white; padding: 8px; border-radius: 4px;
+                        font-size: 12px; max-width: 200px;
+                    `;
+                    errorDiv.innerHTML = `<strong>3D Update Failed</strong><br>API Error: ${error.message}`;
+                    
+                    const existing = container.querySelector('div[style*="position: absolute"]');
+                    if (existing) existing.remove();
+                    container.appendChild(errorDiv);
+                }
+            }
         }
 
         async function recalculateDensityWithPymatgen(formula, volume, latticeParameters) {
