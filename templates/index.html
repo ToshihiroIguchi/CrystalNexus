@@ -27,32 +27,36 @@
         }
 
         .main-container {
-            display: flex;
+            display: grid;
+            grid-template-columns: 280px 1fr 280px;
+            gap: 10px;
             height: calc(100vh - 80px);
+            padding: 10px;
         }
 
         .left-panel {
-            width: 300px;
             background-color: white;
-            border-right: 1px solid #ddd;
-            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 15px;
             overflow-y: auto;
         }
 
         .center-panel {
-            flex: 1;
             background-color: white;
-            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 10px;
             display: flex;
             justify-content: center;
             align-items: center;
         }
 
         .right-panel {
-            width: 300px;
             background-color: white;
-            border-left: 1px solid #ddd;
-            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 15px;
             overflow-y: auto;
         }
 
@@ -74,7 +78,8 @@
 
         .viewer-container {
             width: 100%;
-            height: 600px;
+            height: 85vh; /* Use 85% of viewport height for crystal structure */
+            min-height: 700px; /* Minimum height for professional analysis */
             border: 2px solid #ddd;
             border-radius: 10px;
             background-color: #f9f9f9;
@@ -1315,10 +1320,10 @@
                 return;
             }
             
-            // Create 3Dmol viewer container
+            // Create 3Dmol viewer container optimized for professional crystal analysis
             container.innerHTML = `
-                <div id="3dmol-viewer" style="width: 100%; height: 400px; position: relative; border: 1px solid #ddd; background: white;"></div>
-                <div id="3d-status" style="margin-top: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #666;">
+                <div id="3dmol-viewer" style="width: 100%; height: calc(100% - 50px); position: relative; border: 1px solid #ddd; background: white; min-height: 650px;"></div>
+                <div id="3d-status" style="margin-top: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #666; height: 30px;">
                     <strong>3D Status:</strong> <span id="3d-status-text">Loading 3Dmol.js...</span>
                 </div>
             `;
