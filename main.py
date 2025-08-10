@@ -781,6 +781,377 @@ def calculate_supercell_formula(original_formula: str, scaling_factor: int) -> s
     
     return " ".join(supercell_parts)
 
+def safe_get_prediction(pred):
+    """Extract prediction results safely from CHGNet output"""
+    out = {}
+    for k in ("energy", "e", "energy_per_atom", "e_per_atom"):
+        if k in pred:
+            out["energy_eV_per_atom"] = float(getattr(pred[k], "item", lambda: pred[k])())
+            break
+    for k in ("forces", "f", "force"):
+        if k in pred:
+            arr = pred[k]
+            out["forces_eV_per_A"] = [list(a) for a in arr.tolist()]
+            break
+    for k in ("stress", "s", "virial"):
+        if k in pred:
+            arr = pred[k]
+            out["stress_GPa"] = [list(a) for a in arr.tolist()]
+            break
+    for k in ("magmom", "m", "magmoms"):
+        if k in pred:
+            arr = pred[k]
+            out["magmoms_muB"] = [float(x) for x in arr.tolist()]
+            break
+    # Other fields
+    for k, v in pred.items():
+        if k in ("energy", "e", "forces", "f", "stress", "s", "magmom", "m"):
+            continue
+        try:
+            out[k] = v.tolist() if hasattr(v, "tolist") else v
+        except:
+            continue
+    return out
+
+@app.post("/api/chgnet-predict")
+async def chgnet_predict_structure(request: dict):
+    """
+    Predict structure properties using CHGNet
+    """
+    try:
+        filename = request.get("filename")
+        operations = request.get("operations", [])
+        supercell_size = request.get("supercell_size", [1, 1, 1])
+        
+        if not filename:
+            raise HTTPException(status_code=400, detail="Filename is required")
+        
+        logger.info(f"CHGNet prediction for {filename} with {len(operations)} operations")
+        
+        # Get the modified structure
+        from pymatgen.io.cif import CifParser
+        cif_path = SAMPLE_CIF_DIR / safe_filename(filename)
+        
+        if not cif_path.exists():
+            raise HTTPException(status_code=404, detail=f"CIF file not found: {filename}")
+        
+        # Parse and create supercell
+        parser = CifParser(str(cif_path))
+        structure = parser.get_structures(primitive=False)[0]
+        structure.make_supercell(supercell_size)
+        
+        # Apply operations
+        for operation in operations:
+            if operation["action"] == "substitute":
+                site_index = operation["index"]
+                new_element = validate_element(operation["to"])
+                if site_index < len(structure.sites):
+                    old_coords = structure[site_index].frac_coords
+                    structure[site_index] = Element(new_element), old_coords
+            elif operation["action"] == "delete":
+                site_index = operation["index"]
+                if site_index < len(structure.sites):
+                    structure.remove_sites([site_index])
+                    # Adjust subsequent indices
+                    for j, op in enumerate(operations[operations.index(operation)+1:], operations.index(operation)+1):
+                        if op.get("index", 0) > site_index:
+                            op["index"] -= 1
+        
+        # Load CHGNet model
+        if not CHGNET_AVAILABLE:
+            raise HTTPException(status_code=503, detail="CHGNet not available. Please install with: pip install chgnet")
+        
+        from chgnet.model.model import CHGNet
+        chgnet = CHGNet.load(model_name="0.3.0", use_device="cpu", verbose=False)
+        
+        # Predict structure properties
+        try:
+            pred = chgnet.predict_structure(structure,
+                                          return_site_energies=True,
+                                          return_atom_feas=False,
+                                          return_crystal_feas=False)
+        except TypeError:
+            pred = chgnet.predict_structure(structure)
+        
+        # Extract results
+        results = safe_get_prediction(pred)
+        
+        # Add structure information
+        results.update({
+            "formula": str(structure.formula),
+            "num_sites": len(structure.sites),
+            "volume": float(structure.volume),
+            "density": float(structure.density),
+            "operations_applied": len(operations),
+            "supercell_size": supercell_size
+        })
+        
+        logger.info(f"CHGNet prediction completed: {results.get('energy_eV_per_atom', 'N/A')} eV/atom")
+        
+        return {
+            "status": "success",
+            "prediction": results,
+            "model_info": {
+                "version": chgnet.version if hasattr(chgnet, 'version') else "0.3.0",
+                "device": "cpu",
+                "parameters": chgnet.n_params if hasattr(chgnet, 'n_params') else None
+            }
+        }
+        
+    except ValueError as e:
+        logger.error(f"CHGNet prediction validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"CHGNet prediction error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"CHGNet prediction failed: {str(e)}")
+
+@app.post("/api/chgnet-relax")
+async def chgnet_relax_structure(request: dict):
+    """
+    Relax structure using CHGNet
+    """
+    try:
+        filename = request.get("filename")
+        operations = request.get("operations", [])
+        supercell_size = request.get("supercell_size", [1, 1, 1])
+        fmax = float(request.get("fmax", 0.1))
+        max_steps = int(request.get("max_steps", 100))
+        
+        if not filename:
+            raise HTTPException(status_code=400, detail="Filename is required")
+        
+        logger.info(f"CHGNet relaxation for {filename} with fmax={fmax}, max_steps={max_steps}")
+        
+        # Get the modified structure (same as predict)
+        from pymatgen.io.cif import CifParser
+        cif_path = SAMPLE_CIF_DIR / safe_filename(filename)
+        
+        if not cif_path.exists():
+            raise HTTPException(status_code=404, detail=f"CIF file not found: {filename}")
+        
+        parser = CifParser(str(cif_path))
+        structure = parser.get_structures(primitive=False)[0]
+        structure.make_supercell(supercell_size)
+        
+        # Apply operations
+        for operation in operations:
+            if operation["action"] == "substitute":
+                site_index = operation["index"]
+                new_element = validate_element(operation["to"])
+                if site_index < len(structure.sites):
+                    old_coords = structure[site_index].frac_coords
+                    structure[site_index] = Element(new_element), old_coords
+            elif operation["action"] == "delete":
+                site_index = operation["index"]
+                if site_index < len(structure.sites):
+                    structure.remove_sites([site_index])
+        
+        # Load CHGNet and relaxer
+        if not CHGNET_AVAILABLE:
+            raise HTTPException(status_code=503, detail="CHGNet not available")
+        
+        from chgnet.model.model import CHGNet
+        from chgnet.model import StructOptimizer
+        
+        chgnet = CHGNet.load(model_name="0.3.0", use_device="cpu", verbose=False)
+        relaxer = StructOptimizer(model=chgnet, use_device="cpu", optimizer_class="FIRE")
+        
+        # Predict initial structure
+        try:
+            pred_initial = chgnet.predict_structure(structure)
+            initial_results = safe_get_prediction(pred_initial)
+        except Exception as e:
+            logger.warning(f"Initial prediction failed: {e}")
+            initial_results = {"energy_eV_per_atom": None}
+        
+        # Relax structure
+        result = relaxer.relax(structure, fmax=fmax, steps=max_steps, verbose=False, relax_cell=True)
+        
+        final_structure = result.get("final_structure")
+        if final_structure is None:
+            raise RuntimeError("Relaxation failed: no final structure returned")
+        
+        # Predict relaxed structure
+        try:
+            pred_final = chgnet.predict_structure(final_structure)
+            final_results = safe_get_prediction(pred_final)
+        except Exception as e:
+            logger.warning(f"Final prediction failed: {e}")
+            final_results = {"energy_eV_per_atom": None}
+        
+        # Calculate energy difference
+        energy_diff = None
+        if (initial_results.get("energy_eV_per_atom") is not None and 
+            final_results.get("energy_eV_per_atom") is not None):
+            energy_diff = final_results["energy_eV_per_atom"] - initial_results["energy_eV_per_atom"]
+        
+        relaxation_info = {
+            "converged": result.get("converged", False),
+            "steps": len(result.get("trajectory", [])) if result.get("trajectory") else 0,
+            "fmax": fmax,
+            "max_steps": max_steps,
+            "energy_change_eV_per_atom": energy_diff
+        }
+        
+        # Add structure information
+        final_results.update({
+            "formula": str(final_structure.formula),
+            "num_sites": len(final_structure.sites),
+            "volume": float(final_structure.volume),
+            "density": float(final_structure.density)
+        })
+        
+        logger.info(f"CHGNet relaxation completed: {relaxation_info['steps']} steps, converged: {relaxation_info['converged']}")
+        
+        # Generate relaxed structure info
+        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+        analyzer = SpacegroupAnalyzer(final_structure)
+        
+        relaxed_structure_info = {
+            "formula": str(final_structure.formula),
+            "num_atoms": len(final_structure),
+            "density": float(final_structure.density),
+            "lattice_parameters": {
+                "a": float(final_structure.lattice.a),
+                "b": float(final_structure.lattice.b),
+                "c": float(final_structure.lattice.c),
+                "alpha": float(final_structure.lattice.alpha),
+                "beta": float(final_structure.lattice.beta),
+                "gamma": float(final_structure.lattice.gamma)
+            },
+            "volume": float(final_structure.lattice.volume),
+            "space_group": analyzer.get_space_group_symbol(),
+            "space_group_number": analyzer.get_space_group_number(),
+            "point_group": analyzer.get_point_group_symbol(),
+            "crystal_system": analyzer.get_crystal_system(),
+            "num_sites": len(final_structure.sites)
+        }
+        
+        return {
+            "status": "success",
+            "initial_prediction": initial_results,
+            "final_prediction": final_results,
+            "relaxation_info": relaxation_info,
+            "relaxed_structure_info": relaxed_structure_info,
+            "model_info": {
+                "version": chgnet.version if hasattr(chgnet, 'version') else "0.3.0",
+                "device": "cpu"
+            }
+        }
+        
+    except ValueError as e:
+        logger.error(f"CHGNet relaxation validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"CHGNet relaxation error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"CHGNet relaxation failed: {str(e)}")
+
+@app.post("/api/generate-relaxed-structure-cif")
+async def generate_relaxed_structure_cif(request: dict):
+    """
+    Generate CIF from relaxed structure with applied atomic operations
+    """
+    try:
+        filename = request.get("filename")
+        operations = request.get("operations", [])
+        supercell_size = request.get("supercell_size", [1, 1, 1])
+        fmax = float(request.get("fmax", 0.1))
+        max_steps = int(request.get("max_steps", 100))
+        
+        if not filename:
+            raise HTTPException(status_code=400, detail="Filename is required")
+        
+        logger.info(f"Generating relaxed structure CIF for {filename}")
+        
+        # Get the modified structure (same process as relax)
+        from pymatgen.io.cif import CifParser, CifWriter
+        cif_path = SAMPLE_CIF_DIR / safe_filename(filename)
+        
+        if not cif_path.exists():
+            raise HTTPException(status_code=404, detail=f"CIF file not found: {filename}")
+        
+        parser = CifParser(str(cif_path))
+        structure = parser.get_structures(primitive=False)[0]
+        structure.make_supercell(supercell_size)
+        
+        # Apply operations
+        for operation in operations:
+            if operation["action"] == "substitute":
+                site_index = operation["index"]
+                new_element = validate_element(operation["to"])
+                if site_index < len(structure.sites):
+                    old_coords = structure[site_index].frac_coords
+                    structure[site_index] = Element(new_element), old_coords
+            elif operation["action"] == "delete":
+                site_index = operation["index"]
+                if site_index < len(structure.sites):
+                    structure.remove_sites([site_index])
+        
+        # Load CHGNet and relax
+        if not CHGNET_AVAILABLE:
+            raise HTTPException(status_code=503, detail="CHGNet not available")
+        
+        from chgnet.model.model import CHGNet
+        from chgnet.model import StructOptimizer
+        
+        chgnet = CHGNet.load(model_name="0.3.0", use_device="cpu", verbose=False)
+        relaxer = StructOptimizer(model=chgnet, use_device="cpu", optimizer_class="FIRE")
+        
+        # Relax structure
+        result = relaxer.relax(structure, fmax=fmax, steps=max_steps, verbose=False, relax_cell=True)
+        final_structure = result.get("final_structure")
+        
+        if final_structure is None:
+            raise RuntimeError("Relaxation failed: no final structure returned")
+        
+        # Generate CIF using pymatgen CifWriter
+        cif_writer = CifWriter(
+            final_structure,
+            write_magmoms=False,
+            significant_figures=6
+        )
+        
+        cif_content = str(cif_writer)
+        
+        # Add metadata header
+        operations_summary = f"{len(operations)} operations applied"
+        size_str = "x".join(map(str, supercell_size))
+        metadata_lines = [
+            f"# Relaxed structure CIF generated by CrystalNexus",
+            f"# Original file: {filename}",
+            f"# Supercell size: {size_str}",
+            f"# Operations: {operations_summary}",
+            f"# CHGNet relaxation: fmax={fmax}, steps={result.get('converged', 'N/A')}",
+            f"# Final formula: {final_structure.formula}",
+            f"# Number of atoms: {len(final_structure.sites)}",
+            f"# Volume: {final_structure.volume:.2f} Ų",
+            ""
+        ]
+        
+        final_cif = "\n".join(metadata_lines) + cif_content
+        
+        logger.info(f"Relaxed CIF generated successfully, length: {len(final_cif)} characters")
+        
+        return Response(
+            content=final_cif,
+            media_type="chemical/x-cif",
+            headers={
+                "Content-Disposition": f"inline; filename={filename.replace('.cif', '')}_relaxed.cif",
+                "Cache-Control": "no-cache"
+            }
+        )
+        
+    except Exception as e:
+        error_msg = f"Failed to generate relaxed structure CIF: {str(e)}"
+        logger.error(error_msg)
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=error_msg)
+
 def check_backend_status():
     try:
         import requests

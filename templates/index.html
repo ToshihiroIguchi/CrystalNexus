@@ -472,6 +472,121 @@
             color: #bdc3c7;
             cursor: not-allowed;
         }
+
+        /* CHGNet specific styles */
+        .chgnet-controls {
+            margin-bottom: 20px;
+        }
+
+        .button-subtitle {
+            font-size: 12px;
+            color: #7f8c8d;
+            text-align: center;
+            margin-top: 5px;
+            font-style: italic;
+        }
+
+        .setting-group {
+            margin-bottom: 10px;
+        }
+
+        .setting-group label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 5px;
+        }
+
+        .setting-group input[type="number"] {
+            width: 100%;
+            padding: 6px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .chgnet-status {
+            background-color: #f8f9fa;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 15px;
+        }
+
+        .status-text {
+            font-size: 13px;
+            color: #2c3e50;
+            font-weight: 500;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background-color: #e0e0e0;
+            border-radius: 2px;
+            margin-top: 8px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background-color: #3498db;
+            border-radius: 2px;
+            width: 0%;
+            transition: width 0.3s ease;
+            animation: progress-animate 2s infinite;
+        }
+
+        @keyframes progress-animate {
+            0% { width: 0%; }
+            50% { width: 70%; }
+            100% { width: 100%; }
+        }
+
+        .chgnet-results {
+            border-top: 1px solid #e0e0e0;
+            padding-top: 15px;
+        }
+
+        .result-section {
+            margin-bottom: 15px;
+            background-color: #fafafa;
+            border-radius: 6px;
+            padding: 12px;
+        }
+
+        .result-section h4 {
+            margin: 0 0 8px 0;
+            font-size: 14px;
+            color: #2c3e50;
+            font-weight: 600;
+        }
+
+        .result-value {
+            font-size: 13px;
+            color: #34495e;
+            font-family: 'Courier New', monospace;
+            word-break: break-all;
+        }
+
+        .energy-positive {
+            color: #e74c3c;
+        }
+
+        .energy-negative {
+            color: #27ae60;
+        }
+
+        .convergence-success {
+            color: #27ae60;
+            font-weight: bold;
+        }
+
+        .convergence-failed {
+            color: #e74c3c;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -501,10 +616,51 @@
         <div class="right-panel">
             <div class="panel-section">
                 <div class="panel-title">CHGNet Calculation</div>
-                <div class="mock-text">
-                    <button class="button" disabled>Calculate Properties</button>
-                    <br><br>
-                    Free energy, forces, and other properties will be displayed here
+                <div id="chgnet-content">
+                    <div class="chgnet-controls">
+                        <button class="button" id="analyze-btn" disabled>🔬 Analyze Structure</button>
+                        <div class="button-subtitle">(Relax + Properties)</div>
+                        
+                        <div class="relax-settings" style="margin-top: 15px;" id="relax-settings">
+                            <div class="setting-group">
+                                <label for="fmax-input">Force tolerance (eV/Å):</label>
+                                <input type="number" id="fmax-input" value="0.1" min="0.01" max="1.0" step="0.01">
+                            </div>
+                            <div class="setting-group">
+                                <label for="max-steps-input">Max steps:</label>
+                                <input type="number" id="max-steps-input" value="100" min="10" max="500" step="10">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="chgnet-status" id="chgnet-status" style="display: none;">
+                        <div class="status-text" id="status-text">Ready</div>
+                        <div class="progress-bar" id="progress-bar" style="display: none;">
+                            <div class="progress-fill"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="chgnet-results" id="chgnet-results" style="display: none;">
+                        <div class="result-section" id="energy-section">
+                            <h4>Energy</h4>
+                            <div class="result-value" id="energy-value">-</div>
+                        </div>
+                        
+                        <div class="result-section" id="forces-section">
+                            <h4>Forces</h4>
+                            <div class="result-value" id="forces-summary">-</div>
+                        </div>
+                        
+                        <div class="result-section" id="stress-section">
+                            <h4>Stress</h4>
+                            <div class="result-value" id="stress-summary">-</div>
+                        </div>
+                        
+                        <div class="result-section" id="relaxation-section" style="display: none;">
+                            <h4>Relaxation Info</h4>
+                            <div class="result-value" id="relaxation-info">-</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -588,6 +744,7 @@
             loadSampleFiles();
             loadCHGnetElements();
             setupEventListeners();
+            setupCHGNetEventListeners();
         });
 
         function setupEventListeners() {
@@ -750,6 +907,278 @@
             setupCrystalInfoToggle();
         }
 
+        function setupCHGNetEventListeners() {
+            const analyzeBtn = document.getElementById('analyze-btn');
+            
+            if (analyzeBtn) {
+                analyzeBtn.addEventListener('click', async () => {
+                    if (supercellData && window.currentFilename) {
+                        await runCHGNetAnalysis();
+                    }
+                });
+            }
+        }
+
+        function enableCHGNetButtons() {
+            const analyzeBtn = document.getElementById('analyze-btn');
+            
+            if (analyzeBtn) {
+                analyzeBtn.disabled = false;
+                analyzeBtn.textContent = '🔬 Analyze Structure';
+            }
+        }
+
+        function showCHGNetStatus(message, showProgress = false) {
+            const statusDiv = document.getElementById('chgnet-status');
+            const statusText = document.getElementById('status-text');
+            const progressBar = document.getElementById('progress-bar');
+            
+            statusDiv.style.display = 'block';
+            statusText.textContent = message;
+            
+            if (showProgress) {
+                progressBar.style.display = 'block';
+            } else {
+                progressBar.style.display = 'none';
+            }
+        }
+
+        function hideCHGNetStatus() {
+            const statusDiv = document.getElementById('chgnet-status');
+            statusDiv.style.display = 'none';
+        }
+
+        function displayCHGNetResults(data, isRelaxation = false) {
+            const resultsDiv = document.getElementById('chgnet-results');
+            const energyValue = document.getElementById('energy-value');
+            const forcesSummary = document.getElementById('forces-summary');
+            const stressSummary = document.getElementById('stress-summary');
+            const relaxationSection = document.getElementById('relaxation-section');
+            const relaxationInfo = document.getElementById('relaxation-info');
+            
+            resultsDiv.style.display = 'block';
+            
+            // Display energy
+            const prediction = isRelaxation ? data.final_prediction : data.prediction;
+            if (prediction && prediction.energy_eV_per_atom !== undefined) {
+                const energy = prediction.energy_eV_per_atom;
+                energyValue.innerHTML = `${energy.toFixed(6)} eV/atom`;
+                energyValue.className = `result-value ${energy < 0 ? 'energy-negative' : 'energy-positive'}`;
+            } else {
+                energyValue.textContent = 'Not available';
+            }
+            
+            // Display forces summary
+            if (prediction && prediction.forces_eV_per_A) {
+                const forces = prediction.forces_eV_per_A;
+                const maxForce = Math.max(...forces.flat().map(Math.abs));
+                forcesSummary.textContent = `Max: ${maxForce.toFixed(4)} eV/Å (${forces.length} atoms)`;
+            } else {
+                forcesSummary.textContent = 'Not available';
+            }
+            
+            // Display stress summary
+            if (prediction && prediction.stress_GPa) {
+                const stress = prediction.stress_GPa;
+                const maxStress = Math.max(...stress.flat().map(Math.abs));
+                stressSummary.textContent = `Max: ${maxStress.toFixed(4)} GPa`;
+            } else {
+                stressSummary.textContent = 'Not available';
+            }
+            
+            // Display relaxation info
+            if (isRelaxation && data.relaxation_info) {
+                relaxationSection.style.display = 'block';
+                const info = data.relaxation_info;
+                const converged = info.converged;
+                const steps = info.steps;
+                const energyChange = info.energy_change_eV_per_atom;
+                
+                let infoText = `${steps} steps, `;
+                infoText += `<span class="${converged ? 'convergence-success' : 'convergence-failed'}">`;
+                infoText += converged ? 'Converged' : 'Not converged';
+                infoText += '</span>';
+                
+                if (energyChange !== null) {
+                    const sign = energyChange < 0 ? '' : '+';
+                    infoText += `<br>ΔE: ${sign}${energyChange.toFixed(6)} eV/atom`;
+                }
+                
+                relaxationInfo.innerHTML = infoText;
+            } else {
+                relaxationSection.style.display = 'none';
+            }
+        }
+
+
+        async function runCHGNetAnalysis() {
+            try {
+                const fmax = parseFloat(document.getElementById('fmax-input').value);
+                const maxSteps = parseInt(document.getElementById('max-steps-input').value);
+                
+                showCHGNetStatus('🔧 Step 1/2: Structure relaxation...', true);
+                
+                const requestData = {
+                    filename: window.currentFilename,
+                    operations: window.atomicOperations || [],
+                    supercell_size: window.currentSupercellSize || [1, 1, 1],
+                    fmax: fmax,
+                    max_steps: maxSteps
+                };
+                
+                console.log('🔬 Starting CHGNet analysis (relax + properties):', requestData);
+                
+                const response = await fetch('/api/chgnet-relax', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestData)
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || `HTTP ${response.status}`);
+                }
+                
+                const data = await response.json();
+                console.log('✅ CHGNet analysis completed:', data);
+                
+                showCHGNetStatus('✅ Step 2/2: Analysis completed!', false);
+                
+                // Hide status after a brief moment
+                setTimeout(() => {
+                    hideCHGNetStatus();
+                }, 1500);
+                
+                displayCHGNetResults(data, true);
+                
+                // Update structure information with relaxed data
+                if (data.relaxed_structure_info) {
+                    updateStructureInformation(data.relaxed_structure_info);
+                }
+                
+                // Update 3D visualization with relaxed structure
+                await updateRelaxed3DVisualization();
+                
+                showNotification('CHGNet structure analysis completed successfully!', 'success');
+                
+            } catch (error) {
+                console.error('❌ CHGNet analysis failed:', error);
+                hideCHGNetStatus();
+                showNotification(`CHGNet analysis failed: ${error.message}`, 'error');
+            }
+        }
+
+        function updateStructureInformation(relaxedStructureInfo) {
+            const infoElement = document.getElementById('main-crystal-info');
+            if (!infoElement) return;
+            
+            infoElement.classList.remove('mock-text');
+            
+            // Calculate relaxed supercell lattice parameters
+            const supercellSize = window.currentSupercellSize || [1, 1, 1];
+            const aSize = supercellSize[0];
+            const bSize = supercellSize[1];
+            const cSize = supercellSize[2];
+            
+            infoElement.innerHTML = `
+                <div style="margin-bottom: 15px;">
+                    <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Relaxed Supercell Structure Information:</div>
+                    <div><strong>Formula:</strong> ${relaxedStructureInfo.formula}</div>
+                    <div><strong>Supercell size:</strong> ${aSize} × ${bSize} × ${cSize}</div>
+                    <div><strong>Total atoms:</strong> ${relaxedStructureInfo.num_sites}</div>
+                    <div><strong>Density:</strong> ${relaxedStructureInfo.density.toFixed(4)} g/cm³</div>
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Relaxed Lattice Parameters:</div>
+                    <div style="margin-left: 10px;">
+                        a = ${relaxedStructureInfo.lattice_parameters.a.toFixed(5)} Å<br>
+                        b = ${relaxedStructureInfo.lattice_parameters.b.toFixed(5)} Å<br>
+                        c = ${relaxedStructureInfo.lattice_parameters.c.toFixed(5)} Å<br>
+                        α = ${relaxedStructureInfo.lattice_parameters.alpha.toFixed(5)}°<br>
+                        β = ${relaxedStructureInfo.lattice_parameters.beta.toFixed(5)}°<br>
+                        γ = ${relaxedStructureInfo.lattice_parameters.gamma.toFixed(5)}°<br>
+                        Volume = ${relaxedStructureInfo.volume.toFixed(5)} Ų
+                    </div>
+                </div>
+                
+                
+                <div style="font-size: 12px; color: #e74c3c; font-style: italic;">
+                    ⚡ Structure relaxed with CHGNet
+                </div>
+            `;
+            
+            console.log('✅ Structure information updated with relaxed data');
+        }
+
+        async function updateRelaxed3DVisualization() {
+            if (!window.viewer3D || !window.currentFilename || !window.currentSupercellSize) {
+                console.log('3D viewer or structure parameters not available for relaxed structure update');
+                return;
+            }
+            
+            try {
+                console.log('🔄 Updating 3D visualization with relaxed structure');
+                updateStatus('Loading relaxed structure...', 'info');
+                
+                const requestData = {
+                    filename: window.currentFilename,
+                    supercell_size: window.currentSupercellSize,
+                    operations: window.atomicOperations || [],
+                    fmax: parseFloat(document.getElementById('fmax-input').value),
+                    max_steps: parseInt(document.getElementById('max-steps-input').value)
+                };
+                
+                console.log('📡 Requesting relaxed structure CIF from API...');
+                const response = await fetch('/api/generate-relaxed-structure-cif', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestData)
+                });
+                
+                console.log(`📡 Response status: ${response.status} ${response.statusText}`);
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP ${response.status}: ${errorText}`);
+                }
+                
+                const cifData = await response.text();
+                console.log(`📄 Generated relaxed CIF data: ${cifData.length} characters`);
+                
+                // Update 3D viewer with relaxed structure
+                console.log('🗑️ Clearing existing models');
+                window.viewer3D.clear();
+                
+                console.log('➕ Adding relaxed structure CIF model');
+                window.viewer3D.addModel(cifData, 'cif');
+                
+                console.log('🎨 Setting ball-and-stick style');
+                window.viewer3D.setStyle({}, { 
+                    sphere: { scale: 0.3 }, 
+                    stick: { radius: 0.1 } 
+                });
+                
+                console.log('📦 Adding unit cell');
+                window.viewer3D.addUnitCell();
+                
+                console.log('🔍 Zooming and rendering');
+                window.viewer3D.zoomTo();
+                window.viewer3D.render();
+                
+                updateStatus('Relaxed structure loaded', 'success');
+                console.log(`✅ 3D structure updated with relaxed geometry`);
+                
+            } catch (error) {
+                console.error('❌ Error updating relaxed 3D visualization:', error);
+                updateStatus('Failed to load relaxed structure', 'error');
+                
+                showNotification('Failed to update 3D visualization with relaxed structure', 'warning');
+            }
+        }
+
         function resetAnalysis() {
             currentCrystalData = null;
             const crystalInfoElement = document.getElementById('crystalInfo');
@@ -818,6 +1247,9 @@
                 
                 // Initialize 3D viewer (mock for now)
                 initializeViewer();
+                
+                // Enable CHGNet buttons when supercell is created
+                enableCHGNetButtons();
                 
             } catch (error) {
                 console.error('Error creating supercell:', error);
