@@ -321,6 +321,26 @@
             box-shadow: none;
         }
 
+        .button-processing {
+            background: linear-gradient(-45deg, #3498db, #2ecc71, #f39c12, #e74c3c);
+            background-size: 400% 400%;
+            animation: gradientShift 2s ease-in-out infinite;
+            color: white;
+            cursor: wait;
+        }
+
+        @keyframes gradientShift {
+            0% {
+                background-position: 0% 50%;
+            }
+            50% {
+                background-position: 100% 50%;
+            }
+            100% {
+                background-position: 0% 50%;
+            }
+        }
+
         .mock-text {
             color: #7f8c8d;
             font-style: italic;
@@ -955,6 +975,44 @@
             if (analyzeBtn) {
                 analyzeBtn.disabled = false;
                 analyzeBtn.textContent = '🔬 Analyze Structure';
+                analyzeBtn.classList.remove('button-processing');
+            }
+        }
+
+        function setCHGNetButtonState(state, text) {
+            const analyzeBtn = document.getElementById('analyze-btn');
+            if (!analyzeBtn) return;
+
+            switch(state) {
+                case 'processing':
+                    analyzeBtn.disabled = true;
+                    analyzeBtn.classList.add('button-processing');
+                    analyzeBtn.textContent = text || '⏳ Processing...';
+                    break;
+                case 'relaxing':
+                    analyzeBtn.disabled = true;
+                    analyzeBtn.classList.add('button-processing');
+                    analyzeBtn.textContent = '🔄 Structure Relaxation...';
+                    break;
+                case 'calculating_structure':
+                    analyzeBtn.disabled = true;
+                    analyzeBtn.classList.add('button-processing');
+                    analyzeBtn.textContent = '⚛️ Crystal Structure Calculation...';
+                    break;
+                case 'calculating_properties':
+                    analyzeBtn.disabled = true;
+                    analyzeBtn.classList.add('button-processing');
+                    analyzeBtn.textContent = '📊 Properties Calculation...';
+                    break;
+                case 'complete':
+                    analyzeBtn.disabled = false;
+                    analyzeBtn.classList.remove('button-processing');
+                    analyzeBtn.textContent = '🔬 Analyze Structure';
+                    break;
+                default:
+                    analyzeBtn.disabled = false;
+                    analyzeBtn.classList.remove('button-processing');
+                    analyzeBtn.textContent = '🔬 Analyze Structure';
             }
         }
 
@@ -1044,6 +1102,9 @@
 
         async function runCHGNetAnalysis() {
             try {
+                // Start processing state
+                setCHGNetButtonState('relaxing');
+                
                 const fmax = parseFloat(document.getElementById('fmax-input').value);
                 const maxSteps = parseInt(document.getElementById('max-steps-input').value);
                 
@@ -1068,8 +1129,14 @@
                     throw new Error(errorData.detail || `HTTP ${response.status}`);
                 }
                 
+                // Structure calculation phase
+                setCHGNetButtonState('calculating_structure');
+                
                 const data = await response.json();
                 console.log('✅ CHGNet analysis completed:', data);
+                
+                // Properties calculation phase
+                setCHGNetButtonState('calculating_properties');
                 
                 displayCHGNetResults(data, true);
                 
@@ -1083,9 +1150,15 @@
                 
                 showNotification('CHGNet structure analysis completed successfully!', 'success');
                 
+                // Restore button to complete state
+                setCHGNetButtonState('complete');
+                
             } catch (error) {
                 console.error('❌ CHGNet analysis failed:', error);
                 showNotification(`CHGNet analysis failed: ${error.message}`, 'error');
+                
+                // Restore button on error
+                setCHGNetButtonState('complete');
             }
         }
 
