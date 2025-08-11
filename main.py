@@ -921,9 +921,31 @@ def safe_get_prediction(pred):
             arr = pred[k]
             out["magmoms_muB"] = [float(x) for x in arr.tolist()]
             break
+    # Site energies
+    for k in ("site_energies", "site_energy"):
+        if k in pred:
+            arr = pred[k]
+            out["site_energies_eV"] = [float(x) for x in arr.tolist()]
+            break
+    
+    # Crystal features
+    for k in ("crystal_fea", "crystal_features"):
+        if k in pred:
+            arr = pred[k]
+            out["crystal_features"] = [float(x) for x in arr.tolist()]
+            break
+    
+    # Atom features
+    for k in ("atom_fea", "atom_features"):
+        if k in pred:
+            arr = pred[k]
+            out["atom_features"] = [[float(x) for x in atom] for atom in arr.tolist()]
+            break
+    
     # Other fields
     for k, v in pred.items():
-        if k in ("energy", "e", "forces", "f", "stress", "s", "magmom", "m"):
+        if k in ("energy", "e", "forces", "f", "stress", "s", "magmom", "m", 
+                 "site_energies", "crystal_fea", "atom_fea"):
             continue
         try:
             out[k] = v.tolist() if hasattr(v, "tolist") else v
@@ -1061,6 +1083,13 @@ async def chgnet_relax_structure(request: dict):
         
         # Predict initial structure
         try:
+            pred_initial = chgnet.predict_structure(structure,
+                                                   return_site_energies=True,
+                                                   return_atom_feas=True,
+                                                   return_crystal_feas=True)
+            initial_results = safe_get_prediction(pred_initial)
+        except TypeError:
+            # Fallback if detailed prediction fails
             pred_initial = chgnet.predict_structure(structure)
             initial_results = safe_get_prediction(pred_initial)
         except Exception as e:
@@ -1076,6 +1105,13 @@ async def chgnet_relax_structure(request: dict):
         
         # Predict relaxed structure
         try:
+            pred_final = chgnet.predict_structure(final_structure,
+                                                 return_site_energies=True,
+                                                 return_atom_feas=True,
+                                                 return_crystal_feas=True)
+            final_results = safe_get_prediction(pred_final)
+        except TypeError:
+            # Fallback if detailed prediction fails
             pred_final = chgnet.predict_structure(final_structure)
             final_results = safe_get_prediction(pred_final)
         except Exception as e:

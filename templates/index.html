@@ -352,6 +352,120 @@
             display: none;
         }
 
+        .result-item {
+            background-color: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            padding: 12px;
+            transition: all 0.2s ease;
+        }
+
+        .result-item:hover {
+            background-color: #f1f3f4;
+            border-color: #dee2e6;
+        }
+
+        .result-summary {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-weight: 500;
+            color: #2c3e50;
+        }
+
+        .detail-btn {
+            background: none;
+            border: none;
+            color: #3498db;
+            font-size: 12px;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+        }
+
+        .detail-btn:hover {
+            background-color: #3498db;
+            color: white;
+        }
+
+        .detail-drawer {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid #e9ecef;
+            background-color: #ffffff;
+            border-radius: 4px;
+            padding: 10px;
+        }
+
+        .detail-table {
+            width: 100%;
+            font-size: 12px;
+            border-collapse: collapse;
+        }
+
+        .detail-table td {
+            padding: 4px 8px;
+            border-bottom: 1px solid #f8f9fa;
+        }
+
+        .detail-table td:first-child {
+            font-weight: 500;
+            color: #5a6c7d;
+            width: 40%;
+        }
+
+        .detail-table td:last-child {
+            font-family: 'Courier New', monospace;
+            color: #2c3e50;
+        }
+
+        .magnetic-moment {
+            color: #e74c3c;
+            font-weight: 500;
+        }
+
+        .site-energy {
+            color: #2ecc71;
+            font-weight: 500;
+        }
+
+        .force-vector {
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            color: #8e44ad;
+        }
+
+        .expandable-data {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 8px;
+            background-color: #f8f9fa;
+        }
+
+        .energy-negative {
+            color: #27ae60;
+            font-weight: 500;
+        }
+
+        .energy-positive {
+            color: #e74c3c;
+            font-weight: 500;
+        }
+
+        .convergence-success {
+            color: #27ae60;
+            font-weight: 500;
+        }
+
+        .convergence-failed {
+            color: #e74c3c;
+            font-weight: 500;
+        }
+
         .element-selector {
             margin-bottom: 15px;
         }
@@ -662,25 +776,85 @@
                     </div>
                     
                     <div class="chgnet-results" id="chgnet-results" style="display: none;">
-                        <div class="result-section" id="energy-section">
-                            <h4>Energy</h4>
-                            <div class="result-value" id="energy-value">-</div>
+                        
+                        <!-- Energy Result Item -->
+                        <div class="result-item" id="energy-item">
+                            <div class="result-summary">
+                                <span id="energy-summary">⚡ Energy: - eV/atom</span>
+                                <button class="detail-btn" onclick="toggleDetail('energy')">詳細 ▼</button>
+                            </div>
+                            <div class="detail-drawer" id="energy-detail" style="display: none;">
+                                <table class="detail-table" id="energy-table">
+                                    <!-- Energy details will be populated here -->
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Magnetic Properties Result Item -->
+                        <div class="result-item" id="magnetic-item" style="display: none;">
+                            <div class="result-summary">
+                                <span id="magnetic-summary">🧲 Magnetic: - µB total</span>
+                                <button class="detail-btn" onclick="toggleDetail('magnetic')">詳細 ▼</button>
+                            </div>
+                            <div class="detail-drawer" id="magnetic-detail" style="display: none;">
+                                <table class="detail-table" id="magnetic-table">
+                                    <!-- Magnetic details will be populated here -->
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Site Energies Result Item -->
+                        <div class="result-item" id="site-energies-item" style="display: none;">
+                            <div class="result-summary">
+                                <span id="site-energies-summary">⚛️ Site Energies: - eV</span>
+                                <button class="detail-btn" onclick="toggleDetail('site-energies')">詳細 ▼</button>
+                            </div>
+                            <div class="detail-drawer" id="site-energies-detail" style="display: none;">
+                                <div class="expandable-data" id="site-energies-table">
+                                    <!-- Site energies details will be populated here -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Forces Result Item -->
+                        <div class="result-item" id="forces-item">
+                            <div class="result-summary">
+                                <span id="forces-summary">💪 Forces: Max - eV/Å</span>
+                                <button class="detail-btn" onclick="toggleDetail('forces')">詳細 ▼</button>
+                            </div>
+                            <div class="detail-drawer" id="forces-detail" style="display: none;">
+                                <div class="expandable-data" id="forces-table">
+                                    <!-- Forces details will be populated here -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Stress Result Item -->
+                        <div class="result-item" id="stress-item">
+                            <div class="result-summary">
+                                <span id="stress-summary">🔧 Stress: Max - GPa</span>
+                                <button class="detail-btn" onclick="toggleDetail('stress')">詳細 ▼</button>
+                            </div>
+                            <div class="detail-drawer" id="stress-detail" style="display: none;">
+                                <table class="detail-table" id="stress-table">
+                                    <!-- Stress details will be populated here -->
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Relaxation Info Result Item -->
+                        <div class="result-item" id="relaxation-item" style="display: none;">
+                            <div class="result-summary">
+                                <span id="relaxation-summary">📈 Relaxation: - steps</span>
+                                <button class="detail-btn" onclick="toggleDetail('relaxation')">詳細 ▼</button>
+                            </div>
+                            <div class="detail-drawer" id="relaxation-detail" style="display: none;">
+                                <table class="detail-table" id="relaxation-table">
+                                    <!-- Relaxation details will be populated here -->
+                                </table>
+                            </div>
                         </div>
                         
-                        <div class="result-section" id="forces-section">
-                            <h4>Forces</h4>
-                            <div class="result-value" id="forces-summary">-</div>
-                        </div>
-                        
-                        <div class="result-section" id="stress-section">
-                            <h4>Stress</h4>
-                            <div class="result-value" id="stress-summary">-</div>
-                        </div>
-                        
-                        <div class="result-section" id="relaxation-section" style="display: none;">
-                            <h4>Relaxation Info</h4>
-                            <div class="result-value" id="relaxation-info">-</div>
-                        </div>
                     </div>
                 </div>
             </div>
@@ -1036,66 +1210,218 @@
             statusDiv.style.display = 'none';
         }
 
+        function toggleDetail(section) {
+            const detailDiv = document.getElementById(section + '-detail');
+            const button = event.target;
+            
+            if (detailDiv.style.display === 'none') {
+                detailDiv.style.display = 'block';
+                button.innerHTML = '詳細 ▲';
+            } else {
+                detailDiv.style.display = 'none';
+                button.innerHTML = '詳細 ▼';
+            }
+        }
+
         function displayCHGNetResults(data, isRelaxation = false) {
             const resultsDiv = document.getElementById('chgnet-results');
-            const energyValue = document.getElementById('energy-value');
-            const forcesSummary = document.getElementById('forces-summary');
-            const stressSummary = document.getElementById('stress-summary');
-            const relaxationSection = document.getElementById('relaxation-section');
-            const relaxationInfo = document.getElementById('relaxation-info');
-            
             resultsDiv.style.display = 'block';
             
-            // Display energy
-            const prediction = isRelaxation ? data.final_prediction : data.prediction;
-            if (prediction && prediction.energy_eV_per_atom !== undefined) {
-                const energy = prediction.energy_eV_per_atom;
-                energyValue.innerHTML = `${energy.toFixed(6)} eV/atom`;
-                energyValue.className = `result-value ${energy < 0 ? 'energy-negative' : 'energy-positive'}`;
-            } else {
-                energyValue.textContent = 'Not available';
+            const initialPred = data.initial_prediction;
+            const finalPred = isRelaxation ? data.final_prediction : data.prediction;
+            const prediction = finalPred || initialPred;
+            
+            if (!prediction) {
+                console.warn('No prediction data available');
+                return;
             }
             
-            // Display forces summary
-            if (prediction && prediction.forces_eV_per_A) {
+            // Display Energy Information
+            displayEnergyResults(initialPred, finalPred, isRelaxation);
+            
+            // Display Magnetic Properties
+            displayMagneticResults(prediction);
+            
+            // Display Site Energies
+            displaySiteEnergiesResults(prediction);
+            
+            // Display Forces
+            displayForcesResults(prediction);
+            
+            // Display Stress
+            displayStressResults(prediction);
+            
+            // Display Relaxation Info
+            if (isRelaxation && data.relaxation_info) {
+                displayRelaxationResults(data.relaxation_info);
+            }
+        }
+        
+        function displayEnergyResults(initialPred, finalPred, isRelaxation) {
+            const energySummary = document.getElementById('energy-summary');
+            const energyTable = document.getElementById('energy-table');
+            
+            if (finalPred && finalPred.energy_eV_per_atom !== undefined) {
+                const energyPerAtom = finalPred.energy_eV_per_atom;
+                
+                // Calculate number of atoms and total energy
+                let numAtoms = 1; // default
+                if (finalPred.forces_eV_per_A) {
+                    numAtoms = finalPred.forces_eV_per_A.length;
+                }
+                const totalEnergy = energyPerAtom * numAtoms;
+                
+                // Summary: Show both total energy and per-atom energy
+                energySummary.innerHTML = `⚡ Energy: <span class="${energyPerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${totalEnergy.toFixed(2)} eV</span> (${energyPerAtom.toFixed(3)} eV/atom, ${numAtoms} atoms)`;
+                
+                let tableHTML = `
+                    <tr><td>Number of atoms:</td><td>${numAtoms}</td></tr>
+                    <tr><td>Total Energy:</td><td><span class="${energyPerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${totalEnergy.toFixed(6)} eV</span></td></tr>
+                    <tr><td>Energy per atom:</td><td><span class="${energyPerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${energyPerAtom.toFixed(6)} eV/atom</span></td></tr>
+                `;
+                
+                if (isRelaxation && initialPred && initialPred.energy_eV_per_atom !== undefined) {
+                    const initialEnergyPerAtom = initialPred.energy_eV_per_atom;
+                    const initialTotalEnergy = initialEnergyPerAtom * numAtoms;
+                    const totalEnergyChange = totalEnergy - initialTotalEnergy;
+                    const energyChangePerAtom = energyPerAtom - initialEnergyPerAtom;
+                    
+                    tableHTML = `
+                        <tr><td>Number of atoms:</td><td>${numAtoms}</td></tr>
+                        <tr><td colspan="2"><strong>Initial Structure:</strong></td></tr>
+                        <tr><td>Initial Total Energy:</td><td>${initialTotalEnergy.toFixed(6)} eV</td></tr>
+                        <tr><td>Initial Energy/atom:</td><td>${initialEnergyPerAtom.toFixed(6)} eV/atom</td></tr>
+                        <tr><td colspan="2"><strong>Final Structure:</strong></td></tr>
+                        <tr><td>Final Total Energy:</td><td><span class="${energyPerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${totalEnergy.toFixed(6)} eV</span></td></tr>
+                        <tr><td>Final Energy/atom:</td><td><span class="${energyPerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${energyPerAtom.toFixed(6)} eV/atom</span></td></tr>
+                        <tr><td colspan="2"><strong>Energy Changes:</strong></td></tr>
+                        <tr><td>Total Energy Change:</td><td><span class="${totalEnergyChange < 0 ? 'energy-negative' : 'energy-positive'}">${totalEnergyChange >= 0 ? '+' : ''}${totalEnergyChange.toFixed(6)} eV</span></td></tr>
+                        <tr><td>Energy Change/atom:</td><td><span class="${energyChangePerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${energyChangePerAtom >= 0 ? '+' : ''}${energyChangePerAtom.toFixed(6)} eV/atom</span></td></tr>
+                    `;
+                }
+                energyTable.innerHTML = tableHTML;
+            } else {
+                energySummary.textContent = '⚡ Energy: Not available';
+                energyTable.innerHTML = '<tr><td>Energy:</td><td>Not available</td></tr>';
+            }
+        }
+        
+        function displayMagneticResults(prediction) {
+            const magneticItem = document.getElementById('magnetic-item');
+            const magneticSummary = document.getElementById('magnetic-summary');
+            const magneticTable = document.getElementById('magnetic-table');
+            
+            if (prediction.magmoms_muB) {
+                const magmoms = prediction.magmoms_muB;
+                const totalMag = magmoms.reduce((sum, mag) => sum + Math.abs(mag), 0);
+                
+                magneticItem.style.display = 'block';
+                magneticSummary.innerHTML = `🧲 Magnetic: <span class="magnetic-moment">${totalMag.toFixed(3)} µB total</span>`;
+                
+                let tableHTML = `<tr><td>Total |Magnetic Moment|:</td><td class="magnetic-moment">${totalMag.toFixed(3)} µB</td></tr>`;
+                magmoms.forEach((mag, i) => {
+                    tableHTML += `<tr><td>Atom ${i+1}:</td><td class="magnetic-moment">${mag.toFixed(3)} µB</td></tr>`;
+                });
+                magneticTable.innerHTML = tableHTML;
+            } else {
+                magneticItem.style.display = 'none';
+            }
+        }
+        
+        function displaySiteEnergiesResults(prediction) {
+            const siteItem = document.getElementById('site-energies-item');
+            const siteSummary = document.getElementById('site-energies-summary');
+            const siteTable = document.getElementById('site-energies-table');
+            
+            if (prediction.site_energies_eV) {
+                const siteEnergies = prediction.site_energies_eV;
+                const avgEnergy = siteEnergies.reduce((sum, e) => sum + e, 0) / siteEnergies.length;
+                
+                siteItem.style.display = 'block';
+                siteSummary.innerHTML = `⚛️ Site Energies: <span class="site-energy">Avg ${avgEnergy.toFixed(2)} eV</span>`;
+                
+                let tableHTML = '<table class="detail-table">';
+                siteEnergies.forEach((energy, i) => {
+                    tableHTML += `<tr><td>Site ${i+1}:</td><td class="site-energy">${energy.toFixed(3)} eV</td></tr>`;
+                });
+                tableHTML += '</table>';
+                siteTable.innerHTML = tableHTML;
+            } else {
+                siteItem.style.display = 'none';
+            }
+        }
+        
+        function displayForcesResults(prediction) {
+            const forcesSummary = document.getElementById('forces-summary');
+            const forcesTable = document.getElementById('forces-table');
+            
+            if (prediction.forces_eV_per_A) {
                 const forces = prediction.forces_eV_per_A;
                 const maxForce = Math.max(...forces.flat().map(Math.abs));
-                forcesSummary.textContent = `Max: ${maxForce.toFixed(4)} eV/Å (${forces.length} atoms)`;
+                forcesSummary.innerHTML = `💪 Forces: <span class="force-vector">Max ${maxForce.toFixed(4)} eV/Å</span>`;
+                
+                let tableHTML = '<table class="detail-table">';
+                forces.forEach((force, i) => {
+                    const magnitude = Math.sqrt(force[0]**2 + force[1]**2 + force[2]**2);
+                    tableHTML += `<tr><td>Atom ${i+1}:</td><td class="force-vector">[${force[0].toFixed(4)}, ${force[1].toFixed(4)}, ${force[2].toFixed(4)}] (|F|=${magnitude.toFixed(4)} eV/Å)</td></tr>`;
+                });
+                tableHTML += '</table>';
+                forcesTable.innerHTML = tableHTML;
             } else {
-                forcesSummary.textContent = 'Not available';
+                forcesSummary.textContent = '💪 Forces: Not available';
+                forcesTable.innerHTML = 'Forces data not available';
             }
+        }
+        
+        function displayStressResults(prediction) {
+            const stressSummary = document.getElementById('stress-summary');
+            const stressTable = document.getElementById('stress-table');
             
-            // Display stress summary
-            if (prediction && prediction.stress_GPa) {
+            if (prediction.stress_GPa) {
                 const stress = prediction.stress_GPa;
                 const maxStress = Math.max(...stress.flat().map(Math.abs));
-                stressSummary.textContent = `Max: ${maxStress.toFixed(4)} GPa`;
+                stressSummary.innerHTML = `🔧 Stress: <span class="force-vector">Max ${maxStress.toFixed(4)} GPa</span>`;
+                
+                let tableHTML = '';
+                for (let i = 0; i < 3; i++) {
+                    for (let j = 0; j < 3; j++) {
+                        tableHTML += `<tr><td>σ[${i+1},${j+1}]:</td><td class="force-vector">${stress[i][j].toFixed(4)} GPa</td></tr>`;
+                    }
+                }
+                stressTable.innerHTML = tableHTML;
             } else {
-                stressSummary.textContent = 'Not available';
+                stressSummary.textContent = '🔧 Stress: Not available';
+                stressTable.innerHTML = '<tr><td>Stress:</td><td>Not available</td></tr>';
+            }
+        }
+        
+        function displayRelaxationResults(relaxationInfo) {
+            const relaxationItem = document.getElementById('relaxation-item');
+            const relaxationSummary = document.getElementById('relaxation-summary');
+            const relaxationTable = document.getElementById('relaxation-table');
+            
+            relaxationItem.style.display = 'block';
+            
+            const converged = relaxationInfo.converged;
+            const steps = relaxationInfo.steps;
+            const status = converged ? 'Converged' : 'Not converged';
+            
+            relaxationSummary.innerHTML = `📈 Relaxation: ${steps} steps, <span class="${converged ? 'convergence-success' : 'convergence-failed'}">${status}</span>`;
+            
+            let tableHTML = `
+                <tr><td>Steps:</td><td>${steps}</td></tr>
+                <tr><td>Converged:</td><td><span class="${converged ? 'convergence-success' : 'convergence-failed'}">${status}</span></td></tr>
+                <tr><td>Force tolerance:</td><td>${relaxationInfo.fmax} eV/Å</td></tr>
+                <tr><td>Max steps:</td><td>${relaxationInfo.max_steps}</td></tr>
+            `;
+            
+            if (relaxationInfo.energy_change_eV_per_atom !== null) {
+                const energyChange = relaxationInfo.energy_change_eV_per_atom;
+                const sign = energyChange < 0 ? '' : '+';
+                tableHTML += `<tr><td>Energy Change:</td><td><span class="${energyChange < 0 ? 'energy-negative' : 'energy-positive'}">${sign}${energyChange.toFixed(6)} eV/atom</span></td></tr>`;
             }
             
-            // Display relaxation info
-            if (isRelaxation && data.relaxation_info) {
-                relaxationSection.style.display = 'block';
-                const info = data.relaxation_info;
-                const converged = info.converged;
-                const steps = info.steps;
-                const energyChange = info.energy_change_eV_per_atom;
-                
-                let infoText = `${steps} steps, `;
-                infoText += `<span class="${converged ? 'convergence-success' : 'convergence-failed'}">`;
-                infoText += converged ? 'Converged' : 'Not converged';
-                infoText += '</span>';
-                
-                if (energyChange !== null) {
-                    const sign = energyChange < 0 ? '' : '+';
-                    infoText += `<br>ΔE: ${sign}${energyChange.toFixed(6)} eV/atom`;
-                }
-                
-                relaxationInfo.innerHTML = infoText;
-            } else {
-                relaxationSection.style.display = 'none';
-            }
+            relaxationTable.innerHTML = tableHTML;
         }
 
 
