@@ -4,6 +4,8 @@ import asyncio
 import subprocess
 import tempfile
 import logging
+import hashlib
+import time
 from pathlib import Path
 from typing import List, Dict, Optional, Set
 
@@ -196,6 +198,60 @@ def refresh_supported_elements():
     ALLOWED_ELEMENTS = get_chgnet_supported_elements()
     logger.info(f"Refreshed element list: {len(ALLOWED_ELEMENTS)} elements available")
 
+class SessionManager:
+    """セッション管理クラス - 構造データとメタデータを管理"""
+    
+    def __init__(self):
+        self.sessions: Dict[str, Dict] = {}
+        
+    def create_session(self, session_id: str, filename: str, original_structure: Structure) -> None:
+        """新しいセッションを作成"""
+        self.sessions[session_id] = {
+            'filename': filename,
+            'original_structure': original_structure,
+            'current_structure': original_structure.copy(),
+            'operations': [],
+            'supercell_size': [1, 1, 1],
+            'created_at': time.time()
+        }
+        logger.info(f"Created session {session_id[:8]}... for {filename}")
+    
+    def get_current_structure(self, session_id: str) -> Optional[Structure]:
+        """現在の構造を取得"""
+        if session_id in self.sessions:
+            return self.sessions[session_id]['current_structure']
+        return None
+    
+    def update_structure(self, session_id: str, structure: Structure, operations: List = None, supercell_size: List = None) -> None:
+        """構造を更新"""
+        if session_id in self.sessions:
+            self.sessions[session_id]['current_structure'] = structure
+            if operations is not None:
+                self.sessions[session_id]['operations'] = operations
+            if supercell_size is not None:
+                self.sessions[session_id]['supercell_size'] = supercell_size
+            logger.info(f"Updated structure for session {session_id[:8]}...")
+    
+    def get_session_info(self, session_id: str) -> Optional[Dict]:
+        """セッション情報を取得"""
+        return self.sessions.get(session_id)
+    
+    def cleanup_old_sessions(self, max_age_hours: int = 24) -> None:
+        """古いセッションをクリーンアップ"""
+        cutoff_time = time.time() - (max_age_hours * 3600)
+        
+        old_sessions = [
+            sid for sid, data in self.sessions.items()
+            if data.get('created_at', 0) < cutoff_time
+        ]
+        
+        for sid in old_sessions:
+            del self.sessions[sid]
+            logger.info(f"Cleaned up old session {sid[:8]}...")
+
+# セッション管理インスタンス
+session_manager = SessionManager()
+
 app = FastAPI(title="CrystalNexus")
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -220,6 +276,60 @@ async def root(request: Request):
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "CrystalNexus"}
+
+@app.post("/api/apply-atomic-operations")
+async def apply_atomic_operations(request: dict):
+    """Apply atomic operations to the current structure in session"""
+    try:
+        session_id = request.get("session_id")
+        operations = request.get("operations", [])
+        
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
+        
+        # Get current structure from session
+        current_structure = session_manager.get_current_structure(session_id)
+        if current_structure is None:
+            raise HTTPException(status_code=404, detail=f"No structure found for session {session_id}")
+        
+        # Get session info to recreate structure from original + supercell + operations
+        session_info = session_manager.get_session_info(session_id)
+        if not session_info:
+            raise HTTPException(status_code=404, detail=f"Session info not found for {session_id}")
+        
+        # Start with original structure and apply supercell + operations
+        structure = session_info['original_structure'].copy()
+        supercell_size = session_info['supercell_size']
+        structure.make_supercell(supercell_size)
+        
+        # Apply all operations in order
+        for operation in operations:
+            if operation["action"] == "substitute":
+                site_index = operation["index"]
+                new_element = validate_element(operation["to"])
+                if site_index < len(structure.sites):
+                    old_coords = structure[site_index].frac_coords
+                    structure[site_index] = Element(new_element), old_coords
+            elif operation["action"] == "delete":
+                site_index = operation["index"]
+                if site_index < len(structure.sites):
+                    structure.remove_sites([site_index])
+        
+        # Update session with modified structure and operations
+        session_manager.update_structure(session_id, structure, operations=operations)
+        
+        logger.info(f"Applied {len(operations)} operations to session {session_id[:8]}...")
+        
+        return {
+            "status": "success",
+            "message": f"Applied {len(operations)} atomic operations",
+            "num_sites": len(structure),
+            "composition": str(structure.composition)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error applying atomic operations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/sample-cif-files")
 async def get_sample_cif_files():
@@ -334,9 +444,12 @@ async def create_supercell(data: dict):
         crystal_data = data.get("crystal_data")
         supercell_size_raw = data.get("supercell_size", [1, 1, 1])
         filename = data.get("filename")
+        session_id = data.get("session_id")
         
         if not crystal_data:
             raise HTTPException(status_code=400, detail="Crystal data is required")
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
         
         # スーパーセルサイズの検証
         supercell_size = validate_supercell_size(supercell_size_raw)
@@ -371,6 +484,11 @@ async def create_supercell(data: dict):
                     # Create supercell
                     supercell_structure = original_structure.copy()
                     supercell_structure.make_supercell([a_mult, b_mult, c_mult])
+                    
+                    # Create or update session with structures
+                    session_manager.create_session(session_id, filename, original_structure)
+                    session_manager.update_structure(session_id, supercell_structure, 
+                                                   operations=[], supercell_size=supercell_size)
                     
                     # Get structure dictionary for CIF generation
                     structure_dict = supercell_structure.as_dict()
@@ -910,43 +1028,26 @@ async def chgnet_predict_structure(request: dict):
 @app.post("/api/chgnet-relax")
 async def chgnet_relax_structure(request: dict):
     """
-    Relax structure using CHGNet
+    Relax structure using CHGNet - uses pre-prepared structure from session
     """
     try:
-        filename = request.get("filename")
-        operations = request.get("operations", [])
-        supercell_size = request.get("supercell_size", [1, 1, 1])
+        session_id = request.get("session_id")
         fmax = float(request.get("fmax", 0.1))
         max_steps = int(request.get("max_steps", 100))
         
-        if not filename:
-            raise HTTPException(status_code=400, detail="Filename is required")
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
         
-        logger.info(f"CHGNet relaxation for {filename} with fmax={fmax}, max_steps={max_steps}")
+        # Get the current structure from session (already has supercell + operations applied)
+        structure = session_manager.get_current_structure(session_id)
+        if structure is None:
+            raise HTTPException(status_code=404, detail=f"No structure found for session {session_id}")
         
-        # Get the modified structure (same as predict)
-        from pymatgen.io.cif import CifParser
-        cif_path = SAMPLE_CIF_DIR / safe_filename(filename)
+        session_info = session_manager.get_session_info(session_id)
+        filename = session_info.get('filename', 'unknown') if session_info else 'unknown'
         
-        if not cif_path.exists():
-            raise HTTPException(status_code=404, detail=f"CIF file not found: {filename}")
-        
-        parser = CifParser(str(cif_path))
-        structure = parser.get_structures(primitive=False)[0]
-        structure.make_supercell(supercell_size)
-        
-        # Apply operations
-        for operation in operations:
-            if operation["action"] == "substitute":
-                site_index = operation["index"]
-                new_element = validate_element(operation["to"])
-                if site_index < len(structure.sites):
-                    old_coords = structure[site_index].frac_coords
-                    structure[site_index] = Element(new_element), old_coords
-            elif operation["action"] == "delete":
-                site_index = operation["index"]
-                if site_index < len(structure.sites):
-                    structure.remove_sites([site_index])
+        logger.info(f"CHGNet relaxation for session {session_id[:8]}... ({filename}) with fmax={fmax}, max_steps={max_steps}")
+        logger.info(f"Structure: {structure.composition} ({len(structure)} sites)")
         
         # Load CHGNet and relaxer
         if not CHGNET_AVAILABLE:
