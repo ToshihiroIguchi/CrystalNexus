@@ -899,6 +899,70 @@ def calculate_supercell_formula(original_formula: str, scaling_factor: int) -> s
     
     return " ".join(supercell_parts)
 
+def evaluate_convergence(trajectory, fmax):
+    """
+    Evaluate convergence based on CHGNet trajectory according to official spec.
+    CHGNet does not return 'converged' flag, so we implement physical convergence check.
+    """
+    import numpy as np
+    
+    logger.info("=== CONVERGENCE EVALUATION DEBUG START ===")
+    
+    if not trajectory:
+        logger.info("DEBUG: No trajectory provided")
+        return False
+        
+    # Check if trajectory has force information
+    if not hasattr(trajectory, 'forces') or len(trajectory.forces) == 0:
+        logger.info("DEBUG: No forces in trajectory")
+        return False
+    
+    logger.info(f"DEBUG: Trajectory type: {type(trajectory)}")
+    logger.info(f"DEBUG: Trajectory has {len(trajectory.forces)} force steps")
+    
+    # Get final forces and analyze structure
+    final_forces = trajectory.forces[-1]
+    logger.info(f"DEBUG: Final forces type: {type(final_forces)}")
+    logger.info(f"DEBUG: Final forces shape: {np.array(final_forces).shape}")
+    logger.info(f"DEBUG: Raw final forces: {final_forces}")
+    
+    # OLD METHOD (incorrect): max component approach
+    old_max_force = max([max(abs(f) for f in atom_forces) for atom_forces in final_forces])
+    logger.info(f"DEBUG: OLD method max force: {old_max_force}")
+    
+    # NEW METHOD (correct): force vector magnitude approach
+    final_forces_array = np.array(final_forces)
+    force_magnitudes = np.linalg.norm(final_forces_array, axis=1)
+    max_force = np.max(force_magnitudes)
+    
+    logger.info(f"DEBUG: Force magnitudes per atom: {force_magnitudes}")
+    logger.info(f"DEBUG: NEW method max force: {max_force}")
+    logger.info(f"DEBUG: Force tolerance (fmax): {fmax}")
+    
+    # Primary convergence criterion: max force < fmax
+    force_converged = max_force < fmax
+    logger.info(f"DEBUG: Force converged ({max_force} < {fmax}): {force_converged}")
+    
+    # CHGNet STANDARD: Force-only convergence (no energy stability check)
+    # CHGNet/ASE FIRE optimizer uses only force convergence as per official specification
+    if hasattr(trajectory, 'energies') and len(trajectory.energies) >= 3:
+        recent_energies = trajectory.energies[-3:]
+        energy_variation = max(recent_energies) - min(recent_energies)
+        logger.info(f"DEBUG: Energy variation: {energy_variation} eV (informational only)")
+        logger.info(f"DEBUG: CHGNet standard: Energy stability NOT used for convergence")
+    else:
+        logger.info("DEBUG: Energy data available but not used for convergence (CHGNet standard)")
+    
+    # Final convergence decision - CHGNet standard (force-only)
+    # CHGNet uses ASE FIRE optimizer which only checks force convergence
+    final_converged = force_converged
+    logger.info(f"DEBUG: CHGNet standard convergence: force_converged={force_converged}")
+    logger.info(f"DEBUG: Final convergence decision: {final_converged}")
+    logger.info("=== CONVERGENCE EVALUATION DEBUG END ===")
+    
+    # Ensure return type is Python bool (not numpy.bool)
+    return bool(final_converged)
+
 def safe_get_prediction(pred):
     """Extract prediction results safely from CHGNet output"""
     out = {}
@@ -1096,8 +1160,16 @@ async def chgnet_relax_structure(request: dict):
             logger.warning(f"Initial prediction failed: {e}")
             initial_results = {"energy_eV_per_atom": None}
         
-        # Relax structure
+        # CHGNet structure relaxation
+        logger.info(f"Starting CHGNet relaxation: fmax={fmax}, max_steps={max_steps}")
         result = relaxer.relax(structure, fmax=fmax, steps=max_steps, verbose=False, relax_cell=True)
+        
+        # Basic result validation
+        logger.info(f"CHGNet result keys: {sorted(result.keys())}")
+        if 'final_structure' not in result:
+            raise RuntimeError("CHGNet relaxation failed: no final_structure returned")
+        if 'trajectory' not in result:
+            logger.warning("CHGNet relaxation warning: no trajectory returned")
         
         final_structure = result.get("final_structure")
         if final_structure is None:
@@ -1124,9 +1196,27 @@ async def chgnet_relax_structure(request: dict):
             final_results.get("energy_eV_per_atom") is not None):
             energy_diff = final_results["energy_eV_per_atom"] - initial_results["energy_eV_per_atom"]
         
+        # Extract relaxation information with CHGNet-compliant convergence evaluation
+        trajectory = result.get("trajectory")
+        steps = len(trajectory) if trajectory else 0
+        
+        # Use our own convergence evaluation (CHGNet spec-compliant)
+        converged = evaluate_convergence(trajectory, fmax)
+        
+        # Log convergence evaluation details
+        if trajectory and hasattr(trajectory, 'forces') and len(trajectory.forces) > 0:
+            final_forces = trajectory.forces[-1]
+            max_final_force = max([max(abs(f) for f in atom_forces) for atom_forces in final_forces])
+            logger.info(f"Convergence evaluation: max_force={max_final_force:.6f} eV/Å, fmax={fmax}, converged={converged}")
+        else:
+            logger.info(f"Convergence evaluation: no force data available, converged={converged}")
+            
+        logger.info(f"Final relaxation status: converged={converged}, steps={steps}, trajectory_exists={trajectory is not None}")
+        logger.info("=== CHGNet SPEC-COMPLIANT CONVERGENCE EVALUATION COMPLETE ===")
+        
         relaxation_info = {
-            "converged": result.get("converged", False),
-            "steps": len(result.get("trajectory", [])) if result.get("trajectory") else 0,
+            "converged": converged,
+            "steps": steps,
             "fmax": fmax,
             "max_steps": max_steps,
             "energy_change_eV_per_atom": energy_diff
