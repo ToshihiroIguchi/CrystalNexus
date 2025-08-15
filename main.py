@@ -1262,12 +1262,38 @@ async def chgnet_relax_structure(request: dict):
             "num_sites": len(final_structure.sites)
         }
         
+        # Extract detailed trajectory data for analysis modal
+        trajectory_data = None
+        if trajectory:
+            trajectory_data = {
+                "steps": len(trajectory.forces) if hasattr(trajectory, 'forces') else 0,
+                "energies": [float(e) for e in trajectory.energies] if hasattr(trajectory, 'energies') else [],
+                "forces": [],
+                "force_magnitudes": []
+            }
+            
+            # Extract force data for each step
+            if hasattr(trajectory, 'forces'):
+                for step_forces in trajectory.forces:
+                    # Handle both numpy arrays and lists
+                    if hasattr(step_forces, 'tolist'):
+                        step_force_data = step_forces.tolist()
+                    else:
+                        step_force_data = step_forces
+                    trajectory_data["forces"].append(step_force_data)
+                    
+                    # Calculate force magnitudes for each atom at this step
+                    import numpy as np
+                    force_mags = [float(np.linalg.norm(f)) for f in step_forces]
+                    trajectory_data["force_magnitudes"].append(force_mags)
+        
         return {
             "status": "success",
             "initial_prediction": initial_results,
             "final_prediction": final_results,
             "relaxation_info": relaxation_info,
             "relaxed_structure_info": relaxed_structure_info,
+            "trajectory_data": trajectory_data,
             "model_info": {
                 "version": chgnet.version if hasattr(chgnet, 'version') else "0.3.0",
                 "device": "cpu"
