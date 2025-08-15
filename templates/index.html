@@ -1367,7 +1367,9 @@
                 
                 let tableHTML = `<tr><td>Total |Magnetic Moment|:</td><td class="magnetic-moment">${totalMag.toFixed(3)} µB</td></tr>`;
                 magmoms.forEach((mag, i) => {
-                    tableHTML += `<tr><td>Atom ${i+1}:</td><td class="magnetic-moment">${mag.toFixed(3)} µB</td></tr>`;
+                    // Use the same labels as Select Atom to ensure consistency
+                    const atomLabel = originalLabels && originalLabels[i] ? originalLabels[i] : `Site ${i+1}`;
+                    tableHTML += `<tr><td>${atomLabel}:</td><td class="magnetic-moment">${mag.toFixed(3)} µB</td></tr>`;
                 });
                 magneticTable.innerHTML = tableHTML;
             } else {
@@ -1389,7 +1391,9 @@
                 
                 let tableHTML = '<table class="detail-table">';
                 siteEnergies.forEach((energy, i) => {
-                    tableHTML += `<tr><td>Site ${i+1}:</td><td class="site-energy">${energy.toFixed(3)} eV</td></tr>`;
+                    // Use the same labels as Select Atom to ensure consistency  
+                    const atomLabel = originalLabels && originalLabels[i] ? originalLabels[i] : `Site ${i+1}`;
+                    tableHTML += `<tr><td>${atomLabel}:</td><td class="site-energy">${energy.toFixed(3)} eV</td></tr>`;
                 });
                 tableHTML += '</table>';
                 siteTable.innerHTML = tableHTML;
@@ -1875,8 +1879,7 @@
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        crystal_data: supercellData.original_data,
-                        supercell_size: supercellData.supercell_info.size
+                        session_id: window.sessionId
                     })
                 });
                 

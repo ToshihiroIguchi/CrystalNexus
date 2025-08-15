@@ -543,47 +543,53 @@ def assign_unique_labels(structure):
 @app.post("/api/get-element-labels")
 async def get_element_labels(data: dict):
     """
-    Get unique element labels for the current supercell structure
-    Based on elementedit.py approach
+    Get element labels directly from the actual Structure object to ensure correct ordering
+    This guarantees labels match CHGNet results ordering
     """
     try:
-        crystal_data = data.get("crystal_data")
-        supercell_size = data.get("supercell_size", [1, 1, 1])
+        session_id = data.get("session_id")
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
         
-        if not crystal_data:
-            raise HTTPException(status_code=400, detail="Crystal data is required")
+        # Get the actual current structure from session (with supercell + operations applied)
+        structure = session_manager.get_current_structure(session_id)
+        if structure is None:
+            raise HTTPException(status_code=404, detail=f"No structure found for session {session_id}")
         
-        # Recreate structure from crystal data
-        # For now, we'll simulate the structure based on the supercell info
-        # In a complete implementation, we would reconstruct the actual Structure object
-        
-        # Get element information from formula
-        import re
-        formula = crystal_data.get("formula", "")
-        pattern = r'([A-Z][a-z]?)(\d*)'
-        matches = re.findall(pattern, formula)
-        
-        # Calculate supercell scaling
-        scaling_factor = supercell_size[0] * supercell_size[1] * supercell_size[2]
-        
-        # Generate labels for supercell
+        # Generate labels directly from Structure sites in the exact same order
+        # This ensures perfect alignment with CHGNet results
         labels = []
-        for element, count_str in matches:
-            count = int(count_str) if count_str else 1
-            supercell_count = count * scaling_factor
+        element_counts = {}
+        
+        for i, site in enumerate(structure.sites):
+            # Get clean element symbol (remove charge info)
+            element = str(site.specie).split('+')[0].split('-')[0]
             
-            # Generate individual labels for each atom
-            for i in range(supercell_count):
-                labels.append(f"{element}{i}")
+            # Count occurrences of each element to generate unique labels
+            if element not in element_counts:
+                element_counts[element] = 0
+            else:
+                element_counts[element] += 1
+            
+            # Generate label: Element + count (e.g., Ba0, Ti0, O0, O1, O2)
+            label = f"{element}{element_counts[element]}"
+            labels.append(label)
+        
+        # Get unique elements for the UI
+        unique_elements = list(element_counts.keys())
+        
+        logger.info(f"Generated structure-based labels for session {session_id}: {labels}")
         
         return {
-            "status": "success",
+            "status": "success", 
             "labels": labels,
-            "unique_elements": [match[0] for match in matches],
-            "total_labels": len(labels)
+            "unique_elements": unique_elements,
+            "total_labels": len(labels),
+            "method": "structure_based"  # Indicate this is the reliable method
         }
         
     except Exception as e:
+        logger.error(f"Error getting element labels: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting element labels: {str(e)}")
 
 def get_legacy_chgnet_elements():
