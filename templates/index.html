@@ -1634,7 +1634,6 @@
             
             try {
                 console.log('🔄 Updating 3D visualization with relaxed structure');
-                updateStatus('Loading relaxed structure...', 'info');
                 
                 const requestData = {
                     filename: window.currentFilename,
@@ -1681,12 +1680,10 @@
                 window.viewer3D.zoomTo();
                 window.viewer3D.render();
                 
-                updateStatus('Relaxed structure loaded', 'success');
                 console.log(`✅ 3D structure updated with relaxed geometry`);
                 
             } catch (error) {
                 console.error('❌ Error updating relaxed 3D visualization:', error);
-                updateStatus('Failed to load relaxed structure', 'error');
                 
                 showNotification('Failed to update 3D visualization with relaxed structure', 'warning');
             }
@@ -2274,10 +2271,7 @@
             
             // Create 3Dmol viewer container optimized for professional crystal analysis
             container.innerHTML = `
-                <div id="3dmol-viewer" style="width: 100%; height: calc(100% - 50px); position: relative; border: 1px solid #ddd; background: white; min-height: 650px;"></div>
-                <div id="3d-status" style="margin-top: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #666; height: 30px;">
-                    <strong>3D Status:</strong> <span id="3d-status-text">Loading 3Dmol.js...</span>
-                </div>
+                <div id="3dmol-viewer" style="width: 100%; height: 100%; position: relative; border: 1px solid #ddd; background: white; min-height: 650px;"></div>
             `;
             
             console.log('✅ 3D viewer container created');
@@ -2285,12 +2279,10 @@
             // Load 3Dmol.js and initialize viewer
             loadScript('https://3dmol.org/build/3Dmol.js', function() {
                 console.log('✅ 3Dmol.js loaded successfully');
-                updateStatus('Creating 3D viewer...', 'info');
                 
                 const element = document.getElementById('3dmol-viewer');
                 if (!element) {
                     console.error('❌ 3dmol-viewer element not found');
-                    updateStatus('Error: Viewer element not found', 'error');
                     return;
                 }
                 
@@ -2299,7 +2291,6 @@
                 window.viewer3D = $3Dmol.createViewer(element, config);
                 
                 console.log('✅ 3Dmol.js viewer initialized');
-                updateStatus('3D viewer ready', 'success');
                 
                 // Load supercell visualization
                 loadSupercellVisualization();
@@ -2315,39 +2306,25 @@
             };
             script.onerror = function() {
                 console.error(`✗ Failed to load script: ${src}`);
-                updateStatus('Failed to load 3Dmol.js library', 'error');
             };
             document.head.appendChild(script);
         }
 
-        function updateStatus(message, type = 'info') {
-            const statusElement = document.getElementById('3d-status-text');
-            if (statusElement) {
-                statusElement.textContent = message;
-                const statusContainer = document.getElementById('3d-status');
-                if (statusContainer) {
-                    statusContainer.className = `status-${type}`;
-                }
-            }
-        }
 
         async function loadSupercellVisualization() {
             console.log('🔄 Loading supercell structure for 3D visualization');
             
             if (!window.viewer3D) {
                 console.warn('❌ 3D viewer not initialized yet');
-                updateStatus('3D viewer not ready', 'error');
                 return;
             }
             
             if (!window.currentFilename || !window.currentSupercellSize) {
                 console.warn('❌ No filename or supercell size available');
-                updateStatus('No structure data available', 'error');
                 return;
             }
             
             try {
-                updateStatus('Generating supercell CIF from original file...', 'info');
                 console.log(`📊 Using direct CIF generation approach`);
                 console.log(`📄 Filename: ${window.currentFilename}`);
                 console.log(`📐 Supercell size: ${window.currentSupercellSize}`);
@@ -2398,12 +2375,10 @@
                 window.viewer3D.render();
                 
                 const sizeStr = window.currentSupercellSize.join('x');
-                updateStatus(`Supercell loaded: ${window.currentFilename} (${sizeStr})`, 'success');
                 console.log('✅ Successfully loaded 3D supercell visualization');
                 
             } catch (error) {
                 console.error('❌ Error loading supercell 3D structure:', error);
-                updateStatus(`Error: ${error.message}`, 'error');
                 
                 // Fallback: show error message in viewer
                 const container = document.getElementById('3dmol-viewer');
@@ -2430,7 +2405,6 @@
             try {
                 console.log('🔄 Updating 3D visualization with operation history');
                 console.log(`📋 Operations to apply: ${window.atomicOperations.length}`);
-                updateStatus('Updating 3D structure with atomic operations...', 'info');
                 
                 // Use operation history to regenerate complete structure
                 const requestData = {
@@ -2479,12 +2453,10 @@
                 const operationsText = window.atomicOperations.length > 0 
                     ? `Modified (${window.atomicOperations.length} ops)` 
                     : 'Original';
-                updateStatus(`${operationsText}: ${currentStructureData.supercell_info.formula}`, 'success');
                 console.log(`✅ 3D structure updated with ${window.atomicOperations.length} operations`);
                 
             } catch (error) {
                 console.error('❌ Error updating 3D visualization:', error);
-                updateStatus('3D update failed', 'error');
                 
                 // Show error in status
                 const container = document.getElementById('3dmol-viewer');
