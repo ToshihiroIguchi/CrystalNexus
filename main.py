@@ -562,8 +562,8 @@ async def get_element_labels(data: dict):
         element_counts = {}
         
         for i, site in enumerate(structure.sites):
-            # Get clean element symbol (remove charge info)
-            element = str(site.specie).split('+')[0].split('-')[0]
+            # Get clean element symbol using PyMatGen's standard method
+            element = str(site.specie.element)
             
             # Count occurrences of each element to generate unique labels
             if element not in element_counts:
