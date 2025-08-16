@@ -930,6 +930,18 @@ def evaluate_convergence(trajectory, fmax):
     logger.info(f"DEBUG: Trajectory type: {type(trajectory)}")
     logger.info(f"DEBUG: Trajectory has {len(trajectory.forces)} force steps")
     
+    # STEP-BY-STEP FORCE ANALYSIS
+    logger.info("=== STEP-BY-STEP FORCE ANALYSIS START ===")
+    for step_idx, step_forces in enumerate(trajectory.forces):
+        step_forces_array = np.array(step_forces)
+        force_magnitudes = np.linalg.norm(step_forces_array, axis=1)
+        max_force_this_step = force_magnitudes.max()
+        converged_this_step = max_force_this_step < fmax
+        logger.info(f"Step {step_idx}: max_force={max_force_this_step:.6f} eV/Å, converged={converged_this_step}")
+        if converged_this_step and step_idx < len(trajectory.forces) - 1:
+            logger.info(f"  *** EARLY CONVERGENCE AT STEP {step_idx} BUT OPTIMIZATION CONTINUED ***")
+    logger.info("=== STEP-BY-STEP FORCE ANALYSIS END ===")
+    
     # Get final forces and analyze structure
     final_forces = trajectory.forces[-1]
     logger.info(f"DEBUG: Final forces type: {type(final_forces)}")
@@ -1172,7 +1184,7 @@ async def chgnet_relax_structure(request: dict):
         
         # CHGNet structure relaxation
         logger.info(f"Starting CHGNet relaxation: fmax={fmax}, max_steps={max_steps}")
-        result = relaxer.relax(structure, fmax=fmax, steps=max_steps, verbose=False, relax_cell=True)
+        result = relaxer.relax(structure, fmax=fmax, steps=max_steps, verbose=True, relax_cell=True)
         
         # Basic result validation
         logger.info(f"CHGNet result keys: {sorted(result.keys())}")

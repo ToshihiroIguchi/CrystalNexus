@@ -891,6 +891,66 @@
             color: #27ae60;
         }
         
+        /* Chart Statistics Styling */
+        .chart-with-stats {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 20px 0;
+        }
+        
+        .chart-stats {
+            margin-top: 15px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #e9ecef;
+            min-width: 400px;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 10px;
+        }
+        
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 8px;
+            background-color: #ffffff;
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: #6c757d;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+        
+        .stat-value {
+            font-size: 14px;
+            font-weight: 600;
+            color: #495057;
+        }
+        
+        .chart-section {
+            margin: 30px 0;
+            padding: 20px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #e9ecef;
+        }
+        
+        .chart-section h4 {
+            margin-bottom: 15px;
+            color: #495057;
+            font-size: 18px;
+        }
+        
         /* Energy Analysis Tab Styling */
         .energy-analysis-container {
             padding: 20px;
@@ -3233,10 +3293,12 @@
             document.getElementById(tabName + '-tab').classList.add('active');
             
             // Load tab-specific content
-            if (tabName === 'charts' && currentAnalysisData) {
-                drawCharts(currentAnalysisData);
-            } else if (tabName === 'energy') {
+            if (tabName === 'energy') {
                 populateEnergyAnalysisTab();
+                // Also draw charts when energy tab is selected
+                if (currentAnalysisData) {
+                    drawCharts(currentAnalysisData);
+                }
             }
         }
 
@@ -3426,37 +3488,68 @@
                 tableBody.appendChild(row);
             });
             
-            // Populate Forces Detail Table
-            populateForcesDetailTable(data);
+            // Populate Atomic Properties Table
+            populateAtomicPropertiesTable(data);
             
             // Populate Stress Detail Table
             populateStressDetailTable(data);
         }
         
-        function populateForcesDetailTable(data) {
-            const tableBody = document.getElementById('forcesDetailTableBody');
+        function populateAtomicPropertiesTable(data) {
+            const tableBody = document.getElementById('atomicPropertiesTableBody');
             tableBody.innerHTML = '';
             
-            if (!data.final_prediction?.forces_eV_per_A) {
-                tableBody.innerHTML = '<tr><td colspan="5">Force data not available</td></tr>';
+            const finalPred = data.final_prediction;
+            if (!finalPred) {
+                tableBody.innerHTML = '<tr><td colspan="7">Final prediction data not available</td></tr>';
                 return;
             }
             
-            const forces = data.final_prediction.forces_eV_per_A;
-            forces.forEach((force, i) => {
-                const magnitude = Math.sqrt(force[0]*force[0] + force[1]*force[1] + force[2]*force[2]);
+            // Get data arrays
+            const forces = finalPred.forces_eV_per_A || [];
+            const siteEnergies = finalPred.site_energies_eV || [];
+            const magmoms = finalPred.magmoms_muB || [];
+            
+            // Determine number of atoms
+            const numAtoms = Math.max(forces.length, siteEnergies.length, magmoms.length);
+            
+            if (numAtoms === 0) {
+                tableBody.innerHTML = '<tr><td colspan="7">No atomic data available</td></tr>';
+                return;
+            }
+            
+            // Populate table rows
+            for (let i = 0; i < numAtoms; i++) {
                 const atomLabel = currentLabels && currentLabels[i] ? currentLabels[i] : `Atom ${i+1}`;
+                
+                // Site Energy
+                const siteEnergy = siteEnergies[i] !== undefined ? siteEnergies[i].toFixed(6) : '-';
+                
+                // Magnetic moment
+                const magmom = magmoms[i] !== undefined ? magmoms[i].toFixed(3) : '-';
+                
+                // Forces
+                let fx = '-', fy = '-', fz = '-', fMag = '-';
+                if (forces[i]) {
+                    fx = forces[i][0].toFixed(6);
+                    fy = forces[i][1].toFixed(6);
+                    fz = forces[i][2].toFixed(6);
+                    const magnitude = Math.sqrt(forces[i][0]*forces[i][0] + forces[i][1]*forces[i][1] + forces[i][2]*forces[i][2]);
+                    fMag = magnitude.toFixed(6);
+                }
                 
                 const row = document.createElement('tr');
                 row.innerHTML = `
                     <td>${atomLabel}</td>
-                    <td>${force[0].toFixed(6)}</td>
-                    <td>${force[1].toFixed(6)}</td>
-                    <td>${force[2].toFixed(6)}</td>
-                    <td>${magnitude.toFixed(6)}</td>
+                    <td class="site-energy">${siteEnergy}</td>
+                    <td class="magnetic-moment">${magmom}</td>
+                    <td>${fx}</td>
+                    <td>${fy}</td>
+                    <td>${fz}</td>
+                    <td>${fMag}</td>
                 `;
                 tableBody.appendChild(row);
-            });
+            }
         }
         
         function populateStressDetailTable(data) {
@@ -3507,22 +3600,80 @@
             // Clear canvas
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
-            // Simple line chart
-            const padding = 40;
-            const chartWidth = canvas.width - 2 * padding;
-            const chartHeight = canvas.height - 2 * padding;
+            // Simple line chart with adjusted padding for Y-axis labels
+            const leftPadding = 70;  // Increased for Y-axis labels and title
+            const rightPadding = 20;
+            const topPadding = 20;
+            const bottomPadding = 50; // Increased for X-axis title
+            const chartWidth = canvas.width - leftPadding - rightPadding;
+            const chartHeight = canvas.height - topPadding - bottomPadding;
             
             const minEnergy = Math.min(...energies);
             const maxEnergy = Math.max(...energies);
-            const energyRange = maxEnergy - minEnergy;
+            const energyRange = maxEnergy - minEnergy || 1;
             
             // Draw axes
             ctx.strokeStyle = '#ccc';
+            ctx.lineWidth = 1;
             ctx.beginPath();
-            ctx.moveTo(padding, padding);
-            ctx.lineTo(padding, canvas.height - padding);
-            ctx.lineTo(canvas.width - padding, canvas.height - padding);
+            ctx.moveTo(leftPadding, topPadding);
+            ctx.lineTo(leftPadding, canvas.height - bottomPadding);
+            ctx.lineTo(canvas.width - rightPadding, canvas.height - bottomPadding);
             ctx.stroke();
+            
+            // Draw axis labels and ticks
+            ctx.fillStyle = '#666';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'center';
+            
+            // X-axis (Steps) labels
+            const stepInterval = Math.max(1, Math.floor(energies.length / 5));
+            for (let i = 0; i < energies.length; i += stepInterval) {
+                const x = leftPadding + (i / (energies.length - 1)) * chartWidth;
+                const y = canvas.height - bottomPadding + 15;
+                
+                // Draw tick mark
+                ctx.beginPath();
+                ctx.moveTo(x, canvas.height - bottomPadding);
+                ctx.lineTo(x, canvas.height - bottomPadding + 5);
+                ctx.stroke();
+                
+                // Draw label
+                ctx.fillText(i.toString(), x, y);
+            }
+            
+            // Y-axis (Energy) labels
+            ctx.textAlign = 'right';
+            const energyInterval = energyRange / 4;
+            for (let i = 0; i <= 4; i++) {
+                const energy = minEnergy + (i * energyInterval);
+                const y = canvas.height - bottomPadding - (i / 4) * chartHeight;
+                const x = leftPadding - 10;
+                
+                // Draw tick mark
+                ctx.beginPath();
+                ctx.moveTo(leftPadding - 5, y);
+                ctx.lineTo(leftPadding, y);
+                ctx.stroke();
+                
+                // Draw label
+                ctx.fillText(energy.toFixed(3), x, y + 4);
+            }
+            
+            // Axis titles
+            ctx.textAlign = 'center';
+            ctx.font = '14px Arial';
+            ctx.fillStyle = '#333';
+            
+            // X-axis title
+            ctx.fillText('Step', leftPadding + chartWidth / 2, canvas.height - 10);
+            
+            // Y-axis title (rotated)
+            ctx.save();
+            ctx.translate(20, topPadding + chartHeight / 2);
+            ctx.rotate(-Math.PI / 2);
+            ctx.fillText('Energy (eV/atom)', 0, 0);
+            ctx.restore();
             
             // Draw energy line
             ctx.strokeStyle = '#3498db';
@@ -3530,8 +3681,8 @@
             ctx.beginPath();
             
             energies.forEach((energy, step) => {
-                const x = padding + (step / (energies.length - 1)) * chartWidth;
-                const y = canvas.height - padding - ((energy - minEnergy) / energyRange) * chartHeight;
+                const x = leftPadding + (step / (energies.length - 1)) * chartWidth;
+                const y = canvas.height - bottomPadding - ((energy - minEnergy) / energyRange) * chartHeight;
                 
                 if (step === 0) {
                     ctx.moveTo(x, y);
@@ -3542,15 +3693,23 @@
             
             ctx.stroke();
             
-            // Add labels
-            ctx.fillStyle = '#333';
-            ctx.font = '12px Arial';
-            ctx.fillText('Step', canvas.width / 2, canvas.height - 10);
-            ctx.save();
-            ctx.translate(15, canvas.height / 2);
-            ctx.rotate(-Math.PI / 2);
-            ctx.fillText('Energy (eV/atom)', 0, 0);
-            ctx.restore();
+            // Draw data points for key points (without overlapping text values)
+            ctx.fillStyle = '#3498db';
+            energies.forEach((energy, step) => {
+                const x = leftPadding + (step / (energies.length - 1)) * chartWidth;
+                const y = canvas.height - bottomPadding - ((energy - minEnergy) / energyRange) * chartHeight;
+                
+                // Draw points for first, last, and min/max points
+                if (step === 0 || step === energies.length - 1 || energy === minEnergy || energy === maxEnergy) {
+                    // Draw point only (no text values to avoid overlapping with axis labels)
+                    ctx.beginPath();
+                    ctx.arc(x, y, 4, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            });
+            
+            // Update statistics
+            updateEnergyStats(energies);
         }
 
         function drawForceChart(data) {
@@ -3569,22 +3728,80 @@
             // Clear canvas
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
-            // Simple line chart
-            const padding = 40;
-            const chartWidth = canvas.width - 2 * padding;
-            const chartHeight = canvas.height - 2 * padding;
+            // Simple line chart with adjusted padding for Y-axis labels
+            const leftPadding = 70;  // Increased for Y-axis labels and title
+            const rightPadding = 20;
+            const topPadding = 20;
+            const bottomPadding = 50; // Increased for X-axis title
+            const chartWidth = canvas.width - leftPadding - rightPadding;
+            const chartHeight = canvas.height - topPadding - bottomPadding;
             
             const minForce = Math.min(...maxForces);
             const maxForce = Math.max(...maxForces);
-            const forceRange = maxForce - minForce;
+            const forceRange = maxForce - minForce || 1;
             
             // Draw axes
             ctx.strokeStyle = '#ccc';
+            ctx.lineWidth = 1;
             ctx.beginPath();
-            ctx.moveTo(padding, padding);
-            ctx.lineTo(padding, canvas.height - padding);
-            ctx.lineTo(canvas.width - padding, canvas.height - padding);
+            ctx.moveTo(leftPadding, topPadding);
+            ctx.lineTo(leftPadding, canvas.height - bottomPadding);
+            ctx.lineTo(canvas.width - rightPadding, canvas.height - bottomPadding);
             ctx.stroke();
+            
+            // Draw axis labels and ticks
+            ctx.fillStyle = '#666';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'center';
+            
+            // X-axis (Steps) labels
+            const stepInterval = Math.max(1, Math.floor(maxForces.length / 5));
+            for (let i = 0; i < maxForces.length; i += stepInterval) {
+                const x = leftPadding + (i / (maxForces.length - 1)) * chartWidth;
+                const y = canvas.height - bottomPadding + 15;
+                
+                // Draw tick mark
+                ctx.beginPath();
+                ctx.moveTo(x, canvas.height - bottomPadding);
+                ctx.lineTo(x, canvas.height - bottomPadding + 5);
+                ctx.stroke();
+                
+                // Draw label
+                ctx.fillText(i.toString(), x, y);
+            }
+            
+            // Y-axis (Force) labels
+            ctx.textAlign = 'right';
+            const forceInterval = forceRange / 4;
+            for (let i = 0; i <= 4; i++) {
+                const force = minForce + (i * forceInterval);
+                const y = canvas.height - bottomPadding - (i / 4) * chartHeight;
+                const x = leftPadding - 10;
+                
+                // Draw tick mark
+                ctx.beginPath();
+                ctx.moveTo(leftPadding - 5, y);
+                ctx.lineTo(leftPadding, y);
+                ctx.stroke();
+                
+                // Draw label
+                ctx.fillText(force.toFixed(4), x, y + 4);
+            }
+            
+            // Axis titles
+            ctx.textAlign = 'center';
+            ctx.font = '14px Arial';
+            ctx.fillStyle = '#333';
+            
+            // X-axis title
+            ctx.fillText('Step', leftPadding + chartWidth / 2, canvas.height - 10);
+            
+            // Y-axis title (rotated)
+            ctx.save();
+            ctx.translate(20, topPadding + chartHeight / 2);
+            ctx.rotate(-Math.PI / 2);
+            ctx.fillText('Max Force (eV/Å)', 0, 0);
+            ctx.restore();
             
             // Draw force line
             ctx.strokeStyle = '#e74c3c';
@@ -3592,8 +3809,8 @@
             ctx.beginPath();
             
             maxForces.forEach((force, step) => {
-                const x = padding + (step / (maxForces.length - 1)) * chartWidth;
-                const y = canvas.height - padding - ((force - minForce) / forceRange) * chartHeight;
+                const x = leftPadding + (step / (maxForces.length - 1)) * chartWidth;
+                const y = canvas.height - bottomPadding - ((force - minForce) / forceRange) * chartHeight;
                 
                 if (step === 0) {
                     ctx.moveTo(x, y);
@@ -3604,15 +3821,103 @@
             
             ctx.stroke();
             
-            // Add labels
-            ctx.fillStyle = '#333';
-            ctx.font = '12px Arial';
-            ctx.fillText('Step', canvas.width / 2, canvas.height - 10);
-            ctx.save();
-            ctx.translate(15, canvas.height / 2);
-            ctx.rotate(-Math.PI / 2);
-            ctx.fillText('Max Force (eV/Å)', 0, 0);
-            ctx.restore();
+            // Draw data points for key points (without overlapping text values)
+            ctx.fillStyle = '#e74c3c';
+            maxForces.forEach((force, step) => {
+                const x = leftPadding + (step / (maxForces.length - 1)) * chartWidth;
+                const y = canvas.height - bottomPadding - ((force - minForce) / forceRange) * chartHeight;
+                
+                // Draw points for first, last, and min/max points
+                if (step === 0 || step === maxForces.length - 1 || force === minForce || force === maxForce) {
+                    // Draw point only (no text values to avoid overlapping with axis labels)
+                    ctx.beginPath();
+                    ctx.arc(x, y, 4, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            });
+            
+            // Update statistics
+            updateForceStats(maxForces);
+        }
+        
+        function updateEnergyStats(energies) {
+            const statsContainer = document.getElementById('energy-chart-stats');
+            if (!statsContainer) return;
+            
+            const minEnergy = Math.min(...energies);
+            const maxEnergy = Math.max(...energies);
+            const initialEnergy = energies[0];
+            const finalEnergy = energies[energies.length - 1];
+            const totalChange = finalEnergy - initialEnergy;
+            
+            statsContainer.innerHTML = `
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-label">Initial:</span>
+                        <span class="stat-value">${initialEnergy.toFixed(6)} eV/atom</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Final:</span>
+                        <span class="stat-value">${finalEnergy.toFixed(6)} eV/atom</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Change:</span>
+                        <span class="stat-value ${totalChange < 0 ? 'energy-negative' : 'energy-positive'}">${totalChange >= 0 ? '+' : ''}${totalChange.toFixed(6)} eV/atom</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Min:</span>
+                        <span class="stat-value">${minEnergy.toFixed(6)} eV/atom</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Max:</span>
+                        <span class="stat-value">${maxEnergy.toFixed(6)} eV/atom</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Steps:</span>
+                        <span class="stat-value">${energies.length}</span>
+                    </div>
+                </div>
+            `;
+        }
+        
+        function updateForceStats(maxForces) {
+            const statsContainer = document.getElementById('force-chart-stats');
+            if (!statsContainer) return;
+            
+            const minForce = Math.min(...maxForces);
+            const maxForce = Math.max(...maxForces);
+            const initialForce = maxForces[0];
+            const finalForce = maxForces[maxForces.length - 1];
+            const totalChange = finalForce - initialForce;
+            
+            statsContainer.innerHTML = `
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-label">Initial Max:</span>
+                        <span class="stat-value">${initialForce.toFixed(4)} eV/Å</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Final Max:</span>
+                        <span class="stat-value">${finalForce.toFixed(4)} eV/Å</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Change:</span>
+                        <span class="stat-value ${totalChange < 0 ? 'energy-negative' : 'energy-positive'}">${totalChange >= 0 ? '+' : ''}${totalChange.toFixed(4)} eV/Å</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Peak:</span>
+                        <span class="stat-value">${maxForce.toFixed(4)} eV/Å</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Minimum:</span>
+                        <span class="stat-value">${minForce.toFixed(4)} eV/Å</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Steps:</span>
+                        <span class="stat-value">${maxForces.length}</span>
+                    </div>
+                </div>
+            `;
         }
 
 
@@ -3629,8 +3934,7 @@
             
             <div class="tab-container">
                 <button class="tab-button active" onclick="switchTab('summary')">Summary</button>
-                <button class="tab-button" onclick="switchTab('energy')">Energy Analysis</button>
-                <button class="tab-button" onclick="switchTab('charts')">Charts</button>
+                <button class="tab-button" onclick="switchTab('energy')">Energy & Force Analysis</button>
                 <button class="tab-button" onclick="switchTab('data')">Data</button>
             </div>
             
@@ -3661,10 +3965,10 @@
                     </div>
                 </div>
                 
-                <!-- Energy Analysis Tab -->
+                <!-- Energy & Force Analysis Tab -->
                 <div id="energy-tab" class="tab-pane">
                     <div class="energy-analysis-container">
-                        <h3>Comprehensive Energy Analysis</h3>
+                        <h3>Comprehensive Energy & Force Analysis</h3>
                         
                         <div class="energy-comparison-table">
                             <table class="analysis-table" id="energy-analysis-table">
@@ -3682,23 +3986,34 @@
                             </table>
                         </div>
                         
+                        <div class="charts-container" style="margin-top: 30px;">
+                            <div class="chart-section">
+                                <h4>Energy Evolution</h4>
+                                <div class="chart-with-stats">
+                                    <canvas id="energyChart" width="400" height="200"></canvas>
+                                    <div class="chart-stats" id="energy-chart-stats">
+                                        <!-- Energy statistics will be populated here -->
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="chart-section" style="margin-top: 20px;">
+                                <h4>Force Evolution</h4>
+                                <div class="chart-with-stats">
+                                    <canvas id="forceChart" width="400" height="200"></canvas>
+                                    <div class="chart-stats" id="force-chart-stats">
+                                        <!-- Force statistics will be populated here -->
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
                         <div class="energy-insights" id="energy-insights">
                             <!-- Energy insights and interpretation will be populated here -->
                         </div>
                     </div>
                 </div>
                 
-                <!-- Charts Tab -->
-                <div id="charts-tab" class="tab-pane">
-                    <div class="chart-container">
-                        <h3>Energy Evolution</h3>
-                        <canvas id="energyChart" width="400" height="200"></canvas>
-                    </div>
-                    <div class="chart-container">
-                        <h3>Force Evolution</h3>
-                        <canvas id="forceChart" width="400" height="200"></canvas>
-                    </div>
-                </div>
                 
                 <!-- Data Tab -->
                 <div id="data-tab" class="tab-pane">
@@ -3719,20 +4034,22 @@
                         </table>
                     </div>
                     
-                    <h3 style="margin-top: 30px;">Final Forces per Atom</h3>
+                    <h3 style="margin-top: 30px;">Final Atomic Properties</h3>
                     <div style="overflow-x: auto;">
-                        <table class="data-table" id="forcesDetailTable">
+                        <table class="data-table" id="atomicPropertiesTable">
                             <thead>
                                 <tr>
                                     <th>Atom</th>
+                                    <th>Site Energy (eV)</th>
+                                    <th>Magnetic (μB)</th>
                                     <th>Fx (eV/Å)</th>
                                     <th>Fy (eV/Å)</th>
                                     <th>Fz (eV/Å)</th>
                                     <th>|F| (eV/Å)</th>
                                 </tr>
                             </thead>
-                            <tbody id="forcesDetailTableBody">
-                                <!-- Forces data will be populated here -->
+                            <tbody id="atomicPropertiesTableBody">
+                                <!-- Atomic properties data will be populated here -->
                             </tbody>
                         </table>
                     </div>
