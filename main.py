@@ -1291,6 +1291,15 @@ async def chgnet_relax_structure(request: dict):
                     force_mags = [float(np.linalg.norm(f)) for f in step_forces]
                     trajectory_data["force_magnitudes"].append(force_mags)
         
+        # Save relaxed structure and CHGNet result metadata to session for later use
+        session_info['relaxed_structure'] = final_structure
+        session_info['chgnet_result'] = {
+            'fmax': fmax,
+            'converged': relaxation_info.get('converged', False),
+            'steps': relaxation_info.get('steps', 0)
+        }
+        logger.info(f"Saved relaxed structure to session {session_id[:8]}...")
+        
         return {
             "status": "success",
             "initial_prediction": initial_results,
@@ -1316,62 +1325,47 @@ async def chgnet_relax_structure(request: dict):
 @app.post("/api/generate-relaxed-structure-cif")
 async def generate_relaxed_structure_cif(request: dict):
     """
-    Generate CIF from relaxed structure with applied atomic operations
+    Generate CIF from relaxed structure - uses session-managed CHGNet results
     """
     try:
-        filename = request.get("filename")
-        operations = request.get("operations", [])
-        supercell_size = request.get("supercell_size", [1, 1, 1])
-        fmax = float(request.get("fmax", 0.1))
-        max_steps = int(request.get("max_steps", 100))
+        session_id = request.get("session_id")
         
-        if not filename:
-            raise HTTPException(status_code=400, detail="Filename is required")
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
         
+        # Get session info to access the latest relaxed structure
+        session_info = session_manager.get_session_info(session_id)
+        if not session_info:
+            raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+        
+        filename = session_info.get('filename', 'unknown')
         logger.info(f"Generating relaxed structure CIF for {filename}")
         
-        # Get the modified structure (same process as relax)
-        from pymatgen.io.cif import CifParser, CifWriter
-        cif_path = SAMPLE_CIF_DIR / safe_filename(filename)
+        # Check if relaxed structure exists in session
+        relaxed_structure = session_info.get('relaxed_structure')
+        if relaxed_structure is None:
+            # Fall back to current structure if no relaxed structure available
+            relaxed_structure = session_manager.get_current_structure(session_id)
+            if relaxed_structure is None:
+                raise HTTPException(status_code=404, detail="No structure data available in session")
+            logger.info("Using current structure (relaxed structure not found in session)")
+        else:
+            logger.info("Using relaxed structure from session")
         
-        if not cif_path.exists():
-            raise HTTPException(status_code=404, detail=f"CIF file not found: {filename}")
+        final_structure = relaxed_structure
         
-        parser = CifParser(str(cif_path))
-        structure = parser.get_structures(primitive=False)[0]
-        structure.make_supercell(supercell_size)
+        # Get operations and supercell info from session
+        operations = session_info.get('operations', [])
+        supercell_size = session_info.get('supercell_size', [1, 1, 1])
         
-        # Apply operations
-        for operation in operations:
-            if operation["action"] == "substitute":
-                site_index = operation["index"]
-                new_element = validate_element(operation["to"])
-                if site_index < len(structure.sites):
-                    old_coords = structure[site_index].frac_coords
-                    structure[site_index] = Element(new_element), old_coords
-            elif operation["action"] == "delete":
-                site_index = operation["index"]
-                if site_index < len(structure.sites):
-                    structure.remove_sites([site_index])
-        
-        # Load CHGNet and relax
-        if not CHGNET_AVAILABLE:
-            raise HTTPException(status_code=503, detail="CHGNet not available")
-        
-        from chgnet.model.model import CHGNet
-        from chgnet.model import StructOptimizer
-        
-        chgnet = CHGNet.load(model_name="0.3.0", use_device="cpu", verbose=False)
-        relaxer = StructOptimizer(model=chgnet, use_device="cpu", optimizer_class="FIRE")
-        
-        # Relax structure
-        result = relaxer.relax(structure, fmax=fmax, steps=max_steps, verbose=False, relax_cell=True)
-        final_structure = result.get("final_structure")
-        
-        if final_structure is None:
-            raise RuntimeError("Relaxation failed: no final structure returned")
+        # Get CHGNet relaxation info from session
+        chgnet_result = session_info.get('chgnet_result', {})
+        fmax = chgnet_result.get('fmax', 'N/A')
+        converged = chgnet_result.get('converged', 'N/A')
+        steps = chgnet_result.get('steps', 'N/A')
         
         # Generate CIF using pymatgen CifWriter
+        from pymatgen.io.cif import CifWriter
         cif_writer = CifWriter(
             final_structure,
             write_magmoms=False,
@@ -1388,7 +1382,7 @@ async def generate_relaxed_structure_cif(request: dict):
             f"# Original file: {filename}",
             f"# Supercell size: {size_str}",
             f"# Operations: {operations_summary}",
-            f"# CHGNet relaxation: fmax={fmax}, steps={result.get('converged', 'N/A')}",
+            f"# CHGNet relaxation: fmax={fmax}, steps={steps}, converged={converged}",
             f"# Final formula: {final_structure.formula}",
             f"# Number of atoms: {len(final_structure.sites)}",
             f"# Volume: {final_structure.volume:.2f} Ų",

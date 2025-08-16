@@ -20,10 +20,64 @@
         .header {
             background-color: #2c3e50;
             color: white;
-            text-align: center;
             padding: 20px;
             font-size: 24px;
             font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header-title {
+            margin: 0;
+        }
+
+        .header-controls {
+            display: flex;
+            gap: 10px;
+        }
+
+        .load-new-cif-btn {
+            background: linear-gradient(135deg, #3498db, #2ecc71);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 8px rgba(52, 152, 219, 0.3);
+        }
+
+        .load-new-cif-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(52, 152, 219, 0.4);
+        }
+
+        .reset-operations-btn {
+            background: linear-gradient(135deg, #f39c12, #e67e22);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            margin-bottom: 15px;
+        }
+
+        .reset-operations-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(243, 156, 18, 0.3);
+        }
+
+        .reset-operations-btn:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
         }
 
         .main-container {
@@ -944,7 +998,12 @@
 </head>
 <body>
     <div class="header">
-        CrystalNexus
+        <h1 class="header-title">CrystalNexus</h1>
+        <div class="header-controls">
+            <button class="load-new-cif-btn" id="load-new-cif-btn" onclick="openCifSelectionModal()">
+                📁 Load New CIF
+            </button>
+        </div>
     </div>
 
     <div class="main-container">
@@ -1506,8 +1565,8 @@
                 
                 let tableHTML = `<tr><td>Total |Magnetic Moment|:</td><td class="magnetic-moment">${totalMag.toFixed(3)} µB</td></tr>`;
                 magmoms.forEach((mag, i) => {
-                    // Use the same labels as Select Atom to ensure consistency
-                    const atomLabel = originalLabels && originalLabels[i] ? originalLabels[i] : `Site ${i+1}`;
+                    // Use current labels to reflect any element substitutions
+                    const atomLabel = currentLabels && currentLabels[i] ? currentLabels[i] : `Site ${i+1}`;
                     tableHTML += `<tr><td>${atomLabel}:</td><td class="magnetic-moment">${mag.toFixed(3)} µB</td></tr>`;
                 });
                 magneticTable.innerHTML = tableHTML;
@@ -1530,8 +1589,8 @@
                 
                 let tableHTML = '<table class="detail-table">';
                 siteEnergies.forEach((energy, i) => {
-                    // Use the same labels as Select Atom to ensure consistency  
-                    const atomLabel = originalLabels && originalLabels[i] ? originalLabels[i] : `Site ${i+1}`;
+                    // Use current labels to reflect any element substitutions
+                    const atomLabel = currentLabels && currentLabels[i] ? currentLabels[i] : `Site ${i+1}`;
                     tableHTML += `<tr><td>${atomLabel}:</td><td class="site-energy">${energy.toFixed(3)} eV</td></tr>`;
                 });
                 tableHTML += '</table>';
@@ -1723,65 +1782,236 @@
         }
 
         async function updateRelaxed3DVisualization() {
+            // Performance tracking
+            const debugStartTime = performance.now();
+            const debugTimestamp = new Date().toISOString();
+            
+            console.log('════════════════════════════════════════');
+            console.log(`🚀 RELAXED 3D VISUALIZATION UPDATE START - ${debugTimestamp}`);
+            console.log('════════════════════════════════════════');
+            
+            // System state validation
+            console.log('🔍 SYSTEM STATE VALIDATION:');
+            console.log(`  ├─ viewer3D exists: ${!!window.viewer3D}`);
+            console.log(`  ├─ currentFilename: ${window.currentFilename}`);
+            console.log(`  ├─ currentSupercellSize: ${JSON.stringify(window.currentSupercellSize)}`);
+            console.log(`  ├─ sessionId: ${window.sessionId}`);
+            console.log(`  ├─ atomicOperations count: ${window.atomicOperations?.length || 0}`);
+            console.log(`  └─ browser: ${navigator.userAgent}`);
+            
             if (!window.viewer3D || !window.currentFilename || !window.currentSupercellSize) {
-                console.log('3D viewer or structure parameters not available for relaxed structure update');
+                console.warn('⚠️ VALIDATION FAILED: Missing required parameters');
+                console.log('  └─ Aborting relaxed structure update');
                 return;
             }
             
             try {
-                console.log('🔄 Updating 3D visualization with relaxed structure');
+                console.log('🔄 STARTING 3D VISUALIZATION UPDATE PROCESS');
                 
+                // Prepare request data with validation
                 const requestData = {
-                    filename: window.currentFilename,
-                    supercell_size: window.currentSupercellSize,
-                    operations: window.atomicOperations || [],
-                    fmax: parseFloat(document.getElementById('fmax-input').value),
-                    max_steps: parseInt(document.getElementById('max-steps-input').value)
+                    session_id: window.sessionId
                 };
+                console.log('📋 REQUEST DATA PREPARED:');
+                console.log(`  └─ ${JSON.stringify(requestData, null, 2)}`);
                 
-                console.log('📡 Requesting relaxed structure CIF from API...');
+                // Network request timing
+                const apiStartTime = performance.now();
+                console.log('📡 INITIATING API CALL TO /api/generate-relaxed-structure-cif');
+                console.log(`  ├─ Timestamp: ${new Date().toISOString()}`);
+                console.log(`  └─ Payload size: ${JSON.stringify(requestData).length} bytes`);
+                
                 const response = await fetch('/api/generate-relaxed-structure-cif', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(requestData)
                 });
                 
-                console.log(`📡 Response status: ${response.status} ${response.statusText}`);
+                const apiDuration = performance.now() - apiStartTime;
+                console.log('📡 API RESPONSE RECEIVED:');
+                console.log(`  ├─ Status: ${response.status} ${response.statusText}`);
+                console.log(`  ├─ Response time: ${apiDuration.toFixed(2)}ms`);
+                console.log(`  ├─ Content-Type: ${response.headers.get('content-type')}`);
+                console.log(`  ├─ Content-Length: ${response.headers.get('content-length') || 'unknown'}`);
+                console.log(`  └─ Headers: ${JSON.stringify(Object.fromEntries(response.headers))}`);
                 
                 if (!response.ok) {
+                    console.error('❌ API ERROR DETECTED:');
                     const errorText = await response.text();
+                    console.error(`  ├─ Error text length: ${errorText.length}`);
+                    console.error(`  ├─ Error text preview: ${errorText.substring(0, 500)}`);
+                    console.error(`  └─ Full error text: ${errorText}`);
                     throw new Error(`HTTP ${response.status}: ${errorText}`);
                 }
                 
+                // CIF data processing
+                const cifProcessStart = performance.now();
+                console.log('📄 PROCESSING CIF DATA:');
                 const cifData = await response.text();
-                console.log(`📄 Generated relaxed CIF data: ${cifData.length} characters`);
+                const cifProcessDuration = performance.now() - cifProcessStart;
                 
-                // Update 3D viewer with relaxed structure
-                console.log('🗑️ Clearing existing models');
+                console.log(`  ├─ CIF data length: ${cifData.length} characters`);
+                console.log(`  ├─ Processing time: ${cifProcessDuration.toFixed(2)}ms`);
+                console.log(`  ├─ First 300 chars: ${cifData.substring(0, 300)}`);
+                console.log(`  ├─ Contains "data_": ${cifData.includes('data_')}`);
+                console.log(`  ├─ Contains "loop_": ${cifData.includes('loop_')}`);
+                console.log(`  ├─ Contains "_atom_site": ${cifData.includes('_atom_site')}`);
+                console.log(`  └─ Line count: ${cifData.split('\n').length}`);
+                
+                // Enhanced CIF validation
+                if (!cifData || cifData.length < 100) {
+                    console.error('❌ CIF VALIDATION FAILED:');
+                    console.error(`  ├─ Data length: ${cifData?.length || 0}`);
+                    console.error(`  ├─ Is null/undefined: ${!cifData}`);
+                    console.error(`  └─ Content preview: "${cifData?.substring(0, 100) || 'EMPTY'}"`);
+                    throw new Error(`Invalid CIF data: ${cifData?.length || 0} characters`);
+                }
+                
+                // 3Dmol processing with detailed logging
+                console.log('🎮 3DMOL PROCESSING:');
+                console.log('  ├─ Step 1: Clearing existing models');
+                const clearStart = performance.now();
+                
+                // Check current state before clearing with compatibility layer
+                const modelsBeforeClear = getViewerModelCount(window.viewer3D);
+                console.log(`  │   ├─ Models before clear: ${modelsBeforeClear}`);
+                
                 window.viewer3D.clear();
+                const clearDuration = performance.now() - clearStart;
                 
-                console.log('➕ Adding relaxed structure CIF model');
-                window.viewer3D.addModel(cifData, 'cif');
+                const modelsAfterClear = getViewerModelCount(window.viewer3D);
+                console.log(`  │   ├─ Models after clear: ${modelsAfterClear}`);
+                console.log(`  │   └─ Clear duration: ${clearDuration.toFixed(2)}ms`);
                 
-                console.log('🎨 Setting ball-and-stick style');
+                console.log('  ├─ Step 2: Adding CIF model');
+                const addModelStart = performance.now();
+                try {
+                    const modelResult = window.viewer3D.addModel(cifData, 'cif');
+                    const addModelDuration = performance.now() - addModelStart;
+                    
+                    // Safe logging of modelResult (avoid circular reference)
+                    let modelResultInfo = 'unknown';
+                    try {
+                        if (modelResult === null) {
+                            modelResultInfo = 'null';
+                        } else if (modelResult === undefined) {
+                            modelResultInfo = 'undefined';
+                        } else if (typeof modelResult === 'object') {
+                            // Get basic info without circular reference
+                            const keys = Object.keys(modelResult || {});
+                            const type = modelResult.constructor ? modelResult.constructor.name : 'Object';
+                            modelResultInfo = `${type} with ${keys.length} properties: [${keys.slice(0, 5).join(', ')}${keys.length > 5 ? '...' : ''}]`;
+                        } else {
+                            modelResultInfo = String(modelResult);
+                        }
+                    } catch (e) {
+                        modelResultInfo = `[object - unable to serialize: ${e.message}]`;
+                    }
+                    
+                    console.log(`  │   ├─ addModel result: ${modelResultInfo}`);
+                    console.log(`  │   ├─ Add model duration: ${addModelDuration.toFixed(2)}ms`);
+                    const modelsAfterAdd = getViewerModelCount(window.viewer3D);
+                    console.log(`  │   └─ Models after add: ${modelsAfterAdd}`);
+                    
+                    if (modelsAfterAdd === 0) {
+                        console.error('❌ NO MODELS ADDED TO VIEWER:');
+                        console.error(`  ├─ Current model count: ${modelsAfterAdd}`);
+                        console.error(`  ├─ addModel return value: ${modelResultInfo}`);
+                        console.error(`  ├─ CIF data valid: ${!!cifData && cifData.length > 100}`);
+                        console.error(`  └─ Viewer3D methods: ${Object.getOwnPropertyNames(Object.getPrototypeOf(window.viewer3D)).slice(0, 10).join(', ')}`);
+                        throw new Error('Failed to add CIF model to 3Dmol viewer');
+                    }
+                } catch (addModelError) {
+                    console.error('❌ ERROR IN addModel:');
+                    console.error(`  ├─ Error message: ${addModelError.message}`);
+                    console.error(`  ├─ Error stack: ${addModelError.stack}`);
+                    console.error(`  └─ CIF data starts with: ${cifData.substring(0, 100)}`);
+                    throw addModelError;
+                }
+                
+                console.log('  ├─ Step 3: Setting visual style');
+                const styleStart = performance.now();
                 window.viewer3D.setStyle({}, { 
                     sphere: { scale: 0.3 }, 
                     stick: { radius: 0.1 } 
                 });
+                const styleDuration = performance.now() - styleStart;
+                console.log(`  │   └─ Style duration: ${styleDuration.toFixed(2)}ms`);
                 
-                console.log('📦 Adding unit cell');
+                console.log('  ├─ Step 4: Adding unit cell');
+                const unitCellStart = performance.now();
                 window.viewer3D.addUnitCell();
+                const unitCellDuration = performance.now() - unitCellStart;
+                console.log(`  │   └─ Unit cell duration: ${unitCellDuration.toFixed(2)}ms`);
                 
-                console.log('🔍 Zooming and rendering');
+                console.log('  ├─ Step 5: Zooming and rendering');
+                const renderStart = performance.now();
                 window.viewer3D.zoomTo();
                 window.viewer3D.render();
+                const renderDuration = performance.now() - renderStart;
+                console.log(`  │   └─ Render duration: ${renderDuration.toFixed(2)}ms`);
                 
-                console.log(`✅ 3D structure updated with relaxed geometry`);
+                console.log('  └─ Step 6: Adding status label');
+                addStructureStatusLabel('relaxed', 'Relaxed Structure');
+                
+                // Final validation
+                const finalModelCount = getViewerModelCount(window.viewer3D);
+                const totalDuration = performance.now() - debugStartTime;
+                
+                console.log('✅ 3D VISUALIZATION UPDATE COMPLETED SUCCESSFULLY:');
+                console.log(`  ├─ Final model count: ${finalModelCount}`);
+                console.log(`  ├─ Total duration: ${totalDuration.toFixed(2)}ms`);
+                console.log(`  ├─ API call: ${apiDuration.toFixed(2)}ms`);
+                console.log(`  ├─ CIF processing: ${cifProcessDuration.toFixed(2)}ms`);
+                console.log(`  └─ 3Dmol operations: ${(totalDuration - apiDuration - cifProcessDuration).toFixed(2)}ms`);
+                console.log('════════════════════════════════════════');
                 
             } catch (error) {
-                console.error('❌ Error updating relaxed 3D visualization:', error);
+                const errorDuration = performance.now() - debugStartTime;
+                console.error('════════════════════════════════════════');
+                console.error('❌ RELAXED 3D VISUALIZATION UPDATE FAILED');
+                console.error('════════════════════════════════════════');
+                console.error('🔍 ERROR ANALYSIS:');
+                console.error(`  ├─ Error type: ${error.constructor.name}`);
+                console.error(`  ├─ Error message: ${error.message}`);
+                console.error(`  ├─ Error stack: ${error.stack}`);
+                console.error(`  ├─ Time to failure: ${errorDuration.toFixed(2)}ms`);
+                console.error(`  └─ Timestamp: ${new Date().toISOString()}`);
                 
-                showNotification('Failed to update 3D visualization with relaxed structure', 'warning');
+                console.error('🖥️ SYSTEM STATE AT ERROR:');
+                console.error(`  ├─ viewer3D exists: ${!!window.viewer3D}`);
+                console.error(`  ├─ viewer3D models: ${window.viewer3D ? getViewerModelCount(window.viewer3D) : 'N/A'}`);
+                console.error(`  ├─ sessionId: ${window.sessionId}`);
+                console.error(`  ├─ currentFilename: ${window.currentFilename}`);
+                console.error(`  ├─ currentSupercellSize: ${JSON.stringify(window.currentSupercellSize)}`);
+                console.error(`  ├─ DOM container exists: ${!!document.getElementById('3dmol-viewer')}`);
+                console.error(`  ├─ Network status: ${navigator.onLine ? 'online' : 'offline'}`);
+                console.error(`  └─ Memory usage: ${performance.memory ? `${(performance.memory.usedJSHeapSize/1048576).toFixed(2)}MB` : 'N/A'}`);
+                
+                // Clear 3D display to avoid showing incorrect structure
+                if (window.viewer3D) {
+                    console.warn('🧹 CLEANING UP 3D VIEWER');
+                    window.viewer3D.clear();
+                    
+                    // Show clear error message in 3D viewer
+                    const container = document.getElementById('3dmol-viewer');
+                    if (container) {
+                        console.warn('📺 DISPLAYING ERROR MESSAGE IN 3D CONTAINER');
+                        container.innerHTML = `
+                            <div style="display: flex; align-items: center; justify-content: center; height: 100%; background: #f8f9fa; border: 2px dashed #dc3545;">
+                                <div style="text-align: center; color: #dc3545; font-size: 14px;">
+                                    <div style="font-weight: bold; margin-bottom: 10px;">⚠️ Failed to Display Relaxed Structure</div>
+                                    <div>Could not retrieve accurate structure data</div>
+                                    <div style="font-size: 12px; margin-top: 5px; color: #6c757d;">CHGNet calculation completed but 3D display unavailable</div>
+                                    <div style="font-size: 10px; margin-top: 10px; color: #868e96;">Error: ${error.message}</div>
+                                </div>
+                            </div>
+                        `;
+                    }
+                }
+                
+                showNotification('Failed to display relaxed structure. Calculation data is valid.', 'warning');
+                console.error('════════════════════════════════════════');
             }
         }
 
@@ -2007,6 +2237,10 @@
             ).join('');
             
             operationsElement.innerHTML = `
+                <button class="reset-operations-btn" id="reset-operations-btn" disabled title="Reset to supercell state">
+                    🔄 Reset Operations
+                </button>
+                
                 <div class="element-selector">
                     <label for="element-dropdown">Select Atom to Modify:</label>
                     <select id="element-dropdown">
@@ -2030,9 +2264,6 @@
                     <button class="execute-button" id="execute-btn" disabled>
                         Execute
                     </button>
-                    <button class="reset-button" id="reset-btn" disabled title="Reset to original structure">
-                        ↺ Reset
-                    </button>
                 </div>
             `;
             
@@ -2044,11 +2275,11 @@
             const atomDropdown = document.getElementById('element-dropdown');
             const operationSelect = document.getElementById('substitute-element');
             const executeBtn = document.getElementById('execute-btn');
-            const resetBtn = document.getElementById('reset-btn');
+            const resetOperationsBtn = document.getElementById('reset-operations-btn');
             
-            // Enable reset button if original data exists
-            if (resetBtn && originalSupercellData && originalLabels.length > 0) {
-                resetBtn.disabled = false;
+            // Enable reset operations button if original data exists
+            if (resetOperationsBtn && originalSupercellData && originalLabels.length > 0) {
+                resetOperationsBtn.disabled = false;
             }
             
             atomDropdown.addEventListener('change', function() {
@@ -2089,8 +2320,8 @@
                 }
             });
             
-            // Reset button listener
-            resetBtn.addEventListener('click', function(event) {
+            // Reset Operations button listener
+            resetOperationsBtn.addEventListener('click', function(event) {
                 event.preventDefault();
                 resetToOriginalStructure();
             });
@@ -2371,25 +2602,63 @@
             
             console.log('✅ 3D viewer container created');
             
-            // Load 3Dmol.js and initialize viewer
-            loadScript('https://3dmol.org/build/3Dmol.js', function() {
-                console.log('✅ 3Dmol.js loaded successfully');
-                
-                const element = document.getElementById('3dmol-viewer');
-                if (!element) {
-                    console.error('❌ 3dmol-viewer element not found');
-                    return;
+            // Use already loaded 3Dmol.js from HTML script tag
+            if (typeof $3Dmol === 'undefined') {
+                console.error('❌ 3Dmol.js not loaded. Check script tag in HTML head.');
+                return;
+            }
+            
+            console.log('✅ 3Dmol.js already loaded via script tag');
+            
+            const element = document.getElementById('3dmol-viewer');
+            if (!element) {
+                console.error('❌ 3dmol-viewer element not found');
+                return;
+            }
+            
+            // Create 3Dmol viewer with white background
+            const config = { backgroundColor: 'white' };
+            window.viewer3D = $3Dmol.createViewer(element, config);
+            
+            console.log('✅ 3Dmol.js viewer initialized');
+            console.log(`✅ Available methods: ${Object.getOwnPropertyNames(window.viewer3D).filter(m => typeof window.viewer3D[m] === 'function').slice(0, 10).join(', ')}`);
+            
+            // Load supercell visualization
+            loadSupercellVisualization();
+        }
+
+        // 3Dmol.js API compatibility layer for different versions
+        function getViewerModelCount(viewer) {
+            try {
+                // Try different possible method names across 3Dmol.js versions
+                if (typeof viewer.getNumModels === 'function') {
+                    return viewer.getNumModels();
+                }
+                if (typeof viewer.getModelCount === 'function') {
+                    return viewer.getModelCount();
+                }
+                if (typeof viewer.numModels === 'number') {
+                    return viewer.numModels;
+                }
+                if (viewer.models && Array.isArray(viewer.models)) {
+                    return viewer.models.length;
+                }
+                if (viewer.model && viewer.model.length) {
+                    return viewer.model.length;
                 }
                 
-                // Create 3Dmol viewer with white background
-                const config = { backgroundColor: 'white' };
-                window.viewer3D = $3Dmol.createViewer(element, config);
+                // Fallback: check internal structure
+                console.warn('⚠️ Unknown 3Dmol.js API version, using fallback method');
+                const methods = Object.getOwnPropertyNames(viewer);
+                console.log(`📋 Available viewer properties/methods: ${methods.slice(0, 20).join(', ')}`);
                 
-                console.log('✅ 3Dmol.js viewer initialized');
+                // Return 1 if viewer exists and has been initialized, 0 otherwise
+                return viewer ? 1 : 0;
                 
-                // Load supercell visualization
-                loadSupercellVisualization();
-            });
+            } catch (error) {
+                console.error('❌ Error in getViewerModelCount:', error);
+                return 0;
+            }
         }
 
         function loadScript(src, callback) {
@@ -2469,7 +2738,10 @@
                 window.viewer3D.zoomTo();
                 window.viewer3D.render();
                 
+                // Add status label for supercell
                 const sizeStr = window.currentSupercellSize.join('x');
+                addStructureStatusLabel('supercell', `Supercell (${sizeStr})`);
+                
                 console.log('✅ Successfully loaded 3D supercell visualization');
                 
             } catch (error) {
@@ -2545,31 +2817,60 @@
                 window.viewer3D.zoomTo();
                 window.viewer3D.render();
                 
+                // Add status label for modified structure
                 const operationsText = window.atomicOperations.length > 0 
                     ? `Modified (${window.atomicOperations.length} ops)` 
-                    : 'Original';
+                    : 'Original Structure';
+                addStructureStatusLabel('modified', operationsText);
+                
                 console.log(`✅ 3D structure updated with ${window.atomicOperations.length} operations`);
                 
             } catch (error) {
                 console.error('❌ Error updating 3D visualization:', error);
                 
-                // Show error in status
-                const container = document.getElementById('3dmol-viewer');
-                if (container && error.message.includes('404')) {
-                    // Add overlay message about API issue
-                    const errorDiv = document.createElement('div');
-                    errorDiv.style.cssText = `
-                        position: absolute; top: 10px; right: 10px; z-index: 100;
-                        background: rgba(231, 76, 60, 0.9); color: white; padding: 8px; border-radius: 4px;
-                        font-size: 12px; max-width: 200px;
-                    `;
-                    errorDiv.innerHTML = `<strong>3D Update Failed</strong><br>API Error: ${error.message}`;
+                // Clear 3D display to avoid showing incorrect structure
+                if (window.viewer3D) {
+                    window.viewer3D.clear();
                     
-                    const existing = container.querySelector('div[style*="position: absolute"]');
-                    if (existing) existing.remove();
-                    container.appendChild(errorDiv);
+                    // Show clear error message in 3D viewer
+                    const container = document.getElementById('3dmol-viewer');
+                    if (container) {
+                        container.innerHTML = `
+                            <div style="display: flex; align-items: center; justify-content: center; height: 100%; background: #f8f9fa; border: 2px dashed #ffc107;">
+                                <div style="text-align: center; color: #856404; font-size: 14px;">
+                                    <div style="font-weight: bold; margin-bottom: 10px;">⚠️ Failed to Display Structure</div>
+                                    <div>Could not retrieve accurate structure data</div>
+                                    <div style="font-size: 12px; margin-top: 5px; color: #6c757d;">Operations are recorded but 3D display unavailable</div>
+                                </div>
+                            </div>
+                        `;
+                    }
                 }
+                
+                showNotification('Failed to display structure. Operation data is preserved.', 'warning');
             }
+        }
+
+        function addStructureStatusLabel(type, label) {
+            const container = document.getElementById('3dmol-viewer');
+            if (!container) return;
+            
+            // Remove existing status label
+            const existing = container.querySelector('.structure-status-label');
+            if (existing) existing.remove();
+            
+            // Add new status label
+            const statusDiv = document.createElement('div');
+            statusDiv.className = 'structure-status-label';
+            statusDiv.style.cssText = `
+                position: absolute; top: 10px; left: 10px; z-index: 100;
+                background: ${type === 'relaxed' ? 'rgba(40, 167, 69, 0.9)' : 'rgba(23, 162, 184, 0.9)'};
+                color: white; padding: 6px 12px; border-radius: 4px;
+                font-size: 12px; font-weight: 500;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            `;
+            statusDiv.textContent = label;
+            container.appendChild(statusDiv);
         }
 
         async function recalculateDensityWithPymatgen(formula, volume, latticeParameters) {
@@ -2725,6 +3026,15 @@
             const modal = document.getElementById('analysisModal');
             modal.style.display = 'none';
             document.removeEventListener('keydown', handleModalKeydown);
+        }
+
+        function openCifSelectionModal() {
+            // Clear all current data and reset application state
+            clearAll();
+            
+            // Show the CIF selection modal
+            const modal = document.getElementById('cifModal');
+            modal.style.display = 'block';
         }
 
         function handleModalKeydown(event) {
@@ -2883,7 +3193,7 @@
             const forces = data.final_prediction.forces_eV_per_A;
             forces.forEach((force, i) => {
                 const magnitude = Math.sqrt(force[0]*force[0] + force[1]*force[1] + force[2]*force[2]);
-                const atomLabel = `Atom ${i+1}`;
+                const atomLabel = currentLabels && currentLabels[i] ? currentLabels[i] : `Atom ${i+1}`;
                 
                 const row = document.createElement('tr');
                 row.innerHTML = `
