@@ -1222,6 +1222,12 @@
                         <div class="result-item" id="energy-item">
                             <div class="result-summary">
                                 <span id="energy-summary">⚡ Energy: - eV/atom</span>
+                                <button class="detail-btn" onclick="toggleDetail('energy')" id="energy-detail-btn" style="display: none;">Details ▼</button>
+                            </div>
+                            <div class="detail-drawer" id="energy-detail" style="display: none;">
+                                <div class="expandable-data" id="energy-details-table">
+                                    <!-- Energy details will be populated here -->
+                                </div>
                             </div>
                         </div>
 
@@ -1238,18 +1244,6 @@
                             </div>
                         </div>
 
-                        <!-- Site Energies Result Item -->
-                        <div class="result-item" id="site-energies-item" style="display: none;">
-                            <div class="result-summary">
-                                <span id="site-energies-summary">⚛️ Site Energies: - eV</span>
-                                <button class="detail-btn" onclick="toggleDetail('site-energies')">Details ▼</button>
-                            </div>
-                            <div class="detail-drawer" id="site-energies-detail" style="display: none;">
-                                <div class="expandable-data" id="site-energies-table">
-                                    <!-- Site energies details will be populated here -->
-                                </div>
-                            </div>
-                        </div>
 
                         
                         <!-- Detailed Analysis Button -->
@@ -1644,8 +1638,7 @@
             // Display Magnetic Properties
             displayMagneticResults(prediction);
             
-            // Display Site Energies
-            displaySiteEnergiesResults(prediction);
+            // Site Energies are now displayed in Energy details
             
             // Store data for analysis modal
             if (isRelaxation) {
@@ -1656,6 +1649,8 @@
         
         function displayEnergyResults(initialPred, finalPred, isRelaxation) {
             const energySummary = document.getElementById('energy-summary');
+            const energyDetailBtn = document.getElementById('energy-detail-btn');
+            const energyDetailsTable = document.getElementById('energy-details-table');
             
             if (finalPred && finalPred.energy_eV_per_atom !== undefined) {
                 const energyPerAtom = finalPred.energy_eV_per_atom;
@@ -1669,6 +1664,34 @@
                 
                 // Summary: Show final energy values only (most important information)
                 energySummary.innerHTML = `⚡ Energy: <span class="${energyPerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${totalEnergy.toFixed(2)} eV</span> (${energyPerAtom.toFixed(3)} eV/atom, ${numAtoms} atoms)`;
+                
+                // Show Details button
+                energyDetailBtn.style.display = 'inline-block';
+                
+                // Prepare Site Energies details table
+                let detailsHTML = '';
+                
+                // Add Site Energies if available
+                if (finalPred.site_energies_eV) {
+                    const siteEnergies = finalPred.site_energies_eV;
+                    detailsHTML += '<table class="detail-table">';
+                    detailsHTML += '<tr><th colspan="2">Site Energies</th></tr>';
+                    
+                    siteEnergies.forEach((energy, i) => {
+                        // Use current labels to reflect any element substitutions
+                        const atomLabel = currentLabels && currentLabels[i] ? currentLabels[i] : `Site ${i+1}`;
+                        detailsHTML += `<tr><td>${atomLabel}:</td><td class="site-energy">${energy.toFixed(6)} eV</td></tr>`;
+                    });
+                    
+                    // Add verification
+                    const siteSum = siteEnergies.reduce((sum, e) => sum + e, 0);
+                    detailsHTML += `<tr><td style="padding-top: 10px;"><em>Sum of site energies:</em></td><td style="padding-top: 10px;"><em>${siteSum.toFixed(6)} eV</em></td></tr>`;
+                    detailsHTML += '</table>';
+                } else {
+                    detailsHTML = '<p>Site energies not available for this calculation.</p>';
+                }
+                
+                energyDetailsTable.innerHTML = detailsHTML;
                 
                 // Store detailed energy data for Detailed Analysis modal
                 if (!window.energyAnalysisData) window.energyAnalysisData = {};
@@ -1698,6 +1721,7 @@
                 }
             } else {
                 energySummary.textContent = '⚡ Energy: Not available';
+                energyDetailBtn.style.display = 'none';
                 window.energyAnalysisData = null;
             }
         }
@@ -1726,30 +1750,7 @@
             }
         }
         
-        function displaySiteEnergiesResults(prediction) {
-            const siteItem = document.getElementById('site-energies-item');
-            const siteSummary = document.getElementById('site-energies-summary');
-            const siteTable = document.getElementById('site-energies-table');
-            
-            if (prediction.site_energies_eV) {
-                const siteEnergies = prediction.site_energies_eV;
-                const avgEnergy = siteEnergies.reduce((sum, e) => sum + e, 0) / siteEnergies.length;
-                
-                siteItem.style.display = 'block';
-                siteSummary.innerHTML = `⚛️ Site Energies: <span class="site-energy">Avg ${avgEnergy.toFixed(2)} eV</span>`;
-                
-                let tableHTML = '<table class="detail-table">';
-                siteEnergies.forEach((energy, i) => {
-                    // Use current labels to reflect any element substitutions
-                    const atomLabel = currentLabels && currentLabels[i] ? currentLabels[i] : `Site ${i+1}`;
-                    tableHTML += `<tr><td>${atomLabel}:</td><td class="site-energy">${energy.toFixed(3)} eV</td></tr>`;
-                });
-                tableHTML += '</table>';
-                siteTable.innerHTML = tableHTML;
-            } else {
-                siteItem.style.display = 'none';
-            }
-        }
+        // displaySiteEnergiesResults function removed - Site Energies are now displayed in Energy details
         
         function displayForcesResults(prediction) {
             const forcesSummary = document.getElementById('forces-summary');
