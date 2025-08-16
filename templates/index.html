@@ -890,6 +890,60 @@
         .energy-negative {
             color: #27ae60;
         }
+        
+        /* Energy Analysis Tab Styling */
+        .energy-analysis-container {
+            padding: 20px;
+        }
+        
+        .energy-comparison-table {
+            margin-bottom: 30px;
+        }
+        
+        .analysis-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        
+        .analysis-table th {
+            background-color: #f8f9fa;
+            padding: 12px;
+            text-align: left;
+            border: 1px solid #dee2e6;
+            font-weight: 600;
+        }
+        
+        .analysis-table td {
+            padding: 10px 12px;
+            border: 1px solid #dee2e6;
+            vertical-align: top;
+        }
+        
+        .analysis-table tr:nth-child(even) {
+            background-color: #f8f9fa;
+        }
+        
+        .energy-insights {
+            background-color: #f8fbff;
+            border: 1px solid #d6eaf8;
+            border-radius: 6px;
+            padding: 20px;
+        }
+        
+        .energy-insights h4 {
+            margin-top: 0;
+            color: #2c3e50;
+        }
+        
+        .energy-insights ul {
+            margin-bottom: 0;
+        }
+        
+        .energy-insights li {
+            margin-bottom: 8px;
+            line-height: 1.5;
+        }
 
         .convergence-success {
             color: #27ae60;
@@ -1168,12 +1222,6 @@
                         <div class="result-item" id="energy-item">
                             <div class="result-summary">
                                 <span id="energy-summary">⚡ Energy: - eV/atom</span>
-                                <button class="detail-btn" onclick="toggleDetail('energy')">Details ▼</button>
-                            </div>
-                            <div class="detail-drawer" id="energy-detail" style="display: none;">
-                                <table class="detail-table" id="energy-table">
-                                    <!-- Energy details will be populated here -->
-                                </table>
                             </div>
                         </div>
 
@@ -1600,7 +1648,7 @@
             displaySiteEnergiesResults(prediction);
             
             // Store data for analysis modal
-            if (isRelaxation && data.trajectory_data) {
+            if (isRelaxation) {
                 currentAnalysisData = data;
                 document.getElementById('detailAnalysisBtn').style.display = 'block';
             }
@@ -1608,7 +1656,6 @@
         
         function displayEnergyResults(initialPred, finalPred, isRelaxation) {
             const energySummary = document.getElementById('energy-summary');
-            const energyTable = document.getElementById('energy-table');
             
             if (finalPred && finalPred.energy_eV_per_atom !== undefined) {
                 const energyPerAtom = finalPred.energy_eV_per_atom;
@@ -1620,38 +1667,38 @@
                 }
                 const totalEnergy = energyPerAtom * numAtoms;
                 
-                // Summary: Show both total energy and per-atom energy
+                // Summary: Show final energy values only (most important information)
                 energySummary.innerHTML = `⚡ Energy: <span class="${energyPerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${totalEnergy.toFixed(2)} eV</span> (${energyPerAtom.toFixed(3)} eV/atom, ${numAtoms} atoms)`;
                 
-                let tableHTML = `
-                    <tr><td>Number of atoms:</td><td>${numAtoms}</td></tr>
-                    <tr><td>Total Energy:</td><td><span class="${energyPerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${totalEnergy.toFixed(6)} eV</span></td></tr>
-                    <tr><td>Energy per atom:</td><td><span class="${energyPerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${energyPerAtom.toFixed(6)} eV/atom</span></td></tr>
-                `;
+                // Store detailed energy data for Detailed Analysis modal
+                if (!window.energyAnalysisData) window.energyAnalysisData = {};
+                window.energyAnalysisData = {
+                    final: {
+                        totalEnergy: totalEnergy,
+                        energyPerAtom: energyPerAtom,
+                        numAtoms: numAtoms
+                    }
+                };
                 
+                // Add initial data if available (for relaxation)
                 if (isRelaxation && initialPred && initialPred.energy_eV_per_atom !== undefined) {
                     const initialEnergyPerAtom = initialPred.energy_eV_per_atom;
                     const initialTotalEnergy = initialEnergyPerAtom * numAtoms;
-                    const totalEnergyChange = totalEnergy - initialTotalEnergy;
-                    const energyChangePerAtom = energyPerAtom - initialEnergyPerAtom;
                     
-                    tableHTML = `
-                        <tr><td>Number of atoms:</td><td>${numAtoms}</td></tr>
-                        <tr><td colspan="2"><strong>Initial Structure:</strong></td></tr>
-                        <tr><td>Initial Total Energy:</td><td>${initialTotalEnergy.toFixed(6)} eV</td></tr>
-                        <tr><td>Initial Energy/atom:</td><td>${initialEnergyPerAtom.toFixed(6)} eV/atom</td></tr>
-                        <tr><td colspan="2"><strong>Final Structure:</strong></td></tr>
-                        <tr><td>Final Total Energy:</td><td><span class="${energyPerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${totalEnergy.toFixed(6)} eV</span></td></tr>
-                        <tr><td>Final Energy/atom:</td><td><span class="${energyPerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${energyPerAtom.toFixed(6)} eV/atom</span></td></tr>
-                        <tr><td colspan="2"><strong>Energy Changes:</strong></td></tr>
-                        <tr><td>Total Energy Change:</td><td><span class="${totalEnergyChange < 0 ? 'energy-negative' : 'energy-positive'}">${totalEnergyChange >= 0 ? '+' : ''}${totalEnergyChange.toFixed(6)} eV</span></td></tr>
-                        <tr><td>Energy Change/atom:</td><td><span class="${energyChangePerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${energyChangePerAtom >= 0 ? '+' : ''}${energyChangePerAtom.toFixed(6)} eV/atom</span></td></tr>
-                    `;
+                    window.energyAnalysisData.initial = {
+                        totalEnergy: initialTotalEnergy,
+                        energyPerAtom: initialEnergyPerAtom,
+                        numAtoms: numAtoms
+                    };
+                    
+                    window.energyAnalysisData.changes = {
+                        totalEnergyChange: totalEnergy - initialTotalEnergy,
+                        energyChangePerAtom: energyPerAtom - initialEnergyPerAtom
+                    };
                 }
-                energyTable.innerHTML = tableHTML;
             } else {
                 energySummary.textContent = '⚡ Energy: Not available';
-                energyTable.innerHTML = '<tr><td>Energy:</td><td>Not available</td></tr>';
+                window.energyAnalysisData = null;
             }
         }
         
@@ -3187,6 +3234,8 @@
             // Load tab-specific content
             if (tabName === 'charts' && currentAnalysisData) {
                 drawCharts(currentAnalysisData);
+            } else if (tabName === 'energy') {
+                populateEnergyAnalysisTab();
             }
         }
 
@@ -3198,6 +3247,76 @@
             populateDataTab(data);
             
             // Charts will be drawn when tab is selected
+        }
+        
+        function populateEnergyAnalysisTab() {
+            const energyTableBody = document.getElementById('energy-analysis-body');
+            const energyInsights = document.getElementById('energy-insights');
+            
+            if (!window.energyAnalysisData) {
+                energyTableBody.innerHTML = '<tr><td colspan="4">No energy data available</td></tr>';
+                energyInsights.innerHTML = '<p>Energy analysis requires completed relaxation calculation.</p>';
+                return;
+            }
+            
+            const data = window.energyAnalysisData;
+            let tableHTML = '';
+            
+            // Always show final structure data
+            if (data.final) {
+                tableHTML += `
+                    <tr>
+                        <td><strong>Number of atoms</strong></td>
+                        <td>${data.initial ? data.initial.numAtoms : '-'}</td>
+                        <td>${data.final.numAtoms}</td>
+                        <td>-</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Total Energy (eV)</strong></td>
+                        <td>${data.initial ? data.initial.totalEnergy.toFixed(6) : '-'}</td>
+                        <td><span class="${data.final.energyPerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${data.final.totalEnergy.toFixed(6)}</span></td>
+                        <td>${data.changes ? getChangeDisplay(data.changes.totalEnergyChange) : '-'}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Energy per atom (eV/atom)</strong></td>
+                        <td>${data.initial ? data.initial.energyPerAtom.toFixed(6) : '-'}</td>
+                        <td><span class="${data.final.energyPerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${data.final.energyPerAtom.toFixed(6)}</span></td>
+                        <td>${data.changes ? getChangeDisplay(data.changes.energyChangePerAtom) : '-'}</td>
+                    </tr>
+                `;
+            }
+            
+            energyTableBody.innerHTML = tableHTML;
+            
+            // Generate insights
+            let insights = '<h4>Energy Analysis Insights:</h4><ul>';
+            
+            if (data.final) {
+                const stability = data.final.energyPerAtom < 0 ? 'stable' : 'unstable';
+                insights += `<li><strong>Stability:</strong> The final structure is ${stability} with ${data.final.energyPerAtom.toFixed(3)} eV/atom.</li>`;
+                
+                if (data.changes) {
+                    const energyChange = data.changes.energyChangePerAtom;
+                    if (Math.abs(energyChange) < 0.001) {
+                        insights += '<li><strong>Relaxation:</strong> Very small energy change indicates structure was already well-optimized.</li>';
+                    } else if (energyChange < 0) {
+                        insights += '<li><strong>Relaxation:</strong> Energy decreased during relaxation, indicating structural optimization was successful.</li>';
+                    } else {
+                        insights += '<li><strong>Relaxation:</strong> Energy increased during relaxation, which may indicate numerical issues or metastable states.</li>';
+                    }
+                }
+                
+                insights += `<li><strong>System Size:</strong> Calculation performed on ${data.final.numAtoms} atoms.</li>`;
+            }
+            
+            insights += '</ul>';
+            energyInsights.innerHTML = insights;
+        }
+        
+        function getChangeDisplay(change) {
+            const sign = change >= 0 ? '+' : '';
+            const colorClass = change < 0 ? 'energy-negative' : 'energy-positive';
+            return `<span class="${colorClass}">${sign}${change.toFixed(6)}</span>`;
         }
 
         function populateSummaryTab(data) {
@@ -3509,6 +3628,7 @@
             
             <div class="tab-container">
                 <button class="tab-button active" onclick="switchTab('summary')">Summary</button>
+                <button class="tab-button" onclick="switchTab('energy')">Energy Analysis</button>
                 <button class="tab-button" onclick="switchTab('charts')">Charts</button>
                 <button class="tab-button" onclick="switchTab('data')">Data</button>
             </div>
@@ -3536,6 +3656,33 @@
                         <div class="summary-card">
                             <h3>Calculation Settings</h3>
                             <div id="summary-settings">-</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Energy Analysis Tab -->
+                <div id="energy-tab" class="tab-pane">
+                    <div class="energy-analysis-container">
+                        <h3>Comprehensive Energy Analysis</h3>
+                        
+                        <div class="energy-comparison-table">
+                            <table class="analysis-table" id="energy-analysis-table">
+                                <thead>
+                                    <tr>
+                                        <th>Property</th>
+                                        <th>Initial Structure</th>
+                                        <th>Final Structure</th>
+                                        <th>Change</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="energy-analysis-body">
+                                    <!-- Energy analysis data will be populated here -->
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <div class="energy-insights" id="energy-insights">
+                            <!-- Energy insights and interpretation will be populated here -->
                         </div>
                     </div>
                 </div>
