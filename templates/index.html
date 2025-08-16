@@ -1040,55 +1040,6 @@
                             </div>
                         </div>
 
-                        <!-- Others Result Item (Forces, Stress, Relaxation) -->
-                        <div class="result-item" id="others-item">
-                            <div class="result-summary">
-                                <span id="others-summary">📎 Others: Forces, Stress, Relaxation</span>
-                                <button class="detail-btn" onclick="toggleDetail('others')">Details ▼</button>
-                            </div>
-                            <div class="detail-drawer" id="others-detail" style="display: none;">
-                                
-                                <!-- Forces Subsection -->
-                                <div class="result-item" style="margin-bottom: 15px; background-color: #ffffff;">
-                                    <div class="result-summary">
-                                        <span id="forces-summary">💪 Forces: Max - eV/Å</span>
-                                        <button class="detail-btn" onclick="toggleDetail('forces')">Details ▼</button>
-                                    </div>
-                                    <div class="detail-drawer" id="forces-detail" style="display: none;">
-                                        <div class="expandable-data" id="forces-table">
-                                            <!-- Forces details will be populated here -->
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <!-- Stress Subsection -->
-                                <div class="result-item" style="margin-bottom: 15px; background-color: #ffffff;">
-                                    <div class="result-summary">
-                                        <span id="stress-summary">🔧 Stress: Max - GPa</span>
-                                        <button class="detail-btn" onclick="toggleDetail('stress')">Details ▼</button>
-                                    </div>
-                                    <div class="detail-drawer" id="stress-detail" style="display: none;">
-                                        <table class="detail-table" id="stress-table">
-                                            <!-- Stress details will be populated here -->
-                                        </table>
-                                    </div>
-                                </div>
-
-                                <!-- Relaxation Subsection -->
-                                <div class="result-item" id="relaxation-item" style="margin-bottom: 15px; background-color: #ffffff; display: none;">
-                                    <div class="result-summary">
-                                        <span id="relaxation-summary">📈 Relaxation: - steps</span>
-                                        <button class="detail-btn" onclick="toggleDetail('relaxation')">Details ▼</button>
-                                    </div>
-                                    <div class="detail-drawer" id="relaxation-detail" style="display: none;">
-                                        <table class="detail-table" id="relaxation-table">
-                                            <!-- Relaxation details will be populated here -->
-                                        </table>
-                                    </div>
-                                </div>
-                                
-                            </div>
-                        </div>
                         
                         <!-- Detailed Analysis Button -->
                         <button class="detail-analysis-btn" id="detailAnalysisBtn" onclick="openAnalysisModal()" style="display: none;">
@@ -1485,21 +1436,6 @@
             // Display Site Energies
             displaySiteEnergiesResults(prediction);
             
-            // Display Forces
-            displayForcesResults(prediction);
-            
-            // Display Stress
-            displayStressResults(prediction);
-            
-            // Display Others section (always show)
-            displayOthersSection();
-            
-            // Display Relaxation Info and update Others summary
-            if (isRelaxation && data.relaxation_info) {
-                displayRelaxationResults(data.relaxation_info);
-                updateOthersSummaryWithConvergence(data.relaxation_info);
-            }
-            
             // Store data for analysis modal
             if (isRelaxation && data.trajectory_data) {
                 currentAnalysisData = data;
@@ -1677,54 +1613,7 @@
             }
         }
         
-        function displayOthersSection() {
-            const othersItem = document.getElementById('others-item');
-            const othersSummary = document.getElementById('others-summary');
-            othersItem.style.display = 'block';
-            
-            // Default summary
-            othersSummary.innerHTML = '📎 Others: Forces, Stress, Relaxation';
-        }
         
-        function updateOthersSummaryWithConvergence(relaxationInfo) {
-            const othersSummary = document.getElementById('others-summary');
-            if (relaxationInfo && !relaxationInfo.converged) {
-                // Show "Not converged" prominently if relaxation did not converge
-                othersSummary.innerHTML = '📎 Others: Forces, Stress, Relaxation - <span class="convergence-failed">Not converged</span>';
-            } else if (relaxationInfo && relaxationInfo.converged) {
-                // Show "Converged" if relaxation converged
-                othersSummary.innerHTML = '📎 Others: Forces, Stress, Relaxation - <span class="convergence-success">Converged</span>';
-            }
-        }
-        
-        function displayRelaxationResults(relaxationInfo) {
-            const relaxationItem = document.getElementById('relaxation-item');
-            const relaxationSummary = document.getElementById('relaxation-summary');
-            const relaxationTable = document.getElementById('relaxation-table');
-            
-            relaxationItem.style.display = 'block';
-            
-            const converged = relaxationInfo.converged;
-            const steps = relaxationInfo.steps;
-            const status = converged ? 'Converged' : 'Not converged';
-            
-            relaxationSummary.innerHTML = `📈 Relaxation: ${steps} steps, <span class="${converged ? 'convergence-success' : 'convergence-failed'}">${status}</span>`;
-            
-            let tableHTML = `
-                <tr><td>Steps:</td><td>${steps}</td></tr>
-                <tr><td>Converged:</td><td><span class="${converged ? 'convergence-success' : 'convergence-failed'}">${status}</span></td></tr>
-                <tr><td>Force tolerance:</td><td>${relaxationInfo.fmax} eV/Å</td></tr>
-                <tr><td>Max steps:</td><td>${relaxationInfo.max_steps}</td></tr>
-            `;
-            
-            if (relaxationInfo.energy_change_eV_per_atom !== null) {
-                const energyChange = relaxationInfo.energy_change_eV_per_atom;
-                const sign = energyChange < 0 ? '' : '+';
-                tableHTML += `<tr><td>Energy Change:</td><td><span class="${energyChange < 0 ? 'energy-negative' : 'energy-positive'}">${sign}${energyChange.toFixed(6)} eV/atom</span></td></tr>`;
-            }
-            
-            relaxationTable.innerHTML = tableHTML;
-        }
 
 
 
@@ -2915,6 +2804,24 @@
                 forcesEl.innerHTML = 'Force data not available';
             }
             
+            // Stress Information
+            const stressEl = document.getElementById('summary-stress');
+            if (data.final_prediction?.stress_GPa) {
+                const stress = data.final_prediction.stress_GPa;
+                const maxStress = Math.max(...stress.flat().map(Math.abs));
+                const trace = stress[0][0] + stress[1][1] + stress[2][2];
+                
+                stressEl.innerHTML = `
+                    <div>Max Stress: ${maxStress.toFixed(3)} GPa</div>
+                    <div>Trace: ${trace.toFixed(3)} GPa</div>
+                    <div style="font-size: 14px; margin-top: 5px;">
+                        Hydrostatic: ${(trace/3).toFixed(3)} GPa
+                    </div>
+                `;
+            } else {
+                stressEl.innerHTML = 'Stress data not available';
+            }
+            
             // Settings
             settingsEl.innerHTML = `
                 <div>Force Tolerance: ${data.relaxation_info?.fmax || 'N/A'} eV/Å</div>
@@ -2953,6 +2860,67 @@
                     <td>${energy.toFixed(6)}</td>
                     <td>${maxForce}</td>
                     <td>${rmsForce}</td>
+                `;
+                tableBody.appendChild(row);
+            });
+            
+            // Populate Forces Detail Table
+            populateForcesDetailTable(data);
+            
+            // Populate Stress Detail Table
+            populateStressDetailTable(data);
+        }
+        
+        function populateForcesDetailTable(data) {
+            const tableBody = document.getElementById('forcesDetailTableBody');
+            tableBody.innerHTML = '';
+            
+            if (!data.final_prediction?.forces_eV_per_A) {
+                tableBody.innerHTML = '<tr><td colspan="5">Force data not available</td></tr>';
+                return;
+            }
+            
+            const forces = data.final_prediction.forces_eV_per_A;
+            forces.forEach((force, i) => {
+                const magnitude = Math.sqrt(force[0]*force[0] + force[1]*force[1] + force[2]*force[2]);
+                const atomLabel = `Atom ${i+1}`;
+                
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${atomLabel}</td>
+                    <td>${force[0].toFixed(6)}</td>
+                    <td>${force[1].toFixed(6)}</td>
+                    <td>${force[2].toFixed(6)}</td>
+                    <td>${magnitude.toFixed(6)}</td>
+                `;
+                tableBody.appendChild(row);
+            });
+        }
+        
+        function populateStressDetailTable(data) {
+            const tableBody = document.getElementById('stressDetailTableBody');
+            tableBody.innerHTML = '';
+            
+            if (!data.final_prediction?.stress_GPa) {
+                tableBody.innerHTML = '<tr><td colspan="2">Stress data not available</td></tr>';
+                return;
+            }
+            
+            const stress = data.final_prediction.stress_GPa;
+            const components = [
+                ['σxx', stress[0][0]],
+                ['σyy', stress[1][1]],
+                ['σzz', stress[2][2]],
+                ['σxy', stress[0][1]],
+                ['σxz', stress[0][2]],
+                ['σyz', stress[1][2]]
+            ];
+            
+            components.forEach(([component, value]) => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${component}</td>
+                    <td>${value.toFixed(6)}</td>
                 `;
                 tableBody.appendChild(row);
             });
@@ -3120,6 +3088,10 @@
                             <div id="summary-forces">-</div>
                         </div>
                         <div class="summary-card">
+                            <h3>Stress Information</h3>
+                            <div id="summary-stress">-</div>
+                        </div>
+                        <div class="summary-card">
                             <h3>Calculation Settings</h3>
                             <div id="summary-settings">-</div>
                         </div>
@@ -3153,6 +3125,39 @@
                             </thead>
                             <tbody id="trajectoryTableBody">
                                 <!-- Data will be populated here -->
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <h3 style="margin-top: 30px;">Final Forces per Atom</h3>
+                    <div style="overflow-x: auto;">
+                        <table class="data-table" id="forcesDetailTable">
+                            <thead>
+                                <tr>
+                                    <th>Atom</th>
+                                    <th>Fx (eV/Å)</th>
+                                    <th>Fy (eV/Å)</th>
+                                    <th>Fz (eV/Å)</th>
+                                    <th>|F| (eV/Å)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="forcesDetailTableBody">
+                                <!-- Forces data will be populated here -->
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <h3 style="margin-top: 30px;">Stress Tensor</h3>
+                    <div style="overflow-x: auto;">
+                        <table class="data-table" id="stressDetailTable">
+                            <thead>
+                                <tr>
+                                    <th>Component</th>
+                                    <th>Value (GPa)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="stressDetailTableBody">
+                                <!-- Stress data will be populated here -->
                             </tbody>
                         </table>
                     </div>

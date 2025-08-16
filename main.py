@@ -562,8 +562,12 @@ async def get_element_labels(data: dict):
         element_counts = {}
         
         for i, site in enumerate(structure.sites):
-            # Get clean element symbol using PyMatGen's standard method
-            element = str(site.specie.element)
+            # Get clean element symbol using PyMatGen's unified approach
+            # This handles both Element and Species types consistently
+            if hasattr(site.specie, 'element'):
+                element = str(site.specie.element)  # Species type (e.g., Ba2+ -> Ba)
+            else:
+                element = str(site.specie)          # Element type (e.g., Nd -> Nd)
             
             # Count occurrences of each element to generate unique labels
             if element not in element_counts:
