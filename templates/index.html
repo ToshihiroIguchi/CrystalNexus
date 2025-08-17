@@ -1229,6 +1229,21 @@
             to { opacity: 1; transform: translateY(0); }
         }
 
+        .control-btn:hover {
+            background: rgba(255, 255, 255, 1) !important;
+            transform: scale(1.05) !important;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+        }
+
+        .control-btn.active {
+            background: rgba(66, 165, 245, 0.9) !important;
+            color: white !important;
+        }
+
+        .control-btn.active:hover {
+            background: rgba(66, 165, 245, 1) !important;
+        }
+
     </style>
 </head>
 <body>
@@ -1397,17 +1412,17 @@
     </div>
 
     <script>
-        let currentCrystalData = null;
+        window.currentCrystalData = null;
         let supercellData = null;
         let chgnetElements = [];
         
-        // Immutable original data (never changes after modal closes)
-        let originalSupercellData = null;
-        let originalLabels = [];
+        // Immutable original data (never changes after modal closes) - GLOBAL for robust system
+        window.originalSupercellData = null;
+        window.originalLabels = [];
         
-        // Current working data (modified by operations)
-        let currentStructureData = null;
-        let currentLabels = [];
+        // Current working data (modified by operations) - GLOBAL for robust system
+        window.currentStructureData = null;
+        window.currentLabels = [];
         
         // Atomic operations history for complete 3D visualization
         window.atomicOperations = [];
@@ -1503,7 +1518,7 @@
 
             // Confirm button
             document.getElementById('confirmButton').addEventListener('click', function() {
-                if (currentCrystalData) {
+                if (window.currentCrystalData) {
                     createSupercell();
                 }
             });
@@ -1566,7 +1581,7 @@
         }
 
         function displayCrystalInfo(data) {
-            currentCrystalData = data;
+            window.currentCrystalData = data;
             
             const infoContent = document.getElementById('infoContent');
             // Display information in the same order as ZrO2test.py
@@ -1761,7 +1776,7 @@
                     
                     siteEnergies.forEach((energy, i) => {
                         // Use current labels to reflect any element substitutions
-                        const atomLabel = currentLabels && currentLabels[i] ? currentLabels[i] : `Site ${i+1}`;
+                        const atomLabel = window.currentLabels && window.currentLabels[i] ? window.currentLabels[i] : `Site ${i+1}`;
                         detailsHTML += `<tr><td>${atomLabel}:</td><td class="site-energy">${energy.toFixed(6)} eV</td></tr>`;
                     });
                     
@@ -1871,6 +1886,244 @@
             }
         }
 
+        // ===== ROBUST 3D DISPLAY CONTROL =====
+        // Maximum robustness approach - complete rebuild every time
+        
+        // Global state variables for maximum reliability - Initial state ON
+        let displayUnitCell = true;
+        let displayAxes = true;
+        let currentStructureCif = null;
+        
+        // Simplified: toggle both unit cell and axes together
+        function toggleStructureElementsRobust() {
+            // Toggle both together for simplicity
+            displayUnitCell = !displayUnitCell;
+            displayAxes = displayUnitCell; // Keep them synchronized
+            console.log(`🧊 ROBUST: Structure elements toggled to: ${displayUnitCell ? 'ON' : 'OFF'}`);
+            performCompleteRebuild('STRUCTURE_ELEMENTS_TOGGLE');
+        }
+        
+        // Complete rebuild function - maximum robustness
+        async function performCompleteRebuild(reason) {
+            console.log(`🔄 ROBUST: Starting complete rebuild due to: ${reason}`);
+            console.log(`   Target state - UnitCell: ${displayUnitCell}, Axes: ${displayAxes}`);
+            
+            try {
+                // Step 1: Complete destruction with redundant operations
+                await performCompleteDestruction();
+                
+                // Step 2: Rebuild structure from scratch
+                await rebuildStructureFromScratch();
+                
+                // Step 3: Add conditional elements (simplified - axes included in unit cell)
+                if (displayUnitCell) {
+                    await addUnitCellRobust();
+                }
+                
+                // Step 4: Final rendering
+                window.viewer3D.render();
+                
+                // Step 5: Sync button states
+                syncButtonStates();
+                
+                console.log('✅ ROBUST: Complete rebuild finished successfully');
+                
+            } catch (error) {
+                console.error('❌ ROBUST: Rebuild failed:', error);
+                handleRebuildError(error, reason);
+            }
+        }
+        
+        // Complete destruction with redundant operations
+        async function performCompleteDestruction() {
+            console.log('🗑️ ROBUST: Performing complete destruction...');
+            
+            if (!window.viewer3D) {
+                console.warn('⚠️ ROBUST: No 3D viewer available');
+                return;
+            }
+            
+            // Multiple attempts to clear everything
+            for (let attempt = 0; attempt < 3; attempt++) {
+                try {
+                    console.log(`   Destruction attempt ${attempt + 1}/3`);
+                    
+                    // Clear all content
+                    window.viewer3D.clear();
+                    
+                    // Additional cleanup attempts
+                    try { window.viewer3D.removeAllModels(); } catch (e) {}
+                    try { window.viewer3D.removeAllShapes(); } catch (e) {}
+                    try { window.viewer3D.removeAllLabels(); } catch (e) {}
+                    try { window.viewer3D.removeAllSurfaces(); } catch (e) {}
+                    try { window.viewer3D.removeUnitCell(); } catch (e) {}
+                    
+                } catch (error) {
+                    console.warn(`   Destruction attempt ${attempt + 1} error:`, error);
+                }
+            }
+            
+            console.log('🧹 ROBUST: Complete destruction finished');
+        }
+        
+        // Rebuild structure from scratch
+        async function rebuildStructureFromScratch() {
+            console.log('🔧 ROBUST: Rebuilding structure from scratch...');
+            
+            try {
+                // Get fresh structure data from server
+                if (!currentStructureCif) {
+                    await fetchCurrentStructureData();
+                }
+                
+                if (!currentStructureCif) {
+                    throw new Error('No structure data available');
+                }
+                
+                // Add structure model
+                window.viewer3D.addModel(currentStructureCif, 'cif');
+                
+                // Apply standard styling
+                window.viewer3D.setStyle({}, { 
+                    sphere: { scale: 0.3 }, 
+                    stick: { radius: 0.1 } 
+                });
+                
+                window.viewer3D.zoomTo();
+                
+                console.log('🏗️ ROBUST: Structure rebuilt successfully');
+                
+            } catch (error) {
+                console.error('❌ ROBUST: Structure rebuild failed:', error);
+                throw error;
+            }
+        }
+        
+        // Fetch current structure data
+        async function fetchCurrentStructureData() {
+            console.log('🌐 ROBUST: Fetching current structure data...');
+            
+            try {
+                if (!window.currentFilename || !window.currentSupercellSize) {
+                    throw new Error('Missing required parameters');
+                }
+                
+                const params = {
+                    filename: window.currentFilename,
+                    supercell_size: window.currentSupercellSize,
+                    operations: window.atomicOperations || []
+                };
+                
+                console.log('   Parameters:', params);
+                
+                const response = await fetch('/api/generate-modified-structure-cif', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(params)
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`API error: ${response.status} ${response.statusText}`);
+                }
+                
+                currentStructureCif = await response.text();
+                console.log(`📄 ROBUST: Structure data fetched (${currentStructureCif.length} chars)`);
+                
+            } catch (error) {
+                console.error('❌ ROBUST: Failed to fetch structure data:', error);
+                throw error;
+            }
+        }
+        
+        // Add unit cell with robust approach
+        async function addUnitCellRobust() {
+            console.log('📦 ROBUST: Adding unit cell...');
+            
+            try {
+                // Multiple attempts to ensure unit cell is added
+                for (let attempt = 0; attempt < 3; attempt++) {
+                    try {
+                        window.viewer3D.addUnitCell({
+                            box: {
+                                color: 'black',
+                                opacity: 0.8,
+                                linewidth: 2
+                            },
+                            axes: displayAxes  // Include axes based on state
+                        });
+                        console.log(`   Unit cell added successfully (attempt ${attempt + 1})`);
+                        break;
+                    } catch (error) {
+                        console.warn(`   Unit cell attempt ${attempt + 1} failed:`, error);
+                        if (attempt === 2) throw error;
+                    }
+                }
+                
+            } catch (error) {
+                console.error('❌ ROBUST: Failed to add unit cell:', error);
+                throw error;
+            }
+        }
+        
+        // Simplified: Using 3Dmol.js built-in axes functionality through addUnitCell options
+        
+        // Sync button states with current display state
+        function syncButtonStates() {
+            console.log('🔄 ROBUST: Syncing button states...');
+            
+            const structureBtn = document.getElementById('structureBtn');
+            
+            if (structureBtn) {
+                if (displayUnitCell) {
+                    structureBtn.classList.add('active');
+                    structureBtn.title = 'Hide Unit Cell & Axes';
+                    structureBtn.style.background = 'rgba(76, 175, 80, 0.9)'; // Green when active
+                } else {
+                    structureBtn.classList.remove('active');
+                    structureBtn.title = 'Show Unit Cell & Axes';
+                    structureBtn.style.background = 'rgba(255, 255, 255, 0.9)'; // White when inactive
+                }
+            }
+            
+            console.log(`   Button state synced - Structure elements: ${displayUnitCell ? 'ON' : 'OFF'}`);
+        }
+        
+        // Handle rebuild errors
+        function handleRebuildError(error, reason) {
+            console.error(`🚨 ROBUST: Rebuild error [${reason}]:`, error);
+            
+            // Reset states on error to initial ON state
+            displayUnitCell = true;
+            displayAxes = true;
+            syncButtonStates();
+            
+            // Show error message to user
+            const container = document.getElementById('3dmol-viewer');
+            if (container) {
+                container.innerHTML = `
+                    <div style="display: flex; align-items: center; justify-content: center; height: 100%; background: #f8f9fa; color: #dc3545; text-align: center; padding: 20px;">
+                        <div>
+                            <div style="font-size: 24px; margin-bottom: 10px;">⚠️</div>
+                            <div style="font-weight: bold; margin-bottom: 5px;">3D Display Error</div>
+                            <div style="font-size: 14px;">Failed to rebuild 3D display. Please refresh the page.</div>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+        
+        // Lattice data functions removed - using 3Dmol.js built-in functionality
+        
+        // Reset robust display state
+        function resetRobustDisplayState() {
+            console.log('🔄 ROBUST: Resetting display state...');
+            displayUnitCell = true;  // Initial state ON
+            displayAxes = true;      // Initial state ON
+            currentStructureCif = null;
+            console.log(`   State reset - UnitCell: ${displayUnitCell}, Axes: ${displayAxes}`);
+            syncButtonStates();
+        }
+
         function displayMagneticResults(prediction) {
             const magneticItem = document.getElementById('magnetic-item');
             const magneticSummary = document.getElementById('magnetic-summary');
@@ -1886,7 +2139,7 @@
                 let tableHTML = `<tr><td>Total |Magnetic Moment|:</td><td class="magnetic-moment">${totalMag.toFixed(3)} µB</td></tr>`;
                 magmoms.forEach((mag, i) => {
                     // Use current labels to reflect any element substitutions
-                    const atomLabel = currentLabels && currentLabels[i] ? currentLabels[i] : `Site ${i+1}`;
+                    const atomLabel = window.currentLabels && window.currentLabels[i] ? window.currentLabels[i] : `Site ${i+1}`;
                     tableHTML += `<tr><td>${atomLabel}:</td><td class="magnetic-moment">${mag.toFixed(3)} µB</td></tr>`;
                 });
                 magneticTable.innerHTML = tableHTML;
@@ -2078,6 +2331,10 @@
                 </div>
             `;
             
+            // Lattice data setup removed - using 3Dmol.js built-in functionality
+            // Clear structure cache to force reload with new relaxed data
+            currentStructureCif = null;
+            
             console.log('✅ Structure information updated with relaxed data');
         }
 
@@ -2238,9 +2495,21 @@
                 const styleDuration = performance.now() - styleStart;
                 console.log(`  │   └─ Style duration: ${styleDuration.toFixed(2)}ms`);
                 
-                console.log('  ├─ Step 4: Adding unit cell');
+                console.log('  ├─ Step 4: Adding unit cell (conditional)');
                 const unitCellStart = performance.now();
-                window.viewer3D.addUnitCell();
+                if (displayUnitCell) {
+                    window.viewer3D.addUnitCell({
+                        box: {
+                            color: 'black',
+                            opacity: 0.8,
+                            linewidth: 2
+                        },
+                        axes: displayAxes  // Include axes based on state
+                    });
+                    console.log(`  │   └─ Unit cell added (state: ON)`);
+                } else {
+                    console.log(`  │   └─ Unit cell skipped (state: OFF)`);
+                }
                 const unitCellDuration = performance.now() - unitCellStart;
                 console.log(`  │   └─ Unit cell duration: ${unitCellDuration.toFixed(2)}ms`);
                 
@@ -2316,7 +2585,7 @@
         }
 
         function resetAnalysis() {
-            currentCrystalData = null;
+            window.currentCrystalData = null;
             const crystalInfoElement = document.getElementById('crystalInfo');
             crystalInfoElement.classList.add('hidden');
             crystalInfoElement.classList.remove('detailed');
@@ -2337,7 +2606,7 @@
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        crystal_data: currentCrystalData,
+                        crystal_data: window.currentCrystalData,
                         supercell_size: [parseInt(aSize), parseInt(bSize), parseInt(cSize)],
                         session_id: window.sessionId
                     })
@@ -2349,18 +2618,18 @@
                 supercellData = result;
                 
                 // Store immutable original data (never changes)
-                originalSupercellData = JSON.parse(JSON.stringify(result));
+                window.originalSupercellData = JSON.parse(JSON.stringify(result));
                 
                 // Set initial density for supercell if not provided
-                if (!originalSupercellData.supercell_info.density) {
-                    originalSupercellData.supercell_info.density = currentCrystalData.density;
+                if (!window.originalSupercellData.supercell_info.density) {
+                    window.originalSupercellData.supercell_info.density = window.currentCrystalData.density;
                 }
                 
                 // Initialize current working data (will be modified by operations)
-                currentStructureData = JSON.parse(JSON.stringify(originalSupercellData));
+                window.currentStructureData = JSON.parse(JSON.stringify(window.originalSupercellData));
                 
                 // Store filename and supercell size for 3D visualization
-                window.currentFilename = currentCrystalData.filename;
+                window.currentFilename = window.currentCrystalData.filename;
                 window.currentSupercellSize = [parseInt(aSize), parseInt(bSize), parseInt(cSize)];
                 
                 // Initialize empty operations history
@@ -2372,6 +2641,9 @@
                 // Complete data deletion and display supercell info
                 completeDataDeletion();
                 displaySupercellInfo();
+                
+                // Robust 3D control system initialization simplified
+                resetRobustDisplayState();
                 
                 // Load element labels for operations
                 loadElementLabels();
@@ -2396,7 +2668,7 @@
 
         function completeDataDeletion() {
             // Complete deletion of original crystal data
-            currentCrystalData = null;
+            window.currentCrystalData = null;
             
             // Clear all modal content
             document.getElementById('infoContent').innerHTML = '';
@@ -2419,7 +2691,7 @@
             }
             
             console.log('✓ Complete data deletion performed:');
-            console.log('  - currentCrystalData set to null');
+            console.log('  - window.currentCrystalData set to null');
             console.log('  - Modal content cleared');
             console.log('  - Form inputs reset');
             console.log('  - Temporary variables deleted');
@@ -2508,17 +2780,17 @@
                 const labelData = await response.json();
                 
                 // Store immutable original labels
-                originalLabels = [...labelData.labels];
+                window.originalLabels = [...labelData.labels];
                 
                 // Initialize current working labels
-                currentLabels = [...labelData.labels];
+                window.currentLabels = [...labelData.labels];
                 
-                displayStructureOperations(currentLabels);
+                displayStructureOperations(window.currentLabels);
                 
             } catch (error) {
                 console.error('Error loading element labels:', error);
-                originalLabels = [];
-                currentLabels = [];
+                window.originalLabels = [];
+                window.currentLabels = [];
                 displayStructureOperations([]);
             }
         }
@@ -2578,7 +2850,7 @@
             const resetOperationsBtn = document.getElementById('reset-operations-btn');
             
             // Enable reset operations button if original data exists
-            if (resetOperationsBtn && originalSupercellData && originalLabels.length > 0) {
+            if (resetOperationsBtn && window.originalSupercellData && window.originalLabels.length > 0) {
                 resetOperationsBtn.disabled = false;
             }
             
@@ -2654,13 +2926,13 @@
         }
 
         async function handleSubstitution(elementLabel, newElement) {
-            if (!currentStructureData || currentLabels.length === 0) {
+            if (!window.currentStructureData || window.currentLabels.length === 0) {
                 showNotification('No structure data available for modification', 'error');
                 return;
             }
             
             // Find the atom index
-            const atomIndex = currentLabels.indexOf(elementLabel);
+            const atomIndex = window.currentLabels.indexOf(elementLabel);
             if (atomIndex === -1) {
                 showNotification(`Atom ${elementLabel} not found`, 'error');
                 return;
@@ -2693,13 +2965,13 @@
         }
 
         async function handleDeletion(elementLabel) {
-            if (!currentStructureData || currentLabels.length === 0) {
+            if (!window.currentStructureData || window.currentLabels.length === 0) {
                 showNotification('No structure data available for modification', 'error');
                 return;
             }
             
             // Find the atom index
-            const atomIndex = currentLabels.indexOf(elementLabel);
+            const atomIndex = window.currentLabels.indexOf(elementLabel);
             if (atomIndex === -1) {
                 showNotification(`Atom ${elementLabel} not found`, 'error');
                 return;
@@ -2735,30 +3007,30 @@
             const oldElement = oldLabel.replace(/\d+$/, ''); // Remove numbers to get element symbol
             
             // Update labels - replace the substituted atom label
-            currentLabels[atomIndex] = `${newElement}${atomIndex}`;
+            window.currentLabels[atomIndex] = `${newElement}${atomIndex}`;
             
             // Recalculate formula
             const newFormula = calculateNewFormula(oldElement, newElement);
-            currentStructureData.supercell_info.formula = newFormula;
+            window.currentStructureData.supercell_info.formula = newFormula;
             
             // Recalculate density using pymatgen
             const newDensity = await recalculateDensityWithPymatgen(
                 newFormula,
-                currentStructureData.supercell_info.volume,
-                currentStructureData.original_data?.lattice_parameters || {}
+                window.currentStructureData.supercell_info.volume,
+                window.currentStructureData.original_data?.lattice_parameters || {}
             );
             
             if (newDensity !== null) {
-                currentStructureData.supercell_info.density = newDensity;
+                window.currentStructureData.supercell_info.density = newDensity;
                 console.log(`Updated density: ${newDensity.toFixed(4)} g/cm³`);
             } else {
                 console.warn('Failed to recalculate density, keeping previous value');
             }
             
             // Update displays
-            supercellData = currentStructureData; // For compatibility
+            supercellData = window.currentStructureData; // For compatibility
             displaySupercellInfo();
-            displayStructureOperations(currentLabels);
+            displayStructureOperations(window.currentLabels);
             
             // Update 3D visualization
             updateStructureVisualization();
@@ -2770,47 +3042,47 @@
             const deletedElement = deletedLabel.replace(/\d+$/, ''); // Remove numbers to get element symbol
             
             // Remove from labels array
-            currentLabels.splice(atomIndex, 1);
+            window.currentLabels.splice(atomIndex, 1);
             
             // Update atom count
-            currentStructureData.supercell_info.num_sites = currentLabels.length;
+            window.currentStructureData.supercell_info.num_sites = window.currentLabels.length;
             
             // Recalculate formula
             const newFormula = calculateNewFormulaAfterDeletion(deletedElement);
-            currentStructureData.supercell_info.formula = newFormula;
+            window.currentStructureData.supercell_info.formula = newFormula;
             
             // Recalculate volume (approximation - actual volume would need structure recalculation)
-            const deletionRatio = currentLabels.length / (currentLabels.length + 1);
-            currentStructureData.supercell_info.volume *= deletionRatio;
+            const deletionRatio = window.currentLabels.length / (window.currentLabels.length + 1);
+            window.currentStructureData.supercell_info.volume *= deletionRatio;
             
             // Recalculate density using pymatgen
             const newDensity = await recalculateDensityWithPymatgen(
                 newFormula,
-                currentStructureData.supercell_info.volume,
-                currentStructureData.original_data?.lattice_parameters || {}
+                window.currentStructureData.supercell_info.volume,
+                window.currentStructureData.original_data?.lattice_parameters || {}
             );
             
             if (newDensity !== null) {
-                currentStructureData.supercell_info.density = newDensity;
+                window.currentStructureData.supercell_info.density = newDensity;
                 console.log(`Updated density: ${newDensity.toFixed(4)} g/cm³`);
             } else {
                 console.warn('Failed to recalculate density, keeping previous value');
             }
             
             // Update displays
-            supercellData = currentStructureData; // For compatibility
+            supercellData = window.currentStructureData; // For compatibility
             displaySupercellInfo();
-            displayStructureOperations(currentLabels);
+            displayStructureOperations(window.currentLabels);
             
             // Update 3D visualization
             updateStructureVisualization();
             
             console.log(`Updated formula: ${newFormula}`);
-            console.log(`Updated atom count: ${currentLabels.length}`);
+            console.log(`Updated atom count: ${window.currentLabels.length}`);
         }
 
         function calculateNewFormula(oldElement, newElement) {
-            const currentFormula = currentStructureData.supercell_info.formula;
+            const currentFormula = window.currentStructureData.supercell_info.formula;
             
             // Parse current formula
             const elementCounts = {};
@@ -2838,7 +3110,7 @@
         }
 
         function calculateNewFormulaAfterDeletion(deletedElement) {
-            const currentFormula = currentStructureData.supercell_info.formula;
+            const currentFormula = window.currentStructureData.supercell_info.formula;
             
             // Parse current formula
             const elementCounts = {};
@@ -2865,7 +3137,7 @@
 
 
         function resetToOriginalStructure() {
-            if (!originalSupercellData || originalLabels.length === 0) {
+            if (!window.originalSupercellData || window.originalLabels.length === 0) {
                 showNotification('No original data to reset to', 'warning');
                 return;
             }
@@ -2875,20 +3147,20 @@
             console.log('📝 Cleared operation history');
             
             // Restore current working data from immutable original data
-            currentStructureData = JSON.parse(JSON.stringify(originalSupercellData));
-            currentLabels = [...originalLabels];
+            window.currentStructureData = JSON.parse(JSON.stringify(window.originalSupercellData));
+            window.currentLabels = [...window.originalLabels];
             
             // Update displays
-            supercellData = currentStructureData; // For compatibility with existing display functions
+            supercellData = window.currentStructureData; // For compatibility with existing display functions
             displaySupercellInfo();
-            displayStructureOperations(currentLabels);
+            displayStructureOperations(window.currentLabels);
             
             // Update 3D visualization
             updateStructureVisualization();
             
             console.log('✓ Structure reset to original state');
-            console.log(`  - Formula: ${currentStructureData.supercell_info.formula}`);
-            console.log(`  - Atoms: ${currentLabels.length}`);
+            console.log(`  - Formula: ${window.currentStructureData.supercell_info.formula}`);
+            console.log(`  - Atoms: ${window.currentLabels.length}`);
             showNotification('Structure reset to original state', 'info');
         }
 
@@ -2903,7 +3175,16 @@
             
             // Create 3Dmol viewer container optimized for professional crystal analysis
             container.innerHTML = `
-                <div id="3dmol-viewer" style="width: 100%; height: 100%; position: relative; border: 1px solid #ddd; background: white; min-height: 650px;"></div>
+                <div style="position: relative; width: 100%; height: 100%; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; background: white; min-height: 650px;">
+                    <div id="3dmol-viewer" style="width: 100%; height: 100%; position: relative; background: white;"></div>
+                    
+                    <!-- Simplified 3D control button -->
+                    <div class="viewer-controls" style="position: absolute; top: 10px; right: 10px; display: flex; gap: 5px; z-index: 10;">
+                        <button class="control-btn" id="structureBtn" onclick="toggleStructureElementsRobust()" title="Hide Unit Cell & Axes" style="width: 32px; height: 32px; border: none; border-radius: 6px; background: rgba(76, 175, 80, 0.9); backdrop-filter: blur(5px); cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); transition: all 0.2s ease;">
+                            🧊
+                        </button>
+                    </div>
+                </div>
             `;
             
             console.log('✅ 3D viewer container created');
@@ -3037,8 +3318,20 @@
                     stick: { radius: 0.1 } 
                 });
                 
-                console.log('📦 Adding unit cell');
-                window.viewer3D.addUnitCell();
+                console.log('📦 Adding unit cell (conditional)');
+                if (displayUnitCell) {
+                    window.viewer3D.addUnitCell({
+                        box: {
+                            color: 'black',
+                            opacity: 0.8,
+                            linewidth: 2
+                        },
+                        axes: displayAxes  // Include axes based on state
+                    });
+                    console.log('   Unit cell added (state: ON)');
+                } else {
+                    console.log('   Unit cell skipped (state: OFF)');
+                }
                 
                 console.log('🔍 Zooming and rendering');
                 window.viewer3D.zoomTo();
@@ -3116,8 +3409,20 @@
                     stick: { radius: 0.1 } 
                 });
                 
-                console.log('📦 Adding unit cell');
-                window.viewer3D.addUnitCell();
+                console.log('📦 Adding unit cell (conditional)');
+                if (displayUnitCell) {
+                    window.viewer3D.addUnitCell({
+                        box: {
+                            color: 'black',
+                            opacity: 0.8,
+                            linewidth: 2
+                        },
+                        axes: displayAxes  // Include axes based on state
+                    });
+                    console.log('   Unit cell added (state: ON)');
+                } else {
+                    console.log('   Unit cell skipped (state: OFF)');
+                }
                 
                 console.log('🔍 Zooming and rendering');
                 window.viewer3D.zoomTo();
@@ -3614,7 +3919,7 @@
             
             // Populate table rows
             for (let i = 0; i < numAtoms; i++) {
-                const atomLabel = currentLabels && currentLabels[i] ? currentLabels[i] : `Atom ${i+1}`;
+                const atomLabel = window.currentLabels && window.currentLabels[i] ? window.currentLabels[i] : `Atom ${i+1}`;
                 
                 // Site Energy
                 const siteEnergy = siteEnergies[i] !== undefined ? siteEnergies[i].toFixed(6) : '-';
