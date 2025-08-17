@@ -4665,14 +4665,33 @@
                 const energyMagneticText = generateEnergyMagneticText();
                 zip.file('energy_magnetic.txt', energyMagneticText);
                 
+                // 4. Final Atomic Properties CSV
+                console.log('Generating Final Atomic Properties CSV...');
+                const atomicPropsCSV = generateFinalAtomicPropertiesCSV();
+                zip.file('final_atomic_properties.csv', atomicPropsCSV);
+                
+                // 5. Stress Tensor CSV
+                console.log('Generating Stress Tensor CSV...');
+                const stressCSV = generateStressTensorCSV();
+                zip.file('stress_tensor.csv', stressCSV);
+                
+                // 6. Step-by-Step Trajectory CSV
+                console.log('Generating Step-by-Step Trajectory CSV...');
+                const trajectoryCSV = generateTrajectoryCSV();
+                zip.file('trajectory_data.csv', trajectoryCSV);
+                
                 // Generate and download ZIP file
                 console.log('Generating ZIP file...');
                 const content = await zip.generateAsync({type:'blob'});
                 console.log('ZIP file generated, starting download...');
                 
+                // Generate descriptive filename
+                const fileName = generateZipFileName();
+                console.log('Generated ZIP filename:', fileName);
+                
                 const link = document.createElement('a');
                 link.href = URL.createObjectURL(content);
-                link.download = 'crystal_analysis.zip';
+                link.download = fileName;
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
@@ -5137,6 +5156,188 @@
             
             console.log('No magnetic data found in display');
             return null;
+        }
+        
+        // Generate Final Atomic Properties CSV
+        function generateFinalAtomicPropertiesCSV() {
+            console.log('=== GENERATING FINAL ATOMIC PROPERTIES CSV ===');
+            console.log('Using same logic as populateAtomicPropertiesTable');
+            
+            let csv = 'Atom,Site Energy (eV),Magnetic (μB),Fx (eV/Å),Fy (eV/Å),Fz (eV/Å),|F| (eV/Å)\n';
+            
+            if (!window.currentAnalysisData?.final_prediction) {
+                console.warn('No final prediction data available');
+                csv += 'No data available,-,-,-,-,-,-\n';
+                return csv;
+            }
+            
+            const finalPred = window.currentAnalysisData.final_prediction;
+            console.log('Final prediction data:', finalPred);
+            
+            // Get data arrays (same as populateAtomicPropertiesTable)
+            const forces = finalPred.forces_eV_per_A || [];
+            const siteEnergies = finalPred.site_energies_eV || [];
+            const magmoms = finalPred.magmoms_muB || [];
+            
+            console.log('Data arrays:');
+            console.log('- forces:', forces);
+            console.log('- siteEnergies:', siteEnergies);
+            console.log('- magmoms:', magmoms);
+            
+            // Determine number of atoms (same logic as display)
+            const numAtoms = Math.max(forces.length, siteEnergies.length, magmoms.length);
+            console.log('Number of atoms:', numAtoms);
+            
+            if (numAtoms === 0) {
+                console.warn('No atomic data available');
+                csv += 'No data available,-,-,-,-,-,-\n';
+                return csv;
+            }
+            
+            // Populate CSV rows (same logic as display)
+            for (let i = 0; i < numAtoms; i++) {
+                // Atom label (same as display logic)
+                const atomLabel = window.currentLabels && window.currentLabels[i] ? window.currentLabels[i] : `Atom ${i+1}`;
+                
+                // Site Energy (same precision as display)
+                const siteEnergy = siteEnergies[i] !== undefined ? siteEnergies[i].toFixed(6) : '-';
+                
+                // Magnetic moment (same precision as display)
+                const magmom = magmoms[i] !== undefined ? magmoms[i].toFixed(3) : '-';
+                
+                // Forces (same calculation as display)
+                let fx = '-', fy = '-', fz = '-', fMag = '-';
+                if (forces[i]) {
+                    fx = forces[i][0].toFixed(6);
+                    fy = forces[i][1].toFixed(6);
+                    fz = forces[i][2].toFixed(6);
+                    const magnitude = Math.sqrt(forces[i][0]*forces[i][0] + forces[i][1]*forces[i][1] + forces[i][2]*forces[i][2]);
+                    fMag = magnitude.toFixed(6);
+                }
+                
+                csv += `${atomLabel},${siteEnergy},${magmom},${fx},${fy},${fz},${fMag}\n`;
+            }
+            
+            console.log('Generated Final Atomic Properties CSV:', csv);
+            return csv;
+        }
+        
+        // Generate Stress Tensor CSV
+        function generateStressTensorCSV() {
+            console.log('=== GENERATING STRESS TENSOR CSV ===');
+            console.log('Using same logic as populateStressDetailTable');
+            
+            let csv = 'Component,Value (GPa)\n';
+            
+            if (!window.currentAnalysisData?.final_prediction?.stress_GPa) {
+                console.warn('No stress data available');
+                csv += 'No data available,-\n';
+                return csv;
+            }
+            
+            const stress = window.currentAnalysisData.final_prediction.stress_GPa;
+            console.log('Stress data found:', stress);
+            
+            // Define components (same as display logic)
+            const components = [
+                ['σxx', stress[0][0]],
+                ['σyy', stress[1][1]],
+                ['σzz', stress[2][2]],
+                ['σxy', stress[0][1]],
+                ['σxz', stress[0][2]],
+                ['σyz', stress[1][2]]
+            ];
+            
+            // Add each component to CSV (same precision as display)
+            components.forEach(([component, value]) => {
+                csv += `${component},${value.toFixed(6)}\n`;
+            });
+            
+            console.log('Generated Stress Tensor CSV:', csv);
+            return csv;
+        }
+        
+        // Generate Step-by-Step Trajectory CSV
+        function generateTrajectoryCSV() {
+            console.log('=== GENERATING STEP-BY-STEP TRAJECTORY CSV ===');
+            console.log('Using same logic as trajectory data display');
+            
+            let csv = 'Step,Energy (eV),Max Force (eV/Å),RMS Force (eV/Å)\n';
+            
+            if (!window.currentAnalysisData?.trajectory_data?.energies?.length) {
+                console.warn('No trajectory data available');
+                csv += 'No data available,-,-,-\n';
+                return csv;
+            }
+            
+            console.log('Trajectory data found:', window.currentAnalysisData.trajectory_data);
+            
+            const energies = window.currentAnalysisData.trajectory_data.energies;
+            const forceMagnitudes = window.currentAnalysisData.trajectory_data.force_magnitudes;
+            
+            // Process each step (same logic as display)
+            energies.forEach((energy, step) => {
+                let maxForce = 'N/A';
+                let rmsForce = 'N/A';
+                
+                if (forceMagnitudes && forceMagnitudes[step]) {
+                    const stepForces = forceMagnitudes[step];
+                    // Max Force calculation (same as display)
+                    maxForce = Math.max(...stepForces).toFixed(6);
+                    // RMS Force calculation (same as display)
+                    const rms = Math.sqrt(stepForces.reduce((sum, f) => sum + f*f, 0) / stepForces.length);
+                    rmsForce = rms.toFixed(6);
+                }
+                
+                // Add to CSV (same format as display: step+1, energy.toFixed(6))
+                csv += `${step + 1},${energy.toFixed(6)},${maxForce},${rmsForce}\n`;
+            });
+            
+            console.log('Generated Step-by-Step Trajectory CSV:', csv);
+            return csv;
+        }
+        
+        // Generate descriptive ZIP filename
+        function generateZipFileName() {
+            console.log('=== GENERATING ZIP FILENAME ===');
+            
+            // Get formula and remove spaces
+            let formula = 'Unknown';
+            if (window.currentStructureInfo?.formula) {
+                formula = window.currentStructureInfo.formula.replace(/\s+/g, '');
+            } else if (window.currentAnalysisData?.relaxed_structure_info?.formula) {
+                formula = window.currentAnalysisData.relaxed_structure_info.formula.replace(/\s+/g, '');
+            }
+            
+            // Get number of atoms
+            let numAtoms = '';
+            if (window.currentStructureInfo?.num_sites) {
+                numAtoms = `${window.currentStructureInfo.num_sites}atoms`;
+            } else if (window.currentAnalysisData?.elements) {
+                numAtoms = `${window.currentAnalysisData.elements.length}atoms`;
+            }
+            
+            // Generate timestamp
+            const now = new Date();
+            const timestamp = now.getFullYear().toString() +
+                            (now.getMonth() + 1).toString().padStart(2, '0') +
+                            now.getDate().toString().padStart(2, '0') + '_' +
+                            now.getHours().toString().padStart(2, '0') +
+                            now.getMinutes().toString().padStart(2, '0') +
+                            now.getSeconds().toString().padStart(2, '0');
+            
+            // Construct filename
+            let fileName = 'CrystalNexus';
+            if (formula !== 'Unknown') {
+                fileName += `_${formula}`;
+            }
+            if (numAtoms) {
+                fileName += `_${numAtoms}`;
+            }
+            fileName += `_${timestamp}.zip`;
+            
+            console.log('Generated filename components:', {formula, numAtoms, timestamp, fileName});
+            return fileName;
         }
     </script>
 
