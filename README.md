@@ -305,7 +305,7 @@ If you use CrystalNexus in your research, please cite:
 ```bibtex
 @software{crystalnexus2025,
   title={CrystalNexus: Web-based Crystal Structure Analysis with Machine Learning},
-  author={Your Name},
+  author={Toshihiro Iguchi},
   year={2025},
   url={https://github.com/ToshihiroIguchi/CrystalNexus}
 }
@@ -321,7 +321,7 @@ If you use CrystalNexus in your research, please cite:
 
 MIT License
 
-Copyright (c) 2025 CrystalNexus
+Copyright (c) 2025 Toshihiro Iguchi
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
