@@ -1212,6 +1212,23 @@
             box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
         }
 
+        .status-message {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
+            padding: 8px 12px;
+            border-radius: 6px;
+            margin: 10px 0;
+            font-size: 14px;
+            text-align: center;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
     </style>
 </head>
 <body>
@@ -1306,6 +1323,11 @@
 
 
                         
+                        <!-- Structure Status Message -->
+                        <div class="status-message" id="structure-status" style="display: none;">
+                            ⚠️ Structure modified - Analysis required
+                        </div>
+
                         <!-- Detailed Analysis Button -->
                         <button class="detail-analysis-btn" id="detailAnalysisBtn" onclick="openAnalysisModal()" style="display: none;">
                             📊 Detailed Analysis
@@ -1786,6 +1808,69 @@
             }
         }
         
+        function resetPhysicalProperties() {
+            // Reset energy display
+            const energySummary = document.getElementById('energy-summary');
+            const energyItem = document.getElementById('energy-item');
+            const energyDetailBtn = document.getElementById('energy-detail-btn');
+            
+            if (energySummary) {
+                energySummary.textContent = '⚡ Energy: - eV/atom';
+            }
+            if (energyDetailBtn) {
+                energyDetailBtn.style.display = 'none';
+            }
+            
+            // Reset magnetic display
+            const magneticItem = document.getElementById('magnetic-item');
+            const magneticSummary = document.getElementById('magnetic-summary');
+            
+            if (magneticItem) {
+                magneticItem.style.display = 'none';
+            }
+            if (magneticSummary) {
+                magneticSummary.textContent = '🧲 Magnetic: - µB total';
+            }
+            
+            // Hide detailed analysis button
+            const detailAnalysisBtn = document.getElementById('detailAnalysisBtn');
+            if (detailAnalysisBtn) {
+                detailAnalysisBtn.style.display = 'none';
+            }
+            
+            // Show structure status message
+            const statusMessage = document.getElementById('structure-status');
+            if (statusMessage) {
+                statusMessage.style.display = 'block';
+            }
+            
+            // Highlight analyze button
+            const analyzeBtn = document.getElementById('analyze-btn');
+            if (analyzeBtn) {
+                analyzeBtn.style.background = 'linear-gradient(135deg, #e74c3c, #f39c12)';
+                analyzeBtn.style.transform = 'scale(1.02)';
+                analyzeBtn.style.boxShadow = '0 4px 12px rgba(231, 76, 60, 0.3)';
+            }
+            
+            console.log('🔄 Physical properties reset - analysis required');
+        }
+
+        function clearStatusMessage() {
+            // Hide status message
+            const statusMessage = document.getElementById('structure-status');
+            if (statusMessage) {
+                statusMessage.style.display = 'none';
+            }
+            
+            // Reset analyze button appearance
+            const analyzeBtn = document.getElementById('analyze-btn');
+            if (analyzeBtn) {
+                analyzeBtn.style.background = '';
+                analyzeBtn.style.transform = '';
+                analyzeBtn.style.boxShadow = '';
+            }
+        }
+
         function displayMagneticResults(prediction) {
             const magneticItem = document.getElementById('magnetic-item');
             const magneticSummary = document.getElementById('magnetic-summary');
@@ -1937,6 +2022,9 @@
                 await updateRelaxed3DVisualization();
                 
                 showNotification('CHGNet structure analysis completed successfully!', 'success');
+                
+                // Clear status message after successful analysis
+                clearStatusMessage();
                 
                 // Restore button to complete state
                 setCHGNetButtonState('complete');
@@ -2597,6 +2685,9 @@
             // Update session with new operations
             await updateSessionWithOperations();
             
+            // Reset physical properties after structure modification
+            resetPhysicalProperties();
+            
             console.log(`✓ Substituted ${elementLabel} → ${newElement}`);
             showNotification(`Successfully substituted ${elementLabel} → ${newElement}`, 'success');
         }
@@ -2631,6 +2722,9 @@
             
             // Update session with new operations
             await updateSessionWithOperations();
+            
+            // Reset physical properties after structure modification
+            resetPhysicalProperties();
             
             console.log(`✓ Deleted ${elementLabel}`);
             showNotification(`Successfully deleted ${elementLabel}`, 'success');
