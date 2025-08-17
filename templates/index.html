@@ -1892,6 +1892,7 @@
         // Global state variables for maximum reliability - Initial state ON
         let displayUnitCell = true;
         let displayAxes = true;
+        let displayBonds = true;
         let currentStructureCif = null;
         
         // Simplified: toggle both unit cell and axes together
@@ -1901,6 +1902,40 @@
             displayAxes = displayUnitCell; // Keep them synchronized
             console.log(`🧊 ROBUST: Structure elements toggled to: ${displayUnitCell ? 'ON' : 'OFF'}`);
             performCompleteRebuild('STRUCTURE_ELEMENTS_TOGGLE');
+        }
+        
+        // Independent bond toggle function
+        function toggleBondsRobust() {
+            displayBonds = !displayBonds;
+            console.log(`🔗 ROBUST: Bonds toggled to: ${displayBonds ? 'ON' : 'OFF'}`);
+            updateMoleculeStyleRobust();
+        }
+        
+        // Update molecule style based on bond display state
+        function updateMoleculeStyleRobust() {
+            if (!window.viewer3D) {
+                console.warn('⚠️ ROBUST: No 3D viewer available for style update');
+                return;
+            }
+            
+            try {
+                const style = { sphere: { scale: 0.3 } };
+                if (displayBonds) {
+                    style.stick = { radius: 0.1 };
+                    console.log('🔗 ROBUST: Applying style with bonds');
+                } else {
+                    console.log('🔗 ROBUST: Applying style without bonds');
+                }
+                
+                window.viewer3D.setStyle({}, style);
+                window.viewer3D.render();
+                syncBondButtonState();
+                
+                console.log(`✅ ROBUST: Style updated - Bonds: ${displayBonds ? 'ON' : 'OFF'}`);
+                
+            } catch (error) {
+                console.error('❌ ROBUST: Failed to update molecule style:', error);
+            }
         }
         
         // Complete rebuild function - maximum robustness
@@ -1983,11 +2018,8 @@
                 // Add structure model
                 window.viewer3D.addModel(currentStructureCif, 'cif');
                 
-                // Apply standard styling
-                window.viewer3D.setStyle({}, { 
-                    sphere: { scale: 0.3 }, 
-                    stick: { radius: 0.1 } 
-                });
+                // Apply standard styling with bond state consideration
+                updateMoleculeStyleRobust();
                 
                 window.viewer3D.zoomTo();
                 
@@ -2085,7 +2117,27 @@
                 }
             }
             
-            console.log(`   Button state synced - Structure elements: ${displayUnitCell ? 'ON' : 'OFF'}`);
+            // Also sync bond button
+            syncBondButtonState();
+            
+            console.log(`   Button states synced - Structure: ${displayUnitCell ? 'ON' : 'OFF'}, Bonds: ${displayBonds ? 'ON' : 'OFF'}`);
+        }
+        
+        // Sync bond button state
+        function syncBondButtonState() {
+            const bondBtn = document.getElementById('bondBtn');
+            
+            if (bondBtn) {
+                if (displayBonds) {
+                    bondBtn.classList.add('active');
+                    bondBtn.title = 'Hide Bonds';
+                    bondBtn.style.background = 'rgba(76, 175, 80, 0.9)'; // Green when active
+                } else {
+                    bondBtn.classList.remove('active');
+                    bondBtn.title = 'Show Bonds';
+                    bondBtn.style.background = 'rgba(255, 255, 255, 0.9)'; // White when inactive
+                }
+            }
         }
         
         // Handle rebuild errors
@@ -2095,6 +2147,7 @@
             // Reset states on error to initial ON state
             displayUnitCell = true;
             displayAxes = true;
+            displayBonds = true;
             syncButtonStates();
             
             // Show error message to user
@@ -2119,8 +2172,9 @@
             console.log('🔄 ROBUST: Resetting display state...');
             displayUnitCell = true;  // Initial state ON
             displayAxes = true;      // Initial state ON
+            displayBonds = true;     // Initial state ON
             currentStructureCif = null;
-            console.log(`   State reset - UnitCell: ${displayUnitCell}, Axes: ${displayAxes}`);
+            console.log(`   State reset - UnitCell: ${displayUnitCell}, Axes: ${displayAxes}, Bonds: ${displayBonds}`);
             syncButtonStates();
         }
 
@@ -2488,10 +2542,8 @@
                 
                 console.log('  ├─ Step 3: Setting visual style');
                 const styleStart = performance.now();
-                window.viewer3D.setStyle({}, { 
-                    sphere: { scale: 0.3 }, 
-                    stick: { radius: 0.1 } 
-                });
+                // Apply styling with bond state consideration
+                updateMoleculeStyleRobust();
                 const styleDuration = performance.now() - styleStart;
                 console.log(`  │   └─ Style duration: ${styleDuration.toFixed(2)}ms`);
                 
@@ -3178,10 +3230,13 @@
                 <div style="position: relative; width: 100%; height: 100%; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; background: white; min-height: 650px;">
                     <div id="3dmol-viewer" style="width: 100%; height: 100%; position: relative; background: white;"></div>
                     
-                    <!-- Simplified 3D control button -->
+                    <!-- 3D control buttons -->
                     <div class="viewer-controls" style="position: absolute; top: 10px; right: 10px; display: flex; gap: 5px; z-index: 10;">
                         <button class="control-btn" id="structureBtn" onclick="toggleStructureElementsRobust()" title="Hide Unit Cell & Axes" style="width: 32px; height: 32px; border: none; border-radius: 6px; background: rgba(76, 175, 80, 0.9); backdrop-filter: blur(5px); cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); transition: all 0.2s ease;">
                             🧊
+                        </button>
+                        <button class="control-btn" id="bondBtn" onclick="toggleBondsRobust()" title="Hide Bonds" style="width: 32px; height: 32px; border: none; border-radius: 6px; background: rgba(76, 175, 80, 0.9); backdrop-filter: blur(5px); cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); transition: all 0.2s ease;">
+                            🔗
                         </button>
                     </div>
                 </div>
@@ -3312,11 +3367,9 @@
                 console.log('➕ Adding supercell CIF model');
                 window.viewer3D.addModel(cifData, 'cif');
                 
-                console.log('🎨 Setting ball-and-stick style');
-                window.viewer3D.setStyle({}, { 
-                    sphere: { scale: 0.3 }, 
-                    stick: { radius: 0.1 } 
-                });
+                console.log('🎨 Setting molecular style with bond state');
+                // Apply styling with bond state consideration
+                updateMoleculeStyleRobust();
                 
                 console.log('📦 Adding unit cell (conditional)');
                 if (displayUnitCell) {
@@ -3403,11 +3456,9 @@
                 console.log('➕ Adding modified structure CIF model');
                 window.viewer3D.addModel(cifData, 'cif');
                 
-                console.log('🎨 Setting ball-and-stick style');
-                window.viewer3D.setStyle({}, { 
-                    sphere: { scale: 0.3 }, 
-                    stick: { radius: 0.1 } 
-                });
+                console.log('🎨 Setting molecular style with bond state');
+                // Apply styling with bond state consideration
+                updateMoleculeStyleRobust();
                 
                 console.log('📦 Adding unit cell (conditional)');
                 if (displayUnitCell) {
