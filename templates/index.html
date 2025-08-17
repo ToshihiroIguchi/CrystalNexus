@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CrystalNexus</title>
     <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -1348,6 +1349,11 @@
                             📊 Detailed Analysis
                         </button>
                         
+                        <!-- Download Analysis Button -->
+                        <button class="detail-analysis-btn" id="downloadAnalysisBtn" onclick="downloadAnalysisData()" style="display: none;">
+                            💾 Download Analysis
+                        </button>
+                        
                     </div>
                 </div>
             </div>
@@ -1742,9 +1748,10 @@
                 console.log('=== Setting currentAnalysisData ===');
                 console.log('isRelaxation:', isRelaxation);
                 console.log('Data being stored:', data);
-                currentAnalysisData = data;
-                console.log('currentAnalysisData set to:', currentAnalysisData);
+                window.currentAnalysisData = data;
+                console.log('currentAnalysisData set to:', window.currentAnalysisData);
                 document.getElementById('detailAnalysisBtn').style.display = 'block';
+                document.getElementById('downloadAnalysisBtn').style.display = 'block';
                 console.log('Detail analysis button displayed');
             } else {
                 console.log('Not a relaxation, skipping analysis data storage');
@@ -1858,6 +1865,7 @@
             const detailAnalysisBtn = document.getElementById('detailAnalysisBtn');
             if (detailAnalysisBtn) {
                 detailAnalysisBtn.style.display = 'none';
+                document.getElementById('downloadAnalysisBtn').style.display = 'none';
             }
             
             // Show structure status message
@@ -2330,6 +2338,8 @@
                 // Update structure information with relaxed data
                 if (data.relaxed_structure_info) {
                     updateStructureInformation(data.relaxed_structure_info);
+                    // Store structure info globally for download function
+                    window.currentStructureInfo = data.relaxed_structure_info;
                 }
                 
                 // Update 3D visualization with relaxed structure
@@ -3677,7 +3687,7 @@
         }
 
         // Analysis Modal Functions
-        let currentAnalysisData = null;
+        window.currentAnalysisData = null;
 
         function openAnalysisModal() {
             console.log('=== openAnalysisModal called ===');
@@ -4625,6 +4635,510 @@
             </div>
         </div>
     </div>
+
+    <script>
+        // Download Analysis Data Function
+        async function downloadAnalysisData() {
+            console.log('Download analysis data called');
+            
+            if (typeof JSZip === 'undefined') {
+                console.error('JSZip not loaded');
+                alert('JSZipライブラリが読み込まれていません。');
+                return;
+            }
+            
+            const zip = new JSZip();
+            
+            try {
+                // 1. CIF file with P1 space group
+                console.log('Generating CIF file...');
+                const cifContent = await generateCIFFile();
+                zip.file('structure_P1.cif', cifContent);
+                
+                // 2. Crystal Information CSV
+                console.log('Generating Crystal Information CSV...');
+                const crystalInfoCSV = generateCrystalInfoCSV();
+                zip.file('crystal_information.csv', crystalInfoCSV);
+                
+                // 3. Energy and Magnetic text file
+                console.log('Generating Energy and Magnetic text...');
+                const energyMagneticText = generateEnergyMagneticText();
+                zip.file('energy_magnetic.txt', energyMagneticText);
+                
+                // Generate and download ZIP file
+                console.log('Generating ZIP file...');
+                const content = await zip.generateAsync({type:'blob'});
+                console.log('ZIP file generated, starting download...');
+                
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(content);
+                link.download = 'crystal_analysis.zip';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                console.log('Download completed');
+                
+            } catch (error) {
+                console.error('Error generating ZIP file:', error);
+                alert('ZIPファイルの生成に失敗しました: ' + error.message);
+            }
+        }
+        
+        // Generate CIF file with P1 space group
+        async function generateCIFFile() {
+            console.log('=== GENERATING CIF FILE WITH P1 SPACE GROUP ===');
+            console.log('Current filename:', window.currentFilename);
+            console.log('Current analysis data:', window.currentAnalysisData);
+            
+            // Try to get the current CIF file from backend
+            if (window.currentFilename) {
+                try {
+                    const url = `/api/generate-relaxed-structure-cif`;
+                    console.log('Fetching CIF from URL:', url);
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            session_id: window.sessionId || `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+                        })
+                    });
+                    console.log('Response status:', response.status);
+                    
+                    if (response.ok) {
+                        let cifContent = await response.text();
+                        console.log('Original CIF content length:', cifContent.length);
+                        console.log('Original CIF first 500 chars:', cifContent.substring(0, 500));
+                        
+                        // Modify to P1 space group
+                        cifContent = cifContent.replace(
+                            /_symmetry_space_group_name_H-M\s+.*/,
+                            '_symmetry_space_group_name_H-M    P1'
+                        );
+                        cifContent = cifContent.replace(
+                            /_space_group_IT_number\s+.*/,
+                            '_space_group_IT_number           1'
+                        );
+                        
+                        if (!cifContent.includes('_symmetry_space_group_name_H-M')) {
+                            cifContent = cifContent.replace(
+                                /data_\w+/,
+                                '$&\n_symmetry_space_group_name_H-M    P1'
+                            );
+                        }
+                        
+                        if (!cifContent.includes('_space_group_IT_number')) {
+                            cifContent = cifContent.replace(
+                                /_symmetry_space_group_name_H-M\s+P1/,
+                                '$&\n_space_group_IT_number           1'
+                            );
+                        }
+                        
+                        console.log('CIF modified to P1 space group');
+                        console.log('Modified CIF first 500 chars:', cifContent.substring(0, 500));
+                        return cifContent;
+                    } else {
+                        console.warn('Failed to fetch CIF, status:', response.status);
+                    }
+                } catch (error) {
+                    console.error('Error fetching CIF from backend:', error);
+                }
+            }
+            
+            // Fallback: generate CIF using current analysis data
+            console.log('Using fallback CIF generation with current analysis data');
+            let cif = 'data_relaxed_structure_P1\n';
+            cif += '_symmetry_space_group_name_H-M    P1\n';
+            cif += '_space_group_IT_number           1\n\n';
+            
+            // Use direct data access instead of HTML parsing
+            let latticeParams = null;
+            if (window.currentStructureInfo?.lattice_parameters) {
+                console.log('Using lattice parameters from currentStructureInfo');
+                const lp = window.currentStructureInfo.lattice_parameters;
+                latticeParams = {
+                    a: lp.a,
+                    b: lp.b,
+                    c: lp.c,
+                    alpha: lp.alpha,
+                    beta: lp.beta,
+                    gamma: lp.gamma
+                };
+            } else if (window.currentAnalysisData?.relaxed_structure_info?.lattice_parameters) {
+                console.log('Using lattice parameters from analysis data');
+                const lp = window.currentAnalysisData.relaxed_structure_info.lattice_parameters;
+                latticeParams = {
+                    a: lp.a,
+                    b: lp.b,
+                    c: lp.c,
+                    alpha: lp.alpha,
+                    beta: lp.beta,
+                    gamma: lp.gamma
+                };
+            } else {
+                console.log('Fallback: trying to extract from display');
+                const crystalInfo = extractCrystalInfoFromDisplay();
+                if (crystalInfo && crystalInfo.a) {
+                    latticeParams = crystalInfo;
+                }
+            }
+            
+            console.log('Using lattice parameters:', latticeParams);
+            
+            if (latticeParams) {
+                cif += `_cell_length_a    ${latticeParams.a.toFixed(6)}\n`;
+                cif += `_cell_length_b    ${latticeParams.b.toFixed(6)}\n`;
+                cif += `_cell_length_c    ${latticeParams.c.toFixed(6)}\n`;
+                cif += `_cell_angle_alpha ${latticeParams.alpha.toFixed(6)}\n`;
+                cif += `_cell_angle_beta  ${latticeParams.beta.toFixed(6)}\n`;
+                cif += `_cell_angle_gamma ${latticeParams.gamma.toFixed(6)}\n\n`;
+            } else {
+                console.warn('No lattice parameters available, using defaults');
+                cif += '_cell_length_a    1.000000\n';
+                cif += '_cell_length_b    1.000000\n';
+                cif += '_cell_length_c    1.000000\n';
+                cif += '_cell_angle_alpha 90.000000\n';
+                cif += '_cell_angle_beta  90.000000\n';
+                cif += '_cell_angle_gamma 90.000000\n\n';
+            }
+            
+            // Try to get atomic positions from analysis data
+            cif += 'loop_\n';
+            cif += '_atom_site_label\n';
+            cif += '_atom_site_type_symbol\n';
+            cif += '_atom_site_fract_x\n';
+            cif += '_atom_site_fract_y\n';
+            cif += '_atom_site_fract_z\n';
+            cif += '_atom_site_occupancy\n\n';
+            
+            // Try to get positions from analysis data
+            if (window.currentAnalysisData?.final_positions && window.currentAnalysisData?.elements) {
+                console.log('Using atomic positions from analysis data');
+                const positions = window.currentAnalysisData.final_positions;
+                const elements = window.currentAnalysisData.elements;
+                
+                for (let i = 0; i < positions.length; i++) {
+                    const element = elements[i] || 'X';
+                    const pos = positions[i];
+                    cif += `${element}${i+1} ${element} ${pos[0].toFixed(6)} ${pos[1].toFixed(6)} ${pos[2].toFixed(6)} 1.000\n`;
+                }
+            } else {
+                console.warn('No atomic positions available, using placeholder');
+                cif += 'X1 X 0.000000 0.000000 0.000000 1.000\n';
+            }
+            
+            console.log('Generated CIF content:', cif);
+            return cif;
+        }
+        
+        // Generate Crystal Information CSV
+        function generateCrystalInfoCSV() {
+            console.log('=== GENERATING CRYSTAL INFORMATION CSV ===');
+            console.log('Available data sources:');
+            console.log('- window.currentStructureInfo:', window.currentStructureInfo);
+            console.log('- window.currentAnalysisData:', window.currentAnalysisData);
+            
+            let csv = 'Property,Value\n';
+            csv += 'Space Group,P1\n';
+            csv += 'Space Group Number,1\n';
+            
+            // Use direct data access instead of HTML parsing
+            let structureInfo = null;
+            if (window.currentStructureInfo) {
+                structureInfo = window.currentStructureInfo;
+                console.log('Using currentStructureInfo');
+            } else if (window.currentAnalysisData?.relaxed_structure_info) {
+                structureInfo = window.currentAnalysisData.relaxed_structure_info;
+                console.log('Using currentAnalysisData.relaxed_structure_info');
+            }
+            
+            console.log('Structure info being used:', structureInfo);
+            
+            if (structureInfo) {
+                // Direct data access - no regex parsing needed
+                if (structureInfo.formula) csv += `Formula,${structureInfo.formula}\n`;
+                if (structureInfo.lattice_parameters) {
+                    const lp = structureInfo.lattice_parameters;
+                    csv += `a (Å),${lp.a.toFixed(5)}\n`;
+                    csv += `b (Å),${lp.b.toFixed(5)}\n`;
+                    csv += `c (Å),${lp.c.toFixed(5)}\n`;
+                    csv += `α (°),${lp.alpha.toFixed(5)}\n`;
+                    csv += `β (°),${lp.beta.toFixed(5)}\n`;
+                    csv += `γ (°),${lp.gamma.toFixed(5)}\n`;
+                }
+                if (structureInfo.volume) csv += `Volume (Å³),${structureInfo.volume.toFixed(5)}\n`;
+                if (structureInfo.density) csv += `Density (g/cm³),${structureInfo.density.toFixed(4)}\n`;
+                if (structureInfo.num_sites) csv += `Total atoms,${structureInfo.num_sites}\n`;
+            } else {
+                console.warn('No structure info available, falling back to HTML extraction');
+                // Fallback to HTML extraction only if direct data is not available
+                const crystalInfo = extractCrystalInfoFromDisplay();
+                if (crystalInfo) {
+                    if (crystalInfo.formula) csv += `Formula,${crystalInfo.formula}\n`;
+                    if (crystalInfo.a) csv += `a (Å),${crystalInfo.a}\n`;
+                    if (crystalInfo.b) csv += `b (Å),${crystalInfo.b}\n`;
+                    if (crystalInfo.c) csv += `c (Å),${crystalInfo.c}\n`;
+                    if (crystalInfo.alpha) csv += `α (°),${crystalInfo.alpha}\n`;
+                    if (crystalInfo.beta) csv += `β (°),${crystalInfo.beta}\n`;
+                    if (crystalInfo.gamma) csv += `γ (°),${crystalInfo.gamma}\n`;
+                    if (crystalInfo.volume) csv += `Volume (Å³),${crystalInfo.volume}\n`;
+                    if (crystalInfo.density) csv += `Density (g/cm³),${crystalInfo.density}\n`;
+                } else {
+                    csv += 'Formula,Unknown\n';
+                    csv += 'a (Å),N/A\n';
+                    csv += 'b (Å),N/A\n';
+                    csv += 'c (Å),N/A\n';
+                    csv += 'α (°),N/A\n';
+                    csv += 'β (°),N/A\n';
+                    csv += 'γ (°),N/A\n';
+                    csv += 'Volume (Å³),N/A\n';
+                    csv += 'Density (g/cm³),N/A\n';
+                }
+            }
+            
+            console.log('Generated Crystal Information CSV:', csv);
+            return csv;
+        }
+        
+        // Generate Energy and Magnetic text file
+        function generateEnergyMagneticText() {
+            console.log('=== GENERATING ENERGY AND MAGNETIC TEXT ===');
+            console.log('Available data sources:');
+            console.log('- window.currentAnalysisData:', window.currentAnalysisData);
+            console.log('- window.currentStructureInfo:', window.currentStructureInfo);
+            
+            let text = 'Energy and Magnetic Properties\n';
+            text += '================================\n\n';
+            
+            // Use direct data access instead of HTML parsing
+            let energyData = null;
+            let magneticData = null;
+            let numAtoms = 0;
+            
+            if (window.currentAnalysisData) {
+                const analysisData = window.currentAnalysisData;
+                console.log('Using analysis data for energy/magnetic calculation');
+                
+                // Get number of atoms
+                if (window.currentStructureInfo?.num_sites) {
+                    numAtoms = window.currentStructureInfo.num_sites;
+                } else if (analysisData.elements) {
+                    numAtoms = analysisData.elements.length;
+                } else if (analysisData.final_prediction?.magmoms_muB) {
+                    numAtoms = analysisData.final_prediction.magmoms_muB.length;
+                }
+                
+                console.log('Number of atoms:', numAtoms);
+                
+                // Extract energy data from direct calculation
+                if (analysisData.final_prediction?.energy_eV_per_atom !== undefined) {
+                    const energyPerAtom = analysisData.final_prediction.energy_eV_per_atom;
+                    const totalEnergy = energyPerAtom * numAtoms;
+                    
+                    energyData = {
+                        total: totalEnergy,
+                        perAtom: energyPerAtom,
+                        numAtoms: numAtoms
+                    };
+                    console.log('Calculated energy data:', energyData);
+                }
+                
+                // Extract magnetic data from direct calculation
+                if (analysisData.final_prediction?.magmoms_muB) {
+                    const magmoms = analysisData.final_prediction.magmoms_muB;
+                    
+                    // Calculate total magnetic moment using the same method as display
+                    // Note: Using absolute values as per the current display logic
+                    const totalMagmomAbs = magmoms.reduce((sum, mag) => sum + Math.abs(mag), 0);
+                    // Also calculate net magnetic moment (vector sum)
+                    const netMagmom = magmoms.reduce((sum, mag) => sum + mag, 0);
+                    
+                    magneticData = {
+                        total: totalMagmomAbs,  // Match display calculation
+                        net: netMagmom,         // Physical net moment
+                        individual: magmoms
+                    };
+                    console.log('Calculated magnetic data:', magneticData);
+                    console.log('- Total |magnetic moment|:', totalMagmomAbs);
+                    console.log('- Net magnetic moment:', netMagmom);
+                }
+            }
+            
+            // If direct data is not available, fall back to HTML extraction
+            if (!energyData || !magneticData) {
+                console.warn('Direct data not available, falling back to HTML extraction');
+                if (!energyData) {
+                    energyData = extractEnergyFromDisplay();
+                }
+                if (!magneticData) {
+                    magneticData = extractMagneticFromDisplay();
+                }
+            }
+            
+            // Generate text output
+            if (energyData) {
+                text += 'Energy Information:\n';
+                text += `Total Energy: ${energyData.total.toFixed(6)} eV\n`;
+                text += `Energy per atom: ${energyData.perAtom.toFixed(6)} eV/atom\n`;
+                text += `Number of atoms: ${energyData.numAtoms}\n\n`;
+            } else {
+                text += 'Energy Information: Not available\n\n';
+            }
+            
+            if (magneticData) {
+                text += 'Magnetic Information:\n';
+                text += `Total |magnetic moment|: ${magneticData.total.toFixed(6)} μB\n`;
+                
+                // Include net magnetic moment if available
+                if (magneticData.net !== undefined) {
+                    text += `Net magnetic moment: ${magneticData.net.toFixed(6)} μB\n`;
+                }
+                
+                // Include individual magnetic moments if available
+                if (magneticData.individual && magneticData.individual.length > 0) {
+                    text += '\nIndividual atomic magnetic moments:\n';
+                    magneticData.individual.forEach((mag, i) => {
+                        // Try to get element names if available
+                        let atomLabel = `Atom ${i+1}`;
+                        if (window.currentAnalysisData?.elements && window.currentAnalysisData.elements[i]) {
+                            atomLabel = `${window.currentAnalysisData.elements[i]}${i+1}`;
+                        }
+                        text += `${atomLabel}: ${mag.toFixed(6)} μB\n`;
+                    });
+                }
+                text += '\n';
+            } else {
+                text += 'Magnetic Information: Not available\n\n';
+            }
+            
+            // Add calculation details
+            text += 'Calculation Details:\n';
+            text += '===================\n';
+            if (window.currentAnalysisData?.relaxation_converged !== undefined) {
+                text += `Relaxation converged: ${window.currentAnalysisData.relaxation_converged}\n`;
+            }
+            if (window.currentAnalysisData?.relaxation_steps !== undefined) {
+                text += `Relaxation steps: ${window.currentAnalysisData.relaxation_steps}\n`;
+            }
+            if (window.currentAnalysisData?.fmax !== undefined) {
+                text += `Force tolerance (fmax): ${window.currentAnalysisData.fmax} eV/Å\n`;
+            }
+            text += 'Model: CHGNet\n';
+            
+            console.log('Generated Energy and Magnetic text:', text);
+            return text;
+        }
+        
+        // Helper function to extract crystal info from display
+        function extractCrystalInfoFromDisplay() {
+            console.log('=== EXTRACTING CRYSTAL INFO FROM DISPLAY ===');
+            
+            // Try both main crystal info and modal
+            const sources = [
+                document.getElementById('main-crystal-info'),
+                document.getElementById('infoContent')
+            ];
+            
+            for (const source of sources) {
+                if (source && source.innerHTML.trim()) {
+                    const html = source.innerHTML;
+                    console.log(`Found crystal info in ${source.id}:`);
+                    console.log('Raw HTML:', html);
+                    
+                    const info = {};
+                    
+                    // Extract various crystal parameters with more precise regex patterns
+                    const formulaMatch = html.match(/<strong>Formula:<\/strong>\s*([^<]+)/i);
+                    const aMatch = html.match(/a\s*=\s*([\d.]+)\s*Å/i);
+                    const bMatch = html.match(/b\s*=\s*([\d.]+)\s*Å/i);
+                    const cMatch = html.match(/c\s*=\s*([\d.]+)\s*Å/i);
+                    const alphaMatch = html.match(/α\s*=\s*([\d.]+)°/i);
+                    const betaMatch = html.match(/β\s*=\s*([\d.]+)°/i);
+                    const gammaMatch = html.match(/γ\s*=\s*([\d.]+)°/i);
+                    const volumeMatch = html.match(/Volume\s*=\s*([\d.]+)\s*Ų/i);
+                    const densityMatch = html.match(/<strong>Density:<\/strong>\s*([\d.]+)\s*g\/cm³/i);
+                    
+                    console.log('Regex extraction results:', {
+                        formulaMatch, aMatch, bMatch, cMatch, alphaMatch, betaMatch, gammaMatch, volumeMatch, densityMatch
+                    });
+                    
+                    if (formulaMatch) info.formula = formulaMatch[1].trim();
+                    if (aMatch) info.a = parseFloat(aMatch[1]);
+                    if (bMatch) info.b = parseFloat(bMatch[1]);
+                    if (cMatch) info.c = parseFloat(cMatch[1]);
+                    if (alphaMatch) info.alpha = parseFloat(alphaMatch[1]);
+                    if (betaMatch) info.beta = parseFloat(betaMatch[1]);
+                    if (gammaMatch) info.gamma = parseFloat(gammaMatch[1]);
+                    if (volumeMatch) info.volume = parseFloat(volumeMatch[1]);
+                    if (densityMatch) info.density = parseFloat(densityMatch[1]);
+                    
+                    console.log('Final extracted crystal info:', info);
+                    
+                    if (Object.keys(info).length > 0) {
+                        return info;
+                    }
+                }
+            }
+            
+            console.log('No crystal info found in display');
+            return null;
+        }
+        
+        // Helper function to extract energy from display
+        function extractEnergyFromDisplay() {
+            console.log('Extracting energy from display');
+            
+            const energySummary = document.getElementById('energy-summary');
+            if (energySummary) {
+                const text = energySummary.textContent;
+                console.log('Energy summary text:', text);
+                
+                // Pattern: "⚡ Energy: -42.07 eV (-8.415 eV/atom, 5 atoms)"
+                const totalMatch = text.match(/Energy:\s*([-\d.]+)\s*eV/);
+                const perAtomMatch = text.match(/\(([-\d.]+)\s*eV\/atom/);
+                const atomsMatch = text.match(/(\d+)\s*atoms/);
+                
+                if (totalMatch || perAtomMatch) {
+                    const result = {
+                        total: totalMatch ? parseFloat(totalMatch[1]) : null,
+                        perAtom: perAtomMatch ? parseFloat(perAtomMatch[1]) : null,
+                        numAtoms: atomsMatch ? parseInt(atomsMatch[1]) : null
+                    };
+                    console.log('Extracted energy data:', result);
+                    return result;
+                }
+            }
+            
+            console.log('No energy data found in display');
+            return null;
+        }
+        
+        // Helper function to extract magnetic from display
+        function extractMagneticFromDisplay() {
+            console.log('Extracting magnetic from display');
+            
+            const magneticSummary = document.getElementById('magnetic-summary');
+            if (magneticSummary) {
+                const text = magneticSummary.textContent;
+                console.log('Magnetic summary text:', text);
+                
+                // Pattern: "🧲 Magnetic: 0.102 µB total"
+                const totalMatch = text.match(/Magnetic:\s*([-\d.]+)\s*µB\s*total/);
+                
+                if (totalMatch) {
+                    const result = {
+                        total: parseFloat(totalMatch[1])
+                    };
+                    console.log('Extracted magnetic data:', result);
+                    return result;
+                }
+            }
+            
+            console.log('No magnetic data found in display');
+            return null;
+        }
+    </script>
 
 </body>
 </html>
