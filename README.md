@@ -68,10 +68,6 @@ CrystalNexus/
 │   ├── test_security.py  # Security tests
 │   └── integration/      # Integration tests
 │       └── test_app.py
-├── makesupercell/        # Supercell generation utilities
-│   ├── BaTiO3.cif
-│   └── makesupercell.py
-└── venv/                 # Python virtual environment (excluded from git)
 ```
 
 ## Installation & Setup
