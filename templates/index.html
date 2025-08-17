@@ -1739,8 +1739,15 @@
             
             // Store data for analysis modal
             if (isRelaxation) {
+                console.log('=== Setting currentAnalysisData ===');
+                console.log('isRelaxation:', isRelaxation);
+                console.log('Data being stored:', data);
                 currentAnalysisData = data;
+                console.log('currentAnalysisData set to:', currentAnalysisData);
                 document.getElementById('detailAnalysisBtn').style.display = 'block';
+                console.log('Detail analysis button displayed');
+            } else {
+                console.log('Not a relaxation, skipping analysis data storage');
             }
         }
         
@@ -3673,15 +3680,25 @@
         let currentAnalysisData = null;
 
         function openAnalysisModal() {
+            console.log('=== openAnalysisModal called ===');
             const modal = document.getElementById('analysisModal');
             modal.style.display = 'block';
             
+            console.log('currentAnalysisData:', currentAnalysisData);
             if (currentAnalysisData) {
+                console.log('Populating modal with data...');
                 populateAnalysisModal(currentAnalysisData);
+            } else {
+                console.warn('No currentAnalysisData available!');
             }
+            
+            // Set default active tab to energy (Relaxation)
+            console.log('Switching to energy tab...');
+            switchTab('energy');
             
             // Add escape key listener
             document.addEventListener('keydown', handleModalKeydown);
+            console.log('=== openAnalysisModal completed ===');
         }
 
         function closeAnalysisModal() {
@@ -3734,9 +3751,18 @@
         }
 
         function switchTab(tabName) {
+            console.log('=== switchTab called ===');
+            console.log('Tab name:', tabName);
+            console.log('currentAnalysisData:', currentAnalysisData);
+            
             // Update tab buttons
             document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
-            event.target.classList.add('active');
+            if (event && event.target) {
+                event.target.classList.add('active');
+            } else {
+                // Fallback when called programmatically
+                document.querySelector(`[onclick="switchTab('${tabName}')"]`)?.classList.add('active');
+            }
             
             // Update tab content
             document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
@@ -3744,57 +3770,92 @@
             
             // Load tab-specific content
             if (tabName === 'energy') {
-                populateEnergyAnalysisTab();
-                // Also draw charts when energy tab is selected
+                // Use currentAnalysisData if available
                 if (currentAnalysisData) {
+                    populateEnergyAnalysisTab(currentAnalysisData);
                     drawCharts(currentAnalysisData);
+                } else {
+                    console.warn('No currentAnalysisData available for energy tab');
                 }
             }
         }
 
         function populateAnalysisModal(data) {
-            // Summary Tab
+            console.log('=== populateAnalysisModal called ===');
+            console.log('Data received:', data);
+            
+            // Summary Tab (now moved to Relaxation tab)
+            console.log('Calling populateSummaryTab...');
             populateSummaryTab(data);
             
             // Data Tab
+            console.log('Calling populateDataTab...');
             populateDataTab(data);
             
+            // Energy Analysis Tab (Relaxation tab)
+            console.log('Calling populateEnergyAnalysisTab...');
+            populateEnergyAnalysisTab(data);
+            
+            console.log('=== populateAnalysisModal completed ===');
             // Charts will be drawn when tab is selected
         }
         
-        function populateEnergyAnalysisTab() {
+        function populateEnergyAnalysisTab(data) {
+            console.log('=== populateEnergyAnalysisTab called ===');
+            console.log('Data received:', data);
+            
             const energyTableBody = document.getElementById('energy-analysis-body');
             const energyInsights = document.getElementById('energy-insights');
             
-            if (!window.energyAnalysisData) {
+            console.log('Elements found:');
+            console.log('- energyTableBody:', energyTableBody);
+            console.log('- energyInsights:', energyInsights);
+            
+            if (!data || !data.initial_prediction || !data.final_prediction) {
+                console.log('No energy data available');
                 energyTableBody.innerHTML = '<tr><td colspan="4">No energy data available</td></tr>';
                 energyInsights.innerHTML = '<p>Energy analysis requires completed relaxation calculation.</p>';
                 return;
             }
             
-            const data = window.energyAnalysisData;
+            console.log('Populating energy analysis table...');
+            
+            // Generate table HTML using passed data
             let tableHTML = '';
             
+            // Get initial and final predictions
+            const initialPred = data.initial_prediction;
+            const finalPred = data.final_prediction;
+            
             // Always show final structure data
-            if (data.final) {
+            if (finalPred) {
+                // Calculate number of atoms
+                const numAtoms = data.structure_info?.num_atoms || finalPred.forces_eV_per_A?.length || 0;
+                
+                // Calculate energies
+                const initialTotalEnergy = initialPred ? initialPred.energy_eV_per_atom * numAtoms : null;
+                const finalTotalEnergy = finalPred.energy_eV_per_atom * numAtoms;
+                const energyChange = initialTotalEnergy ? finalTotalEnergy - initialTotalEnergy : null;
+                const energyChangePerAtom = data.energy_change_eV_per_atom || 0;
+                
                 tableHTML += `
                     <tr>
                         <td><strong>Number of atoms</strong></td>
-                        <td>${data.initial ? data.initial.numAtoms : '-'}</td>
-                        <td>${data.final.numAtoms}</td>
+                        <td>${numAtoms || '-'}</td>
+                        <td>${numAtoms || '-'}</td>
                         <td>-</td>
                     </tr>
                     <tr>
                         <td><strong>Total Energy (eV)</strong></td>
-                        <td>${data.initial ? data.initial.totalEnergy.toFixed(6) : '-'}</td>
-                        <td><span class="${data.final.energyPerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${data.final.totalEnergy.toFixed(6)}</span></td>
-                        <td>${data.changes ? getChangeDisplay(data.changes.totalEnergyChange) : '-'}</td>
+                        <td>${initialTotalEnergy ? initialTotalEnergy.toFixed(6) : '-'}</td>
+                        <td><span class="${finalPred.energy_eV_per_atom < 0 ? 'energy-negative' : 'energy-positive'}">${finalTotalEnergy.toFixed(6)}</span></td>
+                        <td>${energyChange ? getChangeDisplay(energyChange) : '-'}</td>
                     </tr>
                     <tr>
                         <td><strong>Energy per atom (eV/atom)</strong></td>
-                        <td>${data.initial ? data.initial.energyPerAtom.toFixed(6) : '-'}</td>
-                        <td><span class="${data.final.energyPerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${data.final.energyPerAtom.toFixed(6)}</span></td>
-                        <td>${data.changes ? getChangeDisplay(data.changes.energyChangePerAtom) : '-'}</td>
+                        <td>${initialPred ? initialPred.energy_eV_per_atom.toFixed(6) : '-'}</td>
+                        <td><span class="${finalPred.energy_eV_per_atom < 0 ? 'energy-negative' : 'energy-positive'}">${finalPred.energy_eV_per_atom.toFixed(6)}</span></td>
+                        <td>${getChangeDisplay(energyChangePerAtom)}</td>
                     </tr>
                 `;
             }
@@ -3833,10 +3894,21 @@
         }
 
         function populateSummaryTab(data) {
+            console.log('=== populateSummaryTab called ===');
+            console.log('Data received:', data);
+            
             const convergenceEl = document.getElementById('summary-convergence');
             const energyEl = document.getElementById('summary-energy');
             const forcesEl = document.getElementById('summary-forces');
-            const settingsEl = document.getElementById('summary-settings');
+            const stressEl = document.getElementById('summary-stress');
+            const settingsEl = document.getElementById('relaxation-settings');
+            
+            console.log('Elements found:');
+            console.log('- convergenceEl:', convergenceEl);
+            console.log('- energyEl:', energyEl);
+            console.log('- forcesEl:', forcesEl);
+            console.log('- stressEl:', stressEl);
+            console.log('- settingsEl:', settingsEl);
             
             // Convergence Status
             const converged = data.relaxation_info?.converged;
@@ -3879,7 +3951,6 @@
             }
             
             // Stress Information
-            const stressEl = document.getElementById('summary-stress');
             if (data.final_prediction?.stress_GPa) {
                 const stress = data.final_prediction.stress_GPa;
                 const maxStress = Math.max(...stress.flat().map(Math.abs));
@@ -3906,13 +3977,21 @@
         }
 
         function populateDataTab(data) {
+            console.log('=== populateDataTab called ===');
+            console.log('Data received:', data);
+            
             const tableBody = document.getElementById('trajectoryTableBody');
+            console.log('trajectoryTableBody element:', tableBody);
+            
             tableBody.innerHTML = '';
             
             if (!data.trajectory_data?.energies?.length) {
+                console.log('No trajectory data available');
                 tableBody.innerHTML = '<tr><td colspan="4">Trajectory data not available</td></tr>';
                 return;
             }
+            
+            console.log('Trajectory data found:', data.trajectory_data);
             
             const energies = data.trajectory_data.energies;
             const forceMagnitudes = data.trajectory_data.force_magnitudes;
@@ -3946,11 +4025,19 @@
         }
         
         function populateAtomicPropertiesTable(data) {
+            console.log('=== populateAtomicPropertiesTable called ===');
+            console.log('Data received:', data);
+            
             const tableBody = document.getElementById('atomicPropertiesTableBody');
+            console.log('atomicPropertiesTableBody element:', tableBody);
+            
             tableBody.innerHTML = '';
             
             const finalPred = data.final_prediction;
+            console.log('Final prediction data:', finalPred);
+            
             if (!finalPred) {
+                console.log('No final prediction data available');
                 tableBody.innerHTML = '<tr><td colspan="7">Final prediction data not available</td></tr>';
                 return;
             }
@@ -3960,10 +4047,17 @@
             const siteEnergies = finalPred.site_energies_eV || [];
             const magmoms = finalPred.magmoms_muB || [];
             
+            console.log('Data arrays:');
+            console.log('- forces:', forces);
+            console.log('- siteEnergies:', siteEnergies);
+            console.log('- magmoms:', magmoms);
+            
             // Determine number of atoms
             const numAtoms = Math.max(forces.length, siteEnergies.length, magmoms.length);
+            console.log('Number of atoms:', numAtoms);
             
             if (numAtoms === 0) {
+                console.log('No atomic data available');
                 tableBody.innerHTML = '<tr><td colspan="7">No atomic data available</td></tr>';
                 return;
             }
@@ -4003,13 +4097,21 @@
         }
         
         function populateStressDetailTable(data) {
+            console.log('=== populateStressDetailTable called ===');
+            console.log('Data received:', data);
+            
             const tableBody = document.getElementById('stressDetailTableBody');
+            console.log('stressDetailTableBody element:', tableBody);
+            
             tableBody.innerHTML = '';
             
             if (!data.final_prediction?.stress_GPa) {
+                console.log('No stress data available');
                 tableBody.innerHTML = '<tr><td colspan="2">Stress data not available</td></tr>';
                 return;
             }
+            
+            console.log('Stress data found:', data.final_prediction.stress_GPa);
             
             const stress = data.final_prediction.stress_GPa;
             const components = [
@@ -4378,47 +4480,46 @@
     <div id="analysisModal" class="analysis-modal">
         <div class="analysis-modal-content">
             <div class="analysis-modal-header">
-                <h2 class="modal-title">Detailed Relaxation Analysis</h2>
+                <h2 class="modal-title">Detailed Analysis</h2>
                 <button class="modal-close" onclick="closeAnalysisModal()">&times;</button>
             </div>
             
             <div class="tab-container">
-                <button class="tab-button active" onclick="switchTab('summary')">Summary</button>
-                <button class="tab-button" onclick="switchTab('energy')">Energy & Force Analysis</button>
+                <button class="tab-button active" onclick="switchTab('energy')">Relaxation</button>
                 <button class="tab-button" onclick="switchTab('data')">Data</button>
             </div>
             
             <div class="tab-content">
-                <!-- Summary Tab -->
-                <div id="summary-tab" class="tab-pane active">
-                    <div class="summary-grid">
-                        <div class="summary-card">
-                            <h3>Convergence Status</h3>
-                            <div id="summary-convergence">-</div>
-                        </div>
-                        <div class="summary-card">
-                            <h3>Energy Change</h3>
-                            <div id="summary-energy">-</div>
-                        </div>
-                        <div class="summary-card">
-                            <h3>Force Information</h3>
-                            <div id="summary-forces">-</div>
-                        </div>
-                        <div class="summary-card">
-                            <h3>Stress Information</h3>
-                            <div id="summary-stress">-</div>
-                        </div>
-                        <div class="summary-card">
-                            <h3>Calculation Settings</h3>
-                            <div id="summary-settings">-</div>
-                        </div>
-                    </div>
-                </div>
-                
                 <!-- Energy & Force Analysis Tab -->
-                <div id="energy-tab" class="tab-pane">
+                <div id="energy-tab" class="tab-pane active">
                     <div class="energy-analysis-container">
-                        <h3>Comprehensive Energy & Force Analysis</h3>
+                        <h3>Relaxation Analysis</h3>
+                        
+                        <div class="relaxation-summary-section" style="margin-bottom: 20px;">
+                            <div class="summary-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px;">
+                                <div class="summary-card">
+                                    <h4>Convergence Status</h4>
+                                    <div id="summary-convergence">-</div>
+                                </div>
+                                <div class="summary-card">
+                                    <h4>Energy Change</h4>
+                                    <div id="summary-energy">-</div>
+                                </div>
+                                <div class="summary-card">
+                                    <h4>Force Information</h4>
+                                    <div id="summary-forces">-</div>
+                                </div>
+                                <div class="summary-card">
+                                    <h4>Stress Information</h4>
+                                    <div id="summary-stress">-</div>
+                                </div>
+                            </div>
+                            
+                            <div class="calculation-settings-section">
+                                <h4>Calculation Settings</h4>
+                                <div id="relaxation-settings" class="settings-display">-</div>
+                            </div>
+                        </div>
                         
                         <div class="energy-comparison-table">
                             <table class="analysis-table" id="energy-analysis-table">
@@ -4461,30 +4562,32 @@
                         <div class="energy-insights" id="energy-insights">
                             <!-- Energy insights and interpretation will be populated here -->
                         </div>
+                        
+                        <div class="trajectory-data-section" style="margin-top: 30px;">
+                            <h4>Step-by-Step Trajectory Data</h4>
+                            <div style="overflow-x: auto;">
+                                <table class="data-table" id="trajectoryTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Step</th>
+                                            <th>Energy (eV/atom)</th>
+                                            <th>Max Force (eV/Å)</th>
+                                            <th>RMS Force (eV/Å)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="trajectoryTableBody">
+                                        <!-- Data will be populated here -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 
                 
                 <!-- Data Tab -->
                 <div id="data-tab" class="tab-pane">
-                    <h3>Step-by-Step Trajectory Data</h3>
-                    <div style="overflow-x: auto;">
-                        <table class="data-table" id="trajectoryTable">
-                            <thead>
-                                <tr>
-                                    <th>Step</th>
-                                    <th>Energy (eV/atom)</th>
-                                    <th>Max Force (eV/Å)</th>
-                                    <th>RMS Force (eV/Å)</th>
-                                </tr>
-                            </thead>
-                            <tbody id="trajectoryTableBody">
-                                <!-- Data will be populated here -->
-                            </tbody>
-                        </table>
-                    </div>
-                    
-                    <h3 style="margin-top: 30px;">Final Atomic Properties</h3>
+                    <h3>Final Atomic Properties</h3>
                     <div style="overflow-x: auto;">
                         <table class="data-table" id="atomicPropertiesTable">
                             <thead>
