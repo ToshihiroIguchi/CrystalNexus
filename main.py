@@ -280,7 +280,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 SAMPLE_CIF_DIR = Path("sample_cif")
 
 # セキュアなデフォルト設定
-HOST = os.getenv('CRYSTALNEXUS_HOST', '127.0.0.1')
+HOST = os.getenv('CRYSTALNEXUS_HOST', '0.0.0.0')
 PORT = int(os.getenv('CRYSTALNEXUS_PORT', '8080'))
 DEBUG = os.getenv('CRYSTALNEXUS_DEBUG', 'False').lower() == 'true'
 MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', str(50 * 1024 * 1024)))  # 50MB
