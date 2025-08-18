@@ -2,6 +2,7 @@
 """
 CrystalNexus startup script
 Checks if backend is running and starts it if necessary
+Compatible with main.py environment configuration
 """
 
 import requests
@@ -11,7 +12,11 @@ import sys
 import os
 from pathlib import Path
 
-PORT = 8080
+# Environment-aware configuration (same as main.py)
+HOST = os.getenv('CRYSTALNEXUS_HOST', '0.0.0.0')
+PORT = int(os.getenv('CRYSTALNEXUS_PORT', '8080'))
+DEBUG = os.getenv('CRYSTALNEXUS_DEBUG', 'False').lower() == 'true'
+
 HEALTH_URL = f"http://localhost:{PORT}/health"
 MAX_STARTUP_WAIT = 30  # seconds
 
@@ -28,21 +33,29 @@ def check_backend_status():
     return False
 
 def start_backend():
-    """Start the FastAPI backend"""
+    """Start the FastAPI backend with environment-aware configuration"""
     print("Starting CrystalNexus backend...")
+    print(f"Configuration: HOST={HOST}, PORT={PORT}, DEBUG={DEBUG}")
     
     # Change to the script directory
     script_dir = Path(__file__).parent
     os.chdir(script_dir)
     
     try:
-        # Start the server as a subprocess
-        process = subprocess.Popen([
+        # Build command with environment-aware options
+        cmd = [
             sys.executable, "-m", "uvicorn", "main:app",
-            "--host", "0.0.0.0",
-            "--port", str(PORT),
-            "--reload"
-        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            "--host", HOST,
+            "--port", str(PORT)
+        ]
+        
+        # Add reload flag only in debug mode
+        if DEBUG:
+            cmd.append("--reload")
+            print("Debug mode: Auto-reload enabled")
+        
+        # Start the server as a subprocess
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
         # Wait for startup
         print(f"Waiting for backend to start on port {PORT}...")
@@ -95,6 +108,8 @@ def main():
     print("\n" + "=" * 40)
     print("CrystalNexus is ready!")
     print(f"Open your browser and go to: http://localhost:{PORT}")
+    if HOST == "0.0.0.0":
+        print(f"Network access: http://<your-ip>:{PORT}")
     print("Press Ctrl+C to stop the server")
     print("=" * 40)
     
