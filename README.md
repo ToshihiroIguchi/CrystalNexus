@@ -149,6 +149,18 @@ pip install -r requirements.txt --force-reinstall
 - First run may take longer as CHGNet downloads model weights
 - Ensure stable internet connection during initial setup
 
+**Windows-Specific Issues:**
+If you encounter "Buffer dtype mismatch" error on Windows:
+```bash
+# Use Windows-specific requirements
+pip install -r requirements-windows.txt
+
+# Or manually install compatible versions
+pip install torch==2.1.2+cpu --index-url https://download.pytorch.org/whl/cpu
+pip install "numpy>=1.21.0,<1.26.0"
+pip install chgnet==0.3.8
+```
+
 ## Usage Guide
 
 ### 1. **Loading Crystal Structures**

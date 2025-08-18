@@ -26,13 +26,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# CHGnet import
+# CHGnet import with Windows compatibility
+import platform
+WINDOWS_PLATFORM = platform.system() == "Windows"
+
 try:
+    import torch
+    # Windows-specific NumPy/PyTorch compatibility settings
+    if WINDOWS_PLATFORM:
+        import numpy as np
+        # Set NumPy to use compatible dtypes for Windows
+        os.environ["NPY_NO_DEPRECATED_API"] = "NPY_1_7_API_VERSION"
+        # Ensure PyTorch uses CPU on Windows to avoid CUDA issues
+        torch.set_default_dtype(torch.float32)
+        logger.info("Windows platform detected - applied compatibility settings")
+    
     from chgnet.model import CHGNet
     CHGNET_AVAILABLE = True
+    logger.info(f"CHGNet successfully loaded (Platform: {platform.system()})")
 except ImportError:
     CHGNET_AVAILABLE = False
-    logger.warning("CHGnet not available. Install with: pip install chgnet")
+    logger.warning(f"CHGNet not available on {platform.system()}: Install with: pip install chgnet")
+except Exception as e:
+    CHGNET_AVAILABLE = False
+    if WINDOWS_PLATFORM and "Buffer dtype mismatch" in str(e):
+        logger.error(f"Windows CHGNet compatibility issue detected: {e}")
+        logger.error("Solution: pip install -r requirements-windows.txt")
+    else:
+        logger.error(f"CHGNet loading error: {e}")
 
 def get_chgnet_supported_elements() -> Set[str]:
     """
@@ -1088,7 +1109,22 @@ async def chgnet_predict_structure(request: dict):
             raise HTTPException(status_code=503, detail="CHGNet not available. Please install with: pip install chgnet")
         
         from chgnet.model.model import CHGNet
-        chgnet = CHGNet.load(model_name="0.3.0", use_device="cpu", verbose=False)
+        # Windows-compatible CHGNet loading
+        try:
+            if WINDOWS_PLATFORM:
+                # Force CPU usage and disable verbose for Windows stability
+                chgnet = CHGNet.load(model_name="0.3.0", use_device="cpu", verbose=False)
+                logger.info("CHGNet loaded with Windows compatibility settings")
+            else:
+                chgnet = CHGNet.load(model_name="0.3.0", use_device="cpu", verbose=False)
+        except Exception as load_error:
+            if WINDOWS_PLATFORM and "Buffer dtype mismatch" in str(load_error):
+                raise HTTPException(
+                    status_code=500, 
+                    detail="Windows CHGNet compatibility issue. Try: pip install -r requirements-windows.txt"
+                )
+            else:
+                raise load_error
         
         # Predict structure properties
         try:
@@ -1164,7 +1200,22 @@ async def chgnet_relax_structure(request: dict):
         from chgnet.model.model import CHGNet
         from chgnet.model import StructOptimizer
         
-        chgnet = CHGNet.load(model_name="0.3.0", use_device="cpu", verbose=False)
+        # Windows-compatible CHGNet loading for relaxation
+        try:
+            if WINDOWS_PLATFORM:
+                chgnet = CHGNet.load(model_name="0.3.0", use_device="cpu", verbose=False)
+                logger.info("CHGNet relaxation loaded with Windows compatibility settings")
+            else:
+                chgnet = CHGNet.load(model_name="0.3.0", use_device="cpu", verbose=False)
+        except Exception as load_error:
+            if WINDOWS_PLATFORM and "Buffer dtype mismatch" in str(load_error):
+                raise HTTPException(
+                    status_code=500, 
+                    detail="Windows CHGNet compatibility issue. Try: pip install -r requirements-windows.txt"
+                )
+            else:
+                raise load_error
+                
         relaxer = StructOptimizer(model=chgnet, use_device="cpu", optimizer_class="FIRE")
         
         # Predict initial structure

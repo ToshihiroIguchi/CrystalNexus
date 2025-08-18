@@ -1,7 +1,15 @@
+# Core web framework
 fastapi==0.104.1
 uvicorn==0.24.0
-pymatgen==2025.6.14
-chgnet==0.4.0
 python-multipart==0.0.6
 jinja2==3.1.2
 aiofiles==23.2.1
+
+# Materials science libraries
+# Note: Using tested versions for Windows compatibility
+pymatgen==2024.10.29
+chgnet==0.3.8
+
+# Explicit PyTorch specification for Windows compatibility
+torch>=2.0.0,<2.4.0
+numpy>=1.21.0,<2.0.0
