@@ -1251,8 +1251,8 @@
     <div class="header">
         <h1 class="header-title">CrystalNexus</h1>
         <div class="header-controls">
-            <button class="load-new-cif-btn" id="load-new-cif-btn" onclick="openCifSelectionModal()">
-                📁 Load New CIF
+            <button class="load-new-cif-btn" id="load-new-cif-btn" onclick="resetAndLoadNewCIF()">
+                🔄 Reset & Load New CIF
             </button>
         </div>
     </div>
@@ -3717,7 +3717,15 @@
             document.removeEventListener('keydown', handleModalKeydown);
         }
 
-        function openCifSelectionModal() {
+        function resetAndLoadNewCIF() {
+            // Show confirmation dialog if there's existing data
+            if (window.currentFilename || window.currentAnalysisData) {
+                const confirmed = confirm('This will reset all current analysis data and structure modifications. Continue?');
+                if (!confirmed) {
+                    return;
+                }
+            }
+            
             // Clear all current data and reset application state
             resetApplicationState();
             
@@ -3726,12 +3734,20 @@
             modal.style.display = 'block';
         }
         
+        function openCifSelectionModal() {
+            // Keep the original function for backwards compatibility
+            resetAndLoadNewCIF();
+        }
+        
         function resetApplicationState() {
             // Clear global variables
             window.currentFilename = null;
             window.currentSupercellSize = null;
             window.originalLabels = [];
             window.currentLabels = [];
+            window.currentAnalysisData = null;
+            window.currentStructureData = null;
+            window.operationHistory = [];
             
             // Clear 3D viewer
             if (window.viewer3D) {
@@ -3739,19 +3755,65 @@
                 window.viewer3D.render();
             }
             
-            // Clear analysis data
+            // Reset viewer container to initial state
+            const viewerContainer = document.querySelector('.viewer-container');
+            if (viewerContainer) {
+                viewerContainer.innerHTML = 'Load a CIF file to view the crystal structure';
+                viewerContainer.style.color = '#666';
+                viewerContainer.style.fontSize = '18px';
+            }
+            
+            // Clear analysis data and reset UI elements
             const analysisContainer = document.getElementById('analysis-container');
             if (analysisContainer) {
                 analysisContainer.innerHTML = '';
             }
             
-            // Reset form elements
+            // Reset main crystal info
+            const mainCrystalInfo = document.getElementById('main-crystal-info');
+            if (mainCrystalInfo) {
+                mainCrystalInfo.innerHTML = '<div class="mock-text">Structure details will be displayed here</div>';
+                mainCrystalInfo.className = 'mock-text';
+            }
+            
+            // Reset structure operations
+            const structureOps = document.getElementById('structure-operations-content');
+            if (structureOps) {
+                structureOps.innerHTML = '<div class="mock-text">Element substitution and deletion controls</div>';
+                structureOps.className = 'mock-text';
+            }
+            
+            // Reset form elements and buttons
             const resetBtn = document.getElementById('reset-operations-btn');
             if (resetBtn) {
                 resetBtn.disabled = true;
             }
             
-            console.log('✓ Application state reset for new CIF loading');
+            const chgnetBtn = document.getElementById('chgnet-analyze-btn');
+            if (chgnetBtn) {
+                chgnetBtn.disabled = true;
+                chgnetBtn.textContent = '🧠 Run CHGNet Analysis';
+            }
+            
+            const detailBtn = document.getElementById('detail-analysis-btn');
+            if (detailBtn) {
+                detailBtn.style.display = 'none';
+            }
+            
+            const downloadBtn = document.getElementById('download-analysis-btn');
+            if (downloadBtn) {
+                downloadBtn.style.display = 'none';
+            }
+            
+            // Reset supercell inputs
+            document.getElementById('supercell_x').value = '1';
+            document.getElementById('supercell_y').value = '1';
+            document.getElementById('supercell_z').value = '1';
+            
+            // Force refresh of the page state
+            location.reload();
+            
+            console.log('✓ Application state completely reset for new CIF loading');
         }
 
         function handleModalKeydown(event) {
