@@ -51,6 +51,7 @@ CrystalNexus/
 ├── main.py                 # FastAPI backend application
 ├── start_crystalnexus.py   # Application startup script
 ├── requirements.txt        # Python dependencies
+├── requirements-windows.txt # Windows-specific dependencies
 ├── .gitignore             # Git ignore configuration
 ├── README.md              # Project documentation
 ├── sample_cif/            # Sample crystal structure files
@@ -280,7 +281,7 @@ flake8 main.py
 ### Core Dependencies
 - **FastAPI 0.104.1** - Modern web framework for building APIs
 - **uvicorn 0.24.0** - ASGI web server
-- **pymatgen 2023.10.11** - Materials analysis library
+- **pymatgen 2024.10.29** - Materials analysis library
 - **chgnet 0.3.8** - Crystal graph neural network
 - **torch** - PyTorch for machine learning (CHGNet dependency)
 
