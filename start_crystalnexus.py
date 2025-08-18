@@ -55,7 +55,12 @@ def start_backend():
             print("Debug mode: Auto-reload enabled")
         
         # Start the server as a subprocess
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # Windows対応: CREATE_NO_WINDOWフラグを設定
+        kwargs = {'stdout': subprocess.PIPE, 'stderr': subprocess.PIPE}
+        if platform.system() == "Windows":
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        
+        process = subprocess.Popen(cmd, **kwargs)
         
         # Wait for startup
         print(f"Waiting for backend to start on port {PORT}...")

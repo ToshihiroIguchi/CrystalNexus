@@ -415,6 +415,9 @@ async def analyze_uploaded_cif(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error in analyze_uploaded_cif: {e}")
+        # Windows固有のファイル操作エラーをより詳細に報告
+        if WINDOWS_PLATFORM and ("permission" in str(e).lower() or "access" in str(e).lower()):
+            raise HTTPException(status_code=500, detail="Windows file access error - check file permissions")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 async def analyze_cif_file(file_path: Path) -> Dict:
@@ -457,6 +460,9 @@ async def analyze_cif_file(file_path: Path) -> Dict:
             "num_sites": len(structure.sites)
         }
     except Exception as e:
+        # Windows固有のpymatgenエラーを詳細に報告
+        if WINDOWS_PLATFORM and "fortran" in str(e).lower():
+            raise HTTPException(status_code=500, detail="Windows Fortran library error - install Microsoft Visual C++ Redistributable")
         raise HTTPException(status_code=500, detail=f"Error in pymatgen analysis: {str(e)}")
 
 @app.post("/api/create-supercell")
@@ -496,10 +502,10 @@ async def create_supercell(data: dict):
             # Try to load original structure from CIF file if available
             filename = crystal_data.get("filename")
             if filename:
-                cif_path = os.path.join("sample_cif", filename)
-                if os.path.exists(cif_path):
+                cif_path = SAMPLE_CIF_DIR / filename
+                if cif_path.exists():
                     # Parse original CIF file
-                    parser = CifParser(cif_path)
+                    parser = CifParser(str(cif_path))
                     original_structure = parser.get_structures()[0]
                     
                     # Create supercell
@@ -714,16 +720,15 @@ async def generate_modified_structure_cif(request: dict):
         print(f"Operations to apply: {len(operations)}")
         
         # Construct CIF file path
-        import os
-        cif_path = os.path.join("sample_cif", filename)
+        cif_path = SAMPLE_CIF_DIR / filename
         
-        if not os.path.exists(cif_path):
+        if not cif_path.exists():
             raise HTTPException(status_code=404, detail=f"CIF file not found: {filename}")
         
         # Parse original CIF file
         from pymatgen.io.cif import CifParser, CifWriter
         from pymatgen.core import Element
-        parser = CifParser(cif_path)
+        parser = CifParser(str(cif_path))
         structure = parser.get_structures(primitive=False)[0]  # Keep original lattice
         
         print(f"Original structure: {structure.formula}")
@@ -841,17 +846,16 @@ async def generate_supercell_cif_direct(request: dict):
         logger.info(f"Generating supercell CIF for {filename} with size {supercell_size}")
         
         # Construct CIF file path
-        import os
-        cif_path = os.path.join("sample_cif", filename)
+        cif_path = SAMPLE_CIF_DIR / filename
         
-        if not os.path.exists(cif_path):
+        if not cif_path.exists():
             raise HTTPException(status_code=404, detail=f"CIF file not found: {filename}")
         
         logger.debug(f"Reading CIF file: {cif_path}")
         
         # Parse original CIF file
         from pymatgen.io.cif import CifParser, CifWriter
-        parser = CifParser(cif_path)
+        parser = CifParser(str(cif_path))
         structures = parser.get_structures(primitive=False)  # Keep original lattice - don't convert to primitive
         
         if not structures:
@@ -1492,7 +1496,12 @@ def start_backend():
         if DEBUG:
             cmd.append("--reload")
         
-        return subprocess.Popen(cmd)
+        # Windows対応: CREATE_NO_WINDOWフラグを設定
+        kwargs = {}
+        if WINDOWS_PLATFORM:
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        
+        return subprocess.Popen(cmd, **kwargs)
     except Exception as e:
         logger.error(f"Error starting backend: {e}")
         return None
