@@ -77,6 +77,7 @@ CrystalNexus/
 - **Python 3.8 or higher**
 - **pip package manager**
 - **Git** (for cloning the repository)
+- **Windows Only**: Microsoft Visual C++ Redistributable (required for pymatgen and CHGNet)
 
 ### Quick Start
 
@@ -151,7 +152,14 @@ pip install -r requirements.txt --force-reinstall
 - Ensure stable internet connection during initial setup
 
 **Windows-Specific Issues:**
-If you encounter "Buffer dtype mismatch" error on Windows:
+
+**Missing Visual C++ Redistributable:**
+```bash
+# Error: "Microsoft Visual C++ 14.0 is required" or Fortran library issues
+# Download and install from: https://aka.ms/vs/17/release/vc_redist.x64.exe
+```
+
+**Buffer dtype mismatch error:**
 ```bash
 # Use Windows-specific requirements
 pip install -r requirements-windows.txt
@@ -160,6 +168,12 @@ pip install -r requirements-windows.txt
 pip install torch==2.1.2+cpu --index-url https://download.pytorch.org/whl/cpu
 pip install "numpy>=1.21.0,<1.26.0"
 pip install chgnet==0.3.8
+```
+
+**Permission Issues:**
+```bash
+# Run Command Prompt as Administrator if encountering file access errors
+# Or ensure Python has write permissions to installation directory
 ```
 
 ## Usage Guide
