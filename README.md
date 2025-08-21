@@ -101,12 +101,32 @@ source venv/bin/activate
 
 3. **Install dependencies:**
 ```bash
+# Install latest packages (2025 versions)
 pip install -r requirements.txt
 ```
-Note: Installation may take 5-10 minutes due to PyTorch and CHGNet dependencies.
+**Important Notes:**
+- Installation may take 10-15 minutes due to PyTorch and CHGNet 0.4.0 dependencies
+- **Windows users**: Visual C++ Build Tools required (see troubleshooting section)
+- If installation fails, try: `pip install --upgrade pip` first
 
 4. **Start the application:**
+
+**Windows (Recommended):**
+```cmd
+# Command Prompt
+venv\Scripts\activate
+python start_crystalnexus.py
+```
+
+**PowerShell:**
+```powershell
+venv_latest\Scripts\Activate.ps1
+python start_crystalnexus.py
+```
+
+**macOS/Linux:**
 ```bash
+source venv_latest/bin/activate
 python start_crystalnexus.py
 ```
 
@@ -153,10 +173,67 @@ pip install -r requirements.txt --force-reinstall
 
 **Windows-Specific Issues:**
 
-**Missing Visual C++ Redistributable:**
+**Missing Visual C++ Build Tools (CHGNet 0.4.0+ requirement):**
+
+When installing the latest CHGNet version (0.4.0+), you may encounter:
 ```bash
-# Error: "Microsoft Visual C++ 14.0 is required" or Fortran library issues
+error: Microsoft Visual C++ 14.0 or greater is required. 
+Get it with "Microsoft C++ Build Tools": https://visualstudio.microsoft.com/visual-cpp-build-tools/
+```
+
+**Solution 1: Install Visual Studio Build Tools (Recommended for latest CHGNet)**
+1. **Download Visual Studio Build Tools:**
+   - Go to: https://visualstudio.microsoft.com/visual-cpp-build-tools/
+   - Click "Download Build Tools for Visual Studio 2022"
+   - Run the downloaded installer (`vs_buildtools.exe`)
+
+2. **Install Required Components:**
+   - Launch the installer
+   - Select **"C++ build tools"** workload
+   - Ensure these components are selected:
+     - ✅ **MSVC v143 - VS 2022 C++ x64/x86 build tools (Latest)**
+     - ✅ **Windows 11 SDK (Latest version)**
+     - ✅ **CMake tools for Visual Studio**
+   - Click **"Install"**
+   - **Restart your computer** after installation
+
+3. **Verify Installation:**
+   ```cmd
+   # Open new Command Prompt and test
+   cl
+   # Should show: Microsoft (R) C/C++ Optimizing Compiler Version XX.XX.XXXXX
+   ```
+
+4. **Install CHGNet 0.4.0:**
+   ```cmd
+   pip install chgnet==0.4.0
+   ```
+
+**Solution 2: Use Visual C++ Redistributable (For older CHGNet versions)**
+```bash
+# For CHGNet 0.3.8 and basic functionality
 # Download and install from: https://aka.ms/vs/17/release/vc_redist.x64.exe
+curl -L -o vc_redist.x64.exe "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+# Run the installer: vc_redist.x64.exe
+```
+
+**Solution 3: Avoid Build Requirement (Stable approach)**
+```bash
+# Use stable version that doesn't require building
+pip install chgnet==0.3.8
+```
+
+**Complete Installation Steps with Build Tools:**
+```cmd
+# 1. Install Visual Studio Build Tools (see steps above)
+# 2. Restart computer
+# 3. Open new Command Prompt
+# 4. Create and activate virtual environment
+python -m venv venv
+venv\Scripts\activate
+
+# 5. Install requirements with latest CHGNet
+pip install -r requirements-latest.txt
 ```
 
 **Buffer dtype mismatch error:**

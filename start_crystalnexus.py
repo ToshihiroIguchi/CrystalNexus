@@ -10,6 +10,7 @@ import subprocess
 import time
 import sys
 import os
+import platform
 from pathlib import Path
 
 # Environment-aware configuration (same as main.py)
@@ -31,6 +32,42 @@ def check_backend_status():
     except requests.exceptions.RequestException:
         pass
     return False
+
+def stop_existing_server():
+    """Stop existing CrystalNexus server if running"""
+    try:
+        import subprocess
+        # Get process using port 8080 using netstat
+        result = subprocess.run(
+            ['netstat', '-ano'], 
+            capture_output=True, text=True, shell=True
+        )
+        lines = result.stdout.split('\n')
+        for line in lines:
+            if f':{PORT}' in line and 'LISTENING' in line:
+                parts = line.split()
+                if len(parts) > 4:
+                    pid = parts[-1]
+                    if pid != '0':  # Skip system processes
+                        print(f"Found existing server process (PID: {pid})")
+                        print("Stopping existing server...")
+                        # Use PowerShell to kill process (more reliable than taskkill)
+                        kill_result = subprocess.run([
+                            'powershell', '-Command', f'Stop-Process -Id {pid} -Force'
+                        ], capture_output=True, text=True)
+                        
+                        if kill_result.returncode == 0:
+                            print("OK Existing server stopped")
+                            return True
+                        else:
+                            print(f"ERROR Failed to stop process: {kill_result.stderr}")
+        
+        print("No existing server found to stop")
+        return False
+        
+    except Exception as e:
+        print(f"ERROR Failed to stop existing server: {e}")
+        return False
 
 def start_backend():
     """Start the FastAPI backend with environment-aware configuration"""
@@ -68,24 +105,24 @@ def start_backend():
         for i in range(MAX_STARTUP_WAIT):
             time.sleep(1)
             if check_backend_status():
-                print(f"✓ Backend started successfully!")
-                print(f"✓ CrystalNexus is now available at http://localhost:{PORT}")
+                print(f"OK Backend started successfully!")
+                print(f"OK CrystalNexus is now available at http://localhost:{PORT}")
                 return process
             
             # Check if process is still running
             if process.poll() is not None:
                 stdout, stderr = process.communicate()
-                print("✗ Backend failed to start!")
+                print("ERROR Backend failed to start!")
                 print("STDOUT:", stdout.decode())
                 print("STDERR:", stderr.decode())
                 return None
                 
-        print("✗ Backend startup timeout!")
+        print("ERROR Backend startup timeout!")
         process.terminate()
         return None
         
     except Exception as e:
-        print(f"✗ Error starting backend: {e}")
+        print(f"ERROR Error starting backend: {e}")
         return None
 
 def main():
@@ -95,15 +132,18 @@ def main():
     
     # Check if backend is already running
     if check_backend_status():
-        print("✓ Backend is already running!")
-        print(f"✓ CrystalNexus is available at http://localhost:{PORT}")
-        return
+        print("Backend is already running!")
+        print("Stopping existing server and restarting...")
+        stop_existing_server()
+        # Wait a moment for the port to be freed
+        import time
+        time.sleep(2)
     
     # Try to start the backend
     process = start_backend()
     
     if process is None:
-        print("\n✗ Failed to start CrystalNexus backend")
+        print("\nERROR Failed to start CrystalNexus backend")
         print("Please check the following:")
         print("1. All dependencies are installed (pip install -r requirements.txt)")
         print("2. Port 8080 is not in use by another application")
@@ -125,7 +165,7 @@ def main():
         print("\nShutting down CrystalNexus...")
         process.terminate()
         process.wait()
-        print("✓ Server stopped")
+        print("OK Server stopped")
 
 if __name__ == "__main__":
     main()

@@ -2559,38 +2559,78 @@
                 
                 console.log('  ├─ Step 3: Setting visual style');
                 const styleStart = performance.now();
-                // Apply styling with bond state consideration
-                updateMoleculeStyleRobust();
+                try {
+                    // Apply styling with bond state consideration
+                    console.log('  │   ├─ About to call updateMoleculeStyleRobust()');
+                    updateMoleculeStyleRobust();
+                    console.log('  │   ├─ updateMoleculeStyleRobust() completed successfully');
+                } catch (styleError) {
+                    console.error('❌ ERROR in updateMoleculeStyleRobust():');
+                    console.error(`  │   ├─ Error: ${styleError.message}`);
+                    console.error(`  │   └─ Stack: ${styleError.stack}`);
+                    throw styleError;
+                }
                 const styleDuration = performance.now() - styleStart;
                 console.log(`  │   └─ Style duration: ${styleDuration.toFixed(2)}ms`);
                 
                 console.log('  ├─ Step 4: Adding unit cell (conditional)');
                 const unitCellStart = performance.now();
-                if (displayUnitCell) {
-                    window.viewer3D.addUnitCell({
-                        box: {
-                            color: 'black',
-                            opacity: 0.8,
-                            linewidth: 2
-                        },
-                        axes: displayAxes  // Include axes based on state
-                    });
-                    console.log(`  │   └─ Unit cell added (state: ON)`);
-                } else {
-                    console.log(`  │   └─ Unit cell skipped (state: OFF)`);
+                try {
+                    if (displayUnitCell) {
+                        console.log('  │   ├─ About to call addUnitCell()');
+                        window.viewer3D.addUnitCell({
+                            box: {
+                                color: 'black',
+                                opacity: 0.8,
+                                linewidth: 2
+                            },
+                            axes: displayAxes  // Include axes based on state
+                        });
+                        console.log(`  │   ├─ addUnitCell() completed successfully`);
+                        console.log(`  │   └─ Unit cell added (state: ON)`);
+                    } else {
+                        console.log(`  │   └─ Unit cell skipped (state: OFF)`);
+                    }
+                } catch (unitCellError) {
+                    console.error('❌ ERROR in addUnitCell():');
+                    console.error(`  │   ├─ Error: ${unitCellError.message}`);
+                    console.error(`  │   └─ Stack: ${unitCellError.stack}`);
+                    console.log('  │   └─ Continuing without unit cell...');
+                    // Don't throw, continue with rendering
                 }
                 const unitCellDuration = performance.now() - unitCellStart;
                 console.log(`  │   └─ Unit cell duration: ${unitCellDuration.toFixed(2)}ms`);
                 
                 console.log('  ├─ Step 5: Zooming and rendering');
                 const renderStart = performance.now();
-                window.viewer3D.zoomTo();
-                window.viewer3D.render();
+                try {
+                    console.log('  │   ├─ About to call zoomTo()');
+                    window.viewer3D.zoomTo();
+                    console.log('  │   ├─ zoomTo() completed successfully');
+                    console.log('  │   ├─ About to call render()');
+                    window.viewer3D.render();
+                    console.log('  │   ├─ render() completed successfully');
+                } catch (renderError) {
+                    console.error('❌ ERROR in rendering:');
+                    console.error(`  │   ├─ Error: ${renderError.message}`);
+                    console.error(`  │   └─ Stack: ${renderError.stack}`);
+                    throw renderError;
+                }
                 const renderDuration = performance.now() - renderStart;
                 console.log(`  │   └─ Render duration: ${renderDuration.toFixed(2)}ms`);
                 
                 console.log('  └─ Step 6: Adding status label');
-                addStructureStatusLabel('relaxed', 'Relaxed Structure');
+                try {
+                    console.log('  │   ├─ About to call addStructureStatusLabel()');
+                    addStructureStatusLabel('relaxed', 'Relaxed Structure');
+                    console.log('  │   └─ addStructureStatusLabel() completed successfully');
+                } catch (labelError) {
+                    console.error('❌ ERROR in addStructureStatusLabel():');
+                    console.error(`  │   ├─ Error: ${labelError.message}`);
+                    console.error(`  │   └─ Stack: ${labelError.stack}`);
+                    console.log('  │   └─ Continuing without status label...');
+                    // Don't throw, this is not critical
+                }
                 
                 // Final validation
                 const finalModelCount = getViewerModelCount(window.viewer3D);

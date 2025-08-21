@@ -94,7 +94,7 @@ def _get_elements_from_chgnet() -> Optional[Set[str]]:
         from chgnet.model import CHGNet
         
         # CHGnetモデルをロード
-        model = CHGNet.load()
+        model = CHGNet.load(use_device="cpu")
         
         # モデルの設定から元素情報を取得
         if hasattr(model, 'atom_embedding'):
@@ -256,6 +256,23 @@ class SessionManager:
     def get_session_info(self, session_id: str) -> Optional[Dict]:
         """セッション情報を取得"""
         return self.sessions.get(session_id)
+    
+    def debug_sessions(self) -> Dict:
+        """デバッグ用：全セッション情報を取得"""
+        return {
+            'total_sessions': len(self.sessions),
+            'session_ids': list(self.sessions.keys()),
+            'session_details': {
+                sid: {
+                    'filename': info.get('filename'),
+                    'created_at': info.get('created_at'),
+                    'supercell_size': info.get('supercell_size'),
+                    'operations_count': len(info.get('operations', [])),
+                    'has_current_structure': info.get('current_structure') is not None
+                }
+                for sid, info in self.sessions.items()
+            }
+        }
     
     def cleanup_old_sessions(self, max_age_hours: int = 24) -> None:
         """古いセッションをクリーンアップ"""
@@ -499,36 +516,62 @@ async def create_supercell(data: dict):
             from pymatgen.core import Structure
             import os
             
-            # Try to load original structure from CIF file if available
-            filename = crystal_data.get("filename")
-            if filename:
+            filename = crystal_data.get("filename", "unknown.cif")
+            original_structure = None
+            
+            # Try to load from CIF file first
+            if filename != "unknown.cif":
                 cif_path = SAMPLE_CIF_DIR / filename
                 if cif_path.exists():
-                    # Parse original CIF file
                     parser = CifParser(str(cif_path))
                     original_structure = parser.get_structures()[0]
-                    
-                    # Create supercell
-                    supercell_structure = original_structure.copy()
-                    supercell_structure.make_supercell([a_mult, b_mult, c_mult])
-                    
-                    # Create or update session with structures
-                    session_manager.create_session(session_id, filename, original_structure)
-                    session_manager.update_structure(session_id, supercell_structure, 
-                                                   operations=[], supercell_size=supercell_size)
-                    
-                    # Get structure dictionary for CIF generation
-                    structure_dict = supercell_structure.as_dict()
-                    logger.info(f"Successfully created supercell structure from {filename}")
+                    logger.info(f"Loaded structure from CIF file: {filename}")
+            
+            # If CIF file not found, create structure from crystal_data
+            if original_structure is None:
+                logger.info(f"Creating structure from crystal_data for {filename}")
+                # Extract structure info from crystal_data
+                lattice_params = [
+                    crystal_data.get("a", 1.0),
+                    crystal_data.get("b", 1.0), 
+                    crystal_data.get("c", 1.0),
+                    crystal_data.get("alpha", 90.0),
+                    crystal_data.get("beta", 90.0),
+                    crystal_data.get("gamma", 90.0)
+                ]
+                
+                # Create a simple structure using crystal_data info
+                from pymatgen.core import Lattice
+                lattice = Lattice.from_parameters(*lattice_params)
+                
+                # Use sites data if available, otherwise create a minimal structure
+                sites_data = crystal_data.get("sites", [])
+                if sites_data:
+                    species = [site.get("element", "H") for site in sites_data]
+                    coords = [site.get("abc", [0.0, 0.0, 0.0]) for site in sites_data]
+                    original_structure = Structure(lattice, species, coords)
                 else:
-                    logger.warning(f"CIF file not found: {cif_path}")
-                    structure_dict = None
-            else:
-                logger.warning("No filename provided for structure generation")
-                structure_dict = None
+                    # Fallback: create a minimal H structure
+                    original_structure = Structure(lattice, ["H"], [[0.0, 0.0, 0.0]])
+                    logger.warning(f"Created minimal fallback structure for {filename}")
+            
+            # Create supercell
+            supercell_structure = original_structure.copy()
+            supercell_structure.make_supercell([a_mult, b_mult, c_mult])
+            
+            # Create or update session with structures
+            session_manager.create_session(session_id, filename, original_structure)
+            session_manager.update_structure(session_id, supercell_structure, 
+                                           operations=[], supercell_size=supercell_size)
+            
+            # Get structure dictionary for CIF generation
+            structure_dict = supercell_structure.as_dict()
+            logger.info(f"Successfully created supercell structure and session for {filename}")
                 
         except Exception as e:
-            logger.warning(f"Could not create structure object: {e}")
+            logger.error(f"Could not create structure object: {e}")
+            import traceback
+            traceback.print_exc()
             structure_dict = None
         
         return {
@@ -1113,14 +1156,14 @@ async def chgnet_predict_structure(request: dict):
             raise HTTPException(status_code=503, detail="CHGNet not available. Please install with: pip install chgnet")
         
         from chgnet.model.model import CHGNet
-        # Windows-compatible CHGNet loading
+        # CHGNet 0.4.0 loading with compatibility settings
         try:
             if WINDOWS_PLATFORM:
                 # Force CPU usage and disable verbose for Windows stability
-                chgnet = CHGNet.load(model_name="0.3.0", use_device="cpu", verbose=False)
-                logger.info("CHGNet loaded with Windows compatibility settings")
+                chgnet = CHGNet.load(use_device="cpu", verbose=False)
+                logger.info("CHGNet 0.4.0 loaded with Windows compatibility settings")
             else:
-                chgnet = CHGNet.load(model_name="0.3.0", use_device="cpu", verbose=False)
+                chgnet = CHGNet.load(use_device="cpu", verbose=False)
         except Exception as load_error:
             if WINDOWS_PLATFORM and "Buffer dtype mismatch" in str(load_error):
                 raise HTTPException(
@@ -1158,7 +1201,7 @@ async def chgnet_predict_structure(request: dict):
             "status": "success",
             "prediction": results,
             "model_info": {
-                "version": chgnet.version if hasattr(chgnet, 'version') else "0.3.0",
+                "version": getattr(chgnet, 'version', "0.3.0"),
                 "device": "cpu",
                 "parameters": chgnet.n_params if hasattr(chgnet, 'n_params') else None
             }
@@ -1204,13 +1247,13 @@ async def chgnet_relax_structure(request: dict):
         from chgnet.model.model import CHGNet
         from chgnet.model import StructOptimizer
         
-        # Windows-compatible CHGNet loading for relaxation
+        # CHGNet 0.4.0 loading with compatibility settings
         try:
             if WINDOWS_PLATFORM:
-                chgnet = CHGNet.load(model_name="0.3.0", use_device="cpu", verbose=False)
-                logger.info("CHGNet relaxation loaded with Windows compatibility settings")
+                chgnet = CHGNet.load(use_device="cpu", verbose=False)
+                logger.info("CHGNet 0.4.0 loaded with Windows compatibility settings")
             else:
-                chgnet = CHGNet.load(model_name="0.3.0", use_device="cpu", verbose=False)
+                chgnet = CHGNet.load(use_device="cpu", verbose=False)
         except Exception as load_error:
             if WINDOWS_PLATFORM and "Buffer dtype mismatch" in str(load_error):
                 raise HTTPException(
@@ -1375,7 +1418,7 @@ async def chgnet_relax_structure(request: dict):
             "relaxed_structure_info": relaxed_structure_info,
             "trajectory_data": trajectory_data,
             "model_info": {
-                "version": chgnet.version if hasattr(chgnet, 'version') else "0.3.0",
+                "version": getattr(chgnet, 'version', "0.3.0"),
                 "device": "cpu"
             }
         }
@@ -1388,6 +1431,11 @@ async def chgnet_relax_structure(request: dict):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"CHGNet relaxation failed: {str(e)}")
+
+@app.get("/api/debug-sessions")
+async def debug_sessions():
+    """デバッグ用：セッション情報を取得"""
+    return session_manager.debug_sessions()
 
 @app.post("/api/generate-relaxed-structure-cif")
 async def generate_relaxed_structure_cif(request: dict):

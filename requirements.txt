@@ -1,15 +1,21 @@
-# Core web framework
-fastapi==0.104.1
-uvicorn==0.24.0
-python-multipart==0.0.6
-jinja2==3.1.2
-aiofiles==23.2.1
+# Core web framework - UPDATED TO LATEST 2025 VERSIONS
+fastapi==0.115.5
+uvicorn==0.35.0
+python-multipart==0.0.12
+jinja2==3.1.6
+aiofiles==24.1.0
 
-# Materials science libraries
-# Note: Using tested versions for Windows compatibility
-pymatgen==2024.10.29
-chgnet==0.3.8
+# Materials science libraries - LATEST VERSIONS
+# Updated to support latest features and improvements
+pymatgen==2025.6.14
+chgnet==0.4.0
 
-# Explicit PyTorch specification for Windows compatibility
-torch>=2.0.0,<2.4.0
-numpy>=1.21.0,<2.0.0
+# PyTorch/NumPy - LATEST VERSIONS
+# CHGNet 0.4.0 requires torch>=2.4.0 and numpy>=1.26
+# Visual C++ Build Tools required for CHGNet 0.4.0 on Windows
+torch>=2.4.0,<2.9.0
+numpy>=1.26.0,<2.4.0
+
+# Additional dependencies
+requests>=2.32.0       # For startup script health checks
+scipy>=1.12.0          # Scientific computing (pymatgen dependency)
