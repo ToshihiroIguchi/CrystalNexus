@@ -50,8 +50,8 @@ A comprehensive web-based crystal structure analysis and machine learning applic
 CrystalNexus/
 ├── main.py                 # FastAPI backend application
 ├── start_crystalnexus.py   # Application startup script
-├── requirements.txt        # Python dependencies
-├── requirements-windows.txt # Windows-specific dependencies
+├── requirements.txt        # Python dependencies (2025 latest versions)
+├── UPGRADE_NOTES.md        # Version upgrade notes and compatibility info
 ├── .gitignore             # Git ignore configuration
 ├── README.md              # Project documentation
 ├── sample_cif/            # Sample crystal structure files
@@ -105,8 +105,9 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 **Important Notes:**
-- Installation may take 10-15 minutes due to PyTorch and CHGNet 0.4.0 dependencies
-- **Windows users**: Visual C++ Build Tools required (see troubleshooting section)
+- Installation may take 10-15 minutes due to PyTorch 2.8.0 and CHGNet 0.4.0 dependencies
+- **Windows users**: Visual C++ Build Tools 2022 required for CHGNet 0.4.0 (see troubleshooting section)
+- All packages updated to 2025 latest versions for improved performance and compatibility
 - If installation fails, try: `pip install --upgrade pip` first
 
 4. **Start the application:**
@@ -133,7 +134,8 @@ python start_crystalnexus.py
 5. **Access the application:**
 - Open your web browser
 - Navigate to: **http://localhost:8080**
-- The startup script will automatically check if the backend is running
+- The startup script automatically handles server restart and provides health checks
+- If server is already running, it will be stopped and restarted for a fresh session
 
 ### Manual Startup (Alternative)
 
@@ -173,15 +175,15 @@ pip install -r requirements.txt --force-reinstall
 
 **Windows-Specific Issues:**
 
-**Missing Visual C++ Build Tools (CHGNet 0.4.0+ requirement):**
+**Missing Visual C++ Build Tools (CHGNet 0.4.0 requirement):**
 
-When installing the latest CHGNet version (0.4.0+), you may encounter:
+CrystalNexus now uses CHGNet 0.4.0 which requires compilation on Windows. You may encounter:
 ```bash
 error: Microsoft Visual C++ 14.0 or greater is required. 
 Get it with "Microsoft C++ Build Tools": https://visualstudio.microsoft.com/visual-cpp-build-tools/
 ```
 
-**Solution 1: Install Visual Studio Build Tools (Recommended for latest CHGNet)**
+**Solution: Install Visual Studio Build Tools 2022 (Required for CHGNet 0.4.0)**
 1. **Download Visual Studio Build Tools:**
    - Go to: https://visualstudio.microsoft.com/visual-cpp-build-tools/
    - Click "Download Build Tools for Visual Studio 2022"
@@ -204,24 +206,11 @@ Get it with "Microsoft C++ Build Tools": https://visualstudio.microsoft.com/visu
    # Should show: Microsoft (R) C/C++ Optimizing Compiler Version XX.XX.XXXXX
    ```
 
-4. **Install CHGNet 0.4.0:**
+4. **Install CrystalNexus Dependencies:**
    ```cmd
-   pip install chgnet==0.4.0
+   # Now install the requirements with CHGNet 0.4.0 support
+   pip install -r requirements.txt
    ```
-
-**Solution 2: Use Visual C++ Redistributable (For older CHGNet versions)**
-```bash
-# For CHGNet 0.3.8 and basic functionality
-# Download and install from: https://aka.ms/vs/17/release/vc_redist.x64.exe
-curl -L -o vc_redist.x64.exe "https://aka.ms/vs/17/release/vc_redist.x64.exe"
-# Run the installer: vc_redist.x64.exe
-```
-
-**Solution 3: Avoid Build Requirement (Stable approach)**
-```bash
-# Use stable version that doesn't require building
-pip install chgnet==0.3.8
-```
 
 **Complete Installation Steps with Build Tools:**
 ```cmd
@@ -232,20 +221,12 @@ pip install chgnet==0.3.8
 python -m venv venv
 venv\Scripts\activate
 
-# 5. Install requirements with latest CHGNet
-pip install -r requirements-latest.txt
+# 5. Install requirements with CHGNet 0.4.0 and 2025 latest packages
+pip install -r requirements.txt
 ```
 
-**Buffer dtype mismatch error:**
-```bash
-# Use Windows-specific requirements
-pip install -r requirements-windows.txt
-
-# Or manually install compatible versions
-pip install torch==2.1.2+cpu --index-url https://download.pytorch.org/whl/cpu
-pip install "numpy>=1.21.0,<1.26.0"
-pip install chgnet==0.3.8
-```
+**Legacy Compatibility Issues:**
+If you encounter issues with the latest versions, check `UPGRADE_NOTES.md` for detailed compatibility information and migration steps from older versions.
 
 **Permission Issues:**
 ```bash
@@ -369,19 +350,20 @@ flake8 main.py
 
 ## Dependencies
 
-### Core Dependencies
-- **FastAPI 0.104.1** - Modern web framework for building APIs
-- **uvicorn 0.24.0** - ASGI web server
-- **pymatgen 2024.10.29** - Materials analysis library
-- **chgnet 0.3.8** - Crystal graph neural network
-- **torch** - PyTorch for machine learning (CHGNet dependency)
+### Core Dependencies (2025 Latest Versions)
+- **FastAPI 0.115.5** - Modern web framework for building APIs  
+- **uvicorn 0.35.0** - High-performance ASGI web server
+- **pymatgen 2025.6.14** - Advanced materials analysis library
+- **chgnet 0.4.0** - Latest crystal graph neural network with improved accuracy
+- **torch 2.8.0** - PyTorch machine learning framework
 
 ### Supporting Libraries
-- **python-multipart 0.0.6** - File upload support
-- **jinja2 3.1.2** - Template engine
-- **aiofiles 23.2.1** - Async file operations
-- **numpy** - Numerical computing
-- **scipy** - Scientific computing
+- **python-multipart 0.0.12** - File upload support
+- **jinja2 3.1.6** - Template engine
+- **aiofiles 24.1.0** - Async file operations
+- **numpy** - Numerical computing (>=1.26.0, <2.4.0)
+- **scipy** - Scientific computing (>=1.12.0)
+- **requests** - HTTP library for health checks (>=2.32.0)
 
 ### Frontend Libraries (CDN)
 - **3Dmol.js** - Molecular visualization
