@@ -213,11 +213,6 @@ def validate_element(element: str) -> str:
     
     return element
 
-def refresh_supported_elements():
-    """元素リストを再取得（設定変更時などに使用）"""
-    global ALLOWED_ELEMENTS
-    ALLOWED_ELEMENTS = get_chgnet_supported_elements()
-    logger.info(f"Refreshed element list: {len(ALLOWED_ELEMENTS)} elements available")
 
 class SessionManager:
     """セッション管理クラス - 構造データとメタデータを管理"""
@@ -590,25 +585,6 @@ async def create_supercell(data: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error creating supercell: {str(e)}")
 
-def assign_unique_labels(structure):
-    """
-    Assign unique labels to each site based on element symbol + index
-    Similar to elementedit.py assign_unique_labels_bare function
-    """
-    from collections import Counter
-    
-    counter = Counter()
-    labels = []
-    
-    for site in structure:
-        element = site.specie
-        element_symbol = element.symbol if hasattr(element, "symbol") else element.name
-        index = counter[element_symbol]
-        label = f"{element_symbol}{index}"
-        labels.append(label)
-        counter[element_symbol] += 1
-    
-    return labels
 
 @app.post("/api/get-element-labels")
 async def get_element_labels(data: dict):
@@ -666,12 +642,6 @@ async def get_element_labels(data: dict):
         logger.error(f"Error getting element labels: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting element labels: {str(e)}")
 
-def get_legacy_chgnet_elements():
-    """
-    旧ハードコーディング関数（互換性のため保持）
-    動的取得した元素リストを返す
-    """
-    return list(ALLOWED_ELEMENTS)
 
 @app.get("/api/chgnet-elements")
 async def get_chgnet_elements():
@@ -1431,6 +1401,70 @@ async def chgnet_relax_structure(request: dict):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"CHGNet relaxation failed: {str(e)}")
+
+@app.post("/api/reset-session-structure")
+async def reset_session_structure(request: dict):
+    """
+    Reset session structure to original supercell state
+    Ensures frontend and backend state consistency after Reset Operations
+    """
+    try:
+        session_id = request.get("session_id")
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
+        
+        session_info = session_manager.get_session_info(session_id)
+        if not session_info:
+            raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+        
+        # Get original structure and supercell parameters
+        original_structure = session_info['original_structure']
+        supercell_size = session_info['supercell_size']
+        filename = session_info.get('filename', 'unknown')
+        
+        if original_structure is None:
+            raise HTTPException(status_code=404, detail="No original structure found in session")
+        
+        logger.info(f"Resetting session {session_id[:8]}... ({filename}) to original supercell state")
+        logger.info(f"Supercell size: {supercell_size}")
+        
+        # Recreate supercell from original structure
+        reset_structure = original_structure.copy()
+        reset_structure.make_supercell(supercell_size)
+        
+        # Update session with reset structure and clear operations
+        session_manager.update_structure(session_id, reset_structure, operations=[])
+        
+        # Clear any relaxed structure data
+        if 'relaxed_structure' in session_info:
+            del session_info['relaxed_structure']
+        if 'chgnet_result' in session_info:
+            del session_info['chgnet_result']
+        
+        logger.info(f"Session {session_id[:8]}... reset successfully")
+        logger.info(f"Reset structure: {reset_structure.composition} ({len(reset_structure)} sites)")
+        
+        return {
+            "status": "success",
+            "message": "Session reset to original structure",
+            "session_id": session_id,
+            "structure_info": {
+                "formula": str(reset_structure.composition),
+                "num_sites": len(reset_structure),
+                "volume": float(reset_structure.volume),
+                "density": float(reset_structure.density),
+                "supercell_size": supercell_size
+            }
+        }
+        
+    except ValueError as e:
+        logger.error(f"Session reset validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Session reset error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to reset session: {str(e)}")
 
 @app.get("/api/debug-sessions")
 async def debug_sessions():

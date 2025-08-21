@@ -3245,32 +3245,94 @@
         }
 
 
-        function resetToOriginalStructure() {
+        async function resetToOriginalStructure() {
             if (!window.originalSupercellData || window.originalLabels.length === 0) {
                 showNotification('No original data to reset to', 'warning');
                 return;
             }
             
-            // Clear operation history
-            window.atomicOperations = [];
-            console.log('📝 Cleared operation history');
+            if (!window.sessionId) {
+                showNotification('No active session found', 'error');
+                return;
+            }
             
-            // Restore current working data from immutable original data
-            window.currentStructureData = JSON.parse(JSON.stringify(window.originalSupercellData));
-            window.currentLabels = [...window.originalLabels];
-            
-            // Update displays
-            supercellData = window.currentStructureData; // For compatibility with existing display functions
-            displaySupercellInfo();
-            displayStructureOperations(window.currentLabels);
-            
-            // Update 3D visualization
-            updateStructureVisualization();
-            
-            console.log('✓ Structure reset to original state');
-            console.log(`  - Formula: ${window.currentStructureData.supercell_info.formula}`);
-            console.log(`  - Atoms: ${window.currentLabels.length}`);
-            showNotification('Structure reset to original state', 'info');
+            try {
+                // Show reset in progress
+                showNotification('Resetting structure...', 'info');
+                console.log('🔄 Starting structure reset...');
+                
+                // Reset backend session state first
+                const response = await fetch('/api/reset-session-structure', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        session_id: window.sessionId
+                    })
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || `HTTP ${response.status}`);
+                }
+                
+                const result = await response.json();
+                console.log('✅ Backend session reset successful:', result);
+                
+                // Clear frontend operation history
+                window.atomicOperations = [];
+                console.log('📝 Cleared frontend operation history');
+                
+                // Restore frontend working data from immutable original data
+                window.currentStructureData = JSON.parse(JSON.stringify(window.originalSupercellData));
+                window.currentLabels = [...window.originalLabels];
+                
+                // Update displays
+                supercellData = window.currentStructureData; // For compatibility with existing display functions
+                displaySupercellInfo();
+                displayStructureOperations(window.currentLabels);
+                
+                // Update 3D visualization
+                updateStructureVisualization();
+                
+                // Clear any previous CHGNet analysis results
+                resetPhysicalProperties();
+                
+                console.log('✓ Complete structure reset successful');
+                console.log(`  - Frontend Formula: ${window.currentStructureData.supercell_info.formula}`);
+                console.log(`  - Frontend Atoms: ${window.currentLabels.length}`);
+                console.log(`  - Backend Formula: ${result.structure_info.formula}`);
+                console.log(`  - Backend Atoms: ${result.structure_info.num_sites}`);
+                
+                // Verify frontend-backend consistency
+                const frontendFormula = window.currentStructureData.supercell_info.formula;
+                const backendFormula = result.structure_info.formula;
+                
+                if (frontendFormula === backendFormula) {
+                    showNotification(`Reset complete: ${backendFormula} ✓ Synchronized`, 'success');
+                } else {
+                    console.warn('⚠️ Frontend-Backend formula mismatch detected');
+                    showNotification(`Reset complete: ${backendFormula} (Note: Sync issue detected)`, 'warning');
+                }
+                
+            } catch (error) {
+                console.error('❌ Structure reset failed:', error);
+                showNotification(`Reset failed: ${error.message}. Please refresh the page.`, 'error');
+                
+                // Fallback: try frontend-only reset
+                try {
+                    window.atomicOperations = [];
+                    window.currentStructureData = JSON.parse(JSON.stringify(window.originalSupercellData));
+                    window.currentLabels = [...window.originalLabels];
+                    displaySupercellInfo();
+                    displayStructureOperations(window.currentLabels);
+                    updateStructureVisualization();
+                    console.log('⚠️ Performed frontend-only fallback reset');
+                } catch (fallbackError) {
+                    console.error('❌ Even fallback reset failed:', fallbackError);
+                }
+            }
         }
 
         function initializeViewer() {
