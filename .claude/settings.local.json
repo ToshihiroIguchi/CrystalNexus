@@ -6,7 +6,9 @@
       "Bash(\"venv_latest\\Scripts\\activate.bat\")",
       "Bash(python:*)",
       "Bash(curl:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(timeout:*)"
     ],
     "deny": [],
     "ask": []

@@ -13,6 +13,7 @@ import os
 import platform
 import threading
 import queue
+import signal
 from pathlib import Path
 
 # Environment-aware configuration (same as main.py)
@@ -22,6 +23,10 @@ DEBUG = os.getenv('CRYSTALNEXUS_DEBUG', 'False').lower() == 'true'
 
 HEALTH_URL = f"http://localhost:{PORT}/health"
 MAX_STARTUP_WAIT = 30  # seconds
+
+# Global shutdown flag
+shutdown_requested = False
+server_process = None
 
 def check_backend_status():
     """Check if the backend is already running"""
@@ -129,8 +134,11 @@ def start_backend():
 def monitor_process_health(process, status_queue):
     """
     対策3: プロセス監視機能 - バックグラウンドでプロセスの健全性を監視
+    KeyboardInterrupt対応版: interruptible sleepを使用
     """
-    while True:
+    global shutdown_requested
+    
+    while not shutdown_requested:
         try:
             # プロセス状態チェック
             if process.poll() is not None:
@@ -147,19 +155,29 @@ def monitor_process_health(process, status_queue):
             except requests.exceptions.RequestException as e:
                 status_queue.put(("health_check_error", f"Health check error: {e}"))
             
-            time.sleep(30)  # 30秒間隔で監視
+            # Interruptible sleep: 30秒を1秒刻みに分割
+            for _ in range(30):
+                if shutdown_requested:
+                    break
+                time.sleep(1)
             
         except Exception as e:
             status_queue.put(("monitor_error", f"Monitor thread error: {e}"))
-            time.sleep(60)  # エラー時は1分待機してリトライ
+            # エラー時も interruptible sleep
+            for _ in range(60):
+                if shutdown_requested:
+                    break
+                time.sleep(1)
 
 def print_status_updates(status_queue):
     """
     対策3: ステータス更新の非同期表示
+    KeyboardInterrupt対応版: interruptible sleepを使用
     """
+    global shutdown_requested
     last_health_ok = time.time()
     
-    while True:
+    while not shutdown_requested:
         try:
             # ノンブロッキングでステータスチェック
             try:
@@ -183,16 +201,50 @@ def print_status_updates(status_queue):
             except queue.Empty:
                 pass
             
-            time.sleep(5)  # 5秒間隔でキューチェック
+            # Interruptible sleep: 5秒を1秒刻みに分割
+            for _ in range(5):
+                if shutdown_requested:
+                    break
+                time.sleep(1)
             
         except Exception as e:
             print(f"Status monitor error: {e}")
-            time.sleep(30)
+            # エラー時も interruptible sleep
+            for _ in range(30):
+                if shutdown_requested:
+                    break
+                time.sleep(1)
+
+def signal_handler(signum, frame):
+    """シグナルハンドラ: Ctrl+C対応"""
+    global shutdown_requested, server_process
+    print(f"\nReceived signal {signum}")
+    print("Shutdown requested...")
+    shutdown_requested = True
+    
+    # サーバープロセスを即座に終了
+    if server_process:
+        print("Terminating server process...")
+        server_process.terminate()
+        try:
+            server_process.wait(timeout=5)
+            print("Server terminated successfully")
+        except subprocess.TimeoutExpired:
+            print("Force killing server...")
+            server_process.kill()
+            server_process.wait()
 
 def main():
     """Main startup routine"""
+    global server_process, shutdown_requested
+    
     print("CrystalNexus Startup Script")
     print("=" * 40)
+    
+    # シグナルハンドラを設定
+    signal.signal(signal.SIGINT, signal_handler)
+    if platform.system() != "Windows":
+        signal.signal(signal.SIGTERM, signal_handler)
     
     # Check if backend is already running
     if check_backend_status():
@@ -200,11 +252,11 @@ def main():
         print("Stopping existing server and restarting...")
         stop_existing_server()
         # Wait a moment for the port to be freed
-        import time
         time.sleep(2)
     
     # Try to start the backend
     process = start_backend()
+    server_process = process  # グローバル変数に保存
     
     if process is None:
         print("\nERROR Failed to start CrystalNexus backend")
@@ -238,32 +290,34 @@ def main():
     print("Background monitoring started...")
     
     try:
-        # Keep the script running
-        process.wait()
-    except KeyboardInterrupt:
-        print("\nShutting down CrystalNexus...")
-        
-        # 対策2: 強制終了機能の強化
-        print("Terminating server process...")
-        process.terminate()
-        
-        try:
-            # 10秒間待機して正常終了を試行
-            print("Waiting for graceful shutdown...")
-            process.wait(timeout=10)
-            print("OK Server stopped gracefully")
-        except subprocess.TimeoutExpired:
-            # 正常終了に失敗した場合は強制終了
-            print("Graceful shutdown failed, forcing termination...")
-            process.kill()
+        # Keep the script running and wait for shutdown signal
+        while not shutdown_requested:
             try:
-                process.wait(timeout=5)
-                print("OK Server force-stopped")
-            except subprocess.TimeoutExpired:
-                print("WARNING: Server may still be running - check manually")
-        except Exception as e:
-            print(f"ERROR during shutdown: {e}")
-            print("WARNING: Server may still be running - check manually")
+                # 短い間隔でプロセス状態をチェック
+                if process.poll() is not None:
+                    print("Server process terminated unexpectedly")
+                    break
+                time.sleep(1)
+            except KeyboardInterrupt:
+                # 念のため追加のCtrl+C処理
+                shutdown_requested = True
+                break
+                
+        print("OK Main loop exited")
+        
+    except Exception as e:
+        print(f"ERROR in main loop: {e}")
+        shutdown_requested = True
+        
+    # 最終クリーンアップ
+    if process and process.poll() is None:
+        print("Final cleanup: terminating server...")
+        process.terminate()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
 
 if __name__ == "__main__":
     main()
