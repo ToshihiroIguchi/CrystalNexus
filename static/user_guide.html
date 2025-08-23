@@ -167,7 +167,7 @@
         <ol>
             <li><strong>Structure Input:</strong> Upload CIF files or select from curated sample structures</li>
             <li><strong>Validation:</strong> Automated checks for occupancy completeness and element compatibility</li>
-            <li><strong>Supercell Generation:</strong> Optional expansion to larger unit cells (maximum 5×5×5)</li>
+            <li><strong>Supercell Generation:</strong> Optional expansion to larger unit cells (limited by total atom count)</li>
             <li><strong>Structure Modification:</strong> Element substitution and atom deletion capabilities</li>
             <li><strong>Property Prediction:</strong> CHGNet-based calculation of energies and magnetic moments</li>
             <li><strong>Results Analysis:</strong> Visualization of optimized structures and quantitative property data</li>
@@ -201,7 +201,7 @@
         <li>Fully occupied crystalline structures (occupancy = 1.0)</li>
         <li>Elements within the training set (H-Ac)</li>
         <li>File sizes below 10 MB</li>
-        <li>Supercell dimensions ≤ 5 in each direction</li>
+        <li>Total atom count ≤ 200 (configurable, to prevent excessive calculation times)</li>
     </ul>
     
     <h2>6. Performance Benchmarking</h2>
