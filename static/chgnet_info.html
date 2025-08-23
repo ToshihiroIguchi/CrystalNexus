@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>About CHGNet - Crystal Materials Prediction</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #f8f9fa;
+            min-height: 100vh;
+        }
+        
+        .header-bar {
+            background: linear-gradient(135deg, #2c3e50, #34495e);
+            color: white;
+            padding: 20px 0;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .header-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .main-title {
+            font-size: 28px;
+            font-weight: 600;
+        }
+        
+        .close-button {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s ease;
+        }
+        
+        .close-button:hover {
+            background: rgba(255, 255, 255, 0.2);
+            border-color: rgba(255, 255, 255, 0.5);
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px;
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 40px;
+        }
+        
+        .main-content {
+            background: white;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        }
+        
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .sidebar-card {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        }
+        
+        h1 {
+            color: #2c3e50;
+            font-size: 32px;
+            margin-bottom: 30px;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 15px;
+        }
+        
+        h2 {
+            color: #34495e;
+            font-size: 24px;
+            margin-top: 35px;
+            margin-bottom: 20px;
+            border-left: 4px solid #3498db;
+            padding-left: 20px;
+        }
+        
+        h3 {
+            color: #2c3e50;
+            font-size: 18px;
+            margin-bottom: 15px;
+        }
+        
+        .intro-box {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+            padding: 30px;
+            border-radius: 12px;
+            margin: 30px 0;
+            font-size: 16px;
+            box-shadow: 0 6px 20px rgba(52, 152, 219, 0.3);
+        }
+        
+        .intro-box h2 {
+            color: white;
+            border: none;
+            margin-top: 0;
+            padding-left: 0;
+            font-size: 22px;
+        }
+        
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 25px;
+            margin: 30px 0;
+        }
+        
+        .feature-card {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 10px;
+            border-left: 4px solid #3498db;
+            transition: transform 0.2s ease;
+        }
+        
+        .feature-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        
+        .algorithm-section {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 30px;
+            margin: 30px 0;
+        }
+        
+        .step-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            margin-top: 20px;
+        }
+        
+        .step {
+            display: flex;
+            align-items: flex-start;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        
+        .step-number {
+            background: #3498db;
+            color: white;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 15px;
+            font-weight: bold;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+        
+        .performance-stats {
+            background: linear-gradient(135deg, #27ae60, #2ecc71);
+            color: white;
+            padding: 25px;
+            border-radius: 10px;
+            margin: 25px 0;
+        }
+        
+        .performance-stats p {
+            margin: 8px 0;
+            font-size: 15px;
+        }
+        
+        .warning {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            color: #856404;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 25px 0;
+        }
+        
+        .applications-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            margin: 25px 0;
+        }
+        
+        .app-item {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 3px solid #e74c3c;
+        }
+        
+        .links-section {
+            text-align: center;
+            margin: 40px 0;
+        }
+        
+        .link-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin: 30px 0;
+        }
+        
+        .link-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            padding: 15px 25px;
+            text-decoration: none;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            font-weight: 500;
+            font-size: 15px;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.15);
+        }
+        
+        .link-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.2);
+        }
+        
+        .paper-button {
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+            color: white;
+        }
+        
+        .github-button {
+            background: linear-gradient(135deg, #2c3e50, #34495e);
+            color: white;
+        }
+        
+        .website-button {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+        }
+        
+        .pypi-button {
+            background: linear-gradient(135deg, #f39c12, #e67e22);
+            color: white;
+        }
+        
+        .citation-box {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            padding: 25px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.8;
+            color: #495057;
+        }
+        
+        .sidebar-title {
+            font-size: 20px;
+            color: #2c3e50;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        
+        .quick-stats {
+            background: linear-gradient(135deg, #9b59b6, #8e44ad);
+            color: white;
+        }
+        
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 12px 0;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        .stat-item:last-child {
+            border-bottom: none;
+        }
+        
+        .advantages {
+            background: linear-gradient(135deg, #16a085, #1abc9c);
+            color: white;
+        }
+        
+        .advantage-item {
+            margin: 12px 0;
+            padding-left: 20px;
+            position: relative;
+        }
+        
+        .advantage-item:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            font-weight: bold;
+        }
+        
+        code {
+            background: #f4f4f4;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+        
+        @media (max-width: 1024px) {
+            .container {
+                grid-template-columns: 1fr;
+                gap: 30px;
+            }
+            
+            .feature-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .step-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header-bar">
+        <div class="header-content">
+            <h1 class="main-title">CHGNet Documentation</h1>
+            <button class="close-button" onclick="window.close()" title="Close Window">Close</button>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div class="main-content">
+            <h1>CHGNet (Crystal Hamiltonian Graph Neural Network)</h1>
+            
+            <div class="intro-box">
+                <h2>What is CHGNet?</h2>
+                <p><strong>CHGNet</strong> is a state-of-the-art machine learning model that predicts structure, energy, forces, stress, and magnetic moments of crystalline materials. Trained on extensive density functional theory (DFT) calculation data from the Materials Project database, it achieves high accuracy predictions thousands of times faster than traditional DFT calculations.</p>
+            </div>
+            
+            <h2>Key Features & Capabilities</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h3>⚡ Ultra-fast Predictions</h3>
+                    <p>Complete calculations in seconds that would take hours to days with DFT methods. Ideal for high-throughput screening applications.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🎯 High Accuracy</h3>
+                    <p>Trained on over 1.5 million structures from Materials Project, achieving DFT-level accuracy for energy and force predictions.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🔄 Structure Optimization</h3>
+                    <p>Simultaneously optimizes atomic positions and lattice parameters to find stable structures automatically.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🧲 Magnetic Predictions</h3>
+                    <p>Predicts magnetic moment magnitude and direction to support magnetic materials research and design.</p>
+                </div>
+            </div>
+            
+            <div class="algorithm-section">
+                <h2>Prediction Algorithm Flow</h2>
+                <p>CHGNet employs a sophisticated graph neural network approach to materials prediction:</p>
+                <div class="step-grid">
+                    <div class="step">
+                        <div class="step-number">1</div>
+                        <div>
+                            <strong>Graph Representation</strong><br>
+                            Convert crystal structure into atomic graph with atoms as nodes and bonds as edges
+                        </div>
+                    </div>
+                    <div class="step">
+                        <div class="step-number">2</div>
+                        <div>
+                            <strong>Neural Network Processing</strong><br>
+                            Learn complex interatomic interactions using graph neural networks
+                        </div>
+                    </div>
+                    <div class="step">
+                        <div class="step-number">3</div>
+                        <div>
+                            <strong>Multi-property Prediction</strong><br>
+                            Simultaneously predict energy, forces, stress, and magnetic properties
+                        </div>
+                    </div>
+                    <div class="step">
+                        <div class="step-number">4</div>
+                        <div>
+                            <strong>Structure Optimization</strong><br>
+                            Search for most stable structure through iterative optimization
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <h2>Applications in Materials Science</h2>
+            <div class="applications-grid">
+                <div class="app-item">
+                    <strong>New Materials Discovery</strong><br>
+                    High-throughput screening for promising materials with desired properties
+                </div>
+                <div class="app-item">
+                    <strong>Structure Optimization</strong><br>
+                    Theoretical optimization of experimental structures to find ground states
+                </div>
+                <div class="app-item">
+                    <strong>Phase Stability Analysis</strong><br>
+                    Prediction of polymorphs, phase transitions, and thermodynamic stability
+                </div>
+                <div class="app-item">
+                    <strong>Machine Learning MD</strong><br>
+                    Use as accurate force field for molecular dynamics simulations
+                </div>
+                <div class="app-item">
+                    <strong>High-Pressure Properties</strong><br>
+                    Prediction of structural changes and properties under extreme conditions
+                </div>
+                <div class="app-item">
+                    <strong>Defect Engineering</strong><br>
+                    Study of point defects, surfaces, and interfaces in crystalline materials
+                </div>
+            </div>
+            
+            <div class="warning">
+                <strong>⚠ Important Limitations:</strong> CHGNet predictions are most reliable within the training data range. For extreme conditions, novel material systems, or critical applications, validation with DFT calculations is strongly recommended. The model's accuracy depends on the similarity to Materials Project training data.
+            </div>
+            
+            <div class="links-section">
+                <h2>Technical Resources & Documentation</h2>
+                <div class="link-grid">
+                    <a href="https://www.nature.com/articles/s42256-023-00716-3" target="_blank" class="link-button paper-button">
+                        📄 Nature Paper
+                    </a>
+                    <a href="https://github.com/CederGroupHub/chgnet" target="_blank" class="link-button github-button">
+                        🐙 GitHub Repository
+                    </a>
+                    <a href="https://chgnet.lbl.gov/" target="_blank" class="link-button website-button">
+                        🌐 Official Website
+                    </a>
+                    <a href="https://pypi.org/project/chgnet/" target="_blank" class="link-button pypi-button">
+                        📦 PyPI Package
+                    </a>
+                </div>
+            </div>
+            
+            <h2>Citation Information</h2>
+            <div class="citation-box">
+                Deng, B., Zhong, P., Jun, K. et al. CHGNet as a pretrained universal neural network potential for charge-informed atomistic modelling. Nat Mach Intell 5, 1031–1041 (2023).<br><br>
+                DOI: <code>https://doi.org/10.1038/s42256-023-00716-3</code>
+            </div>
+        </div>
+        
+        <div class="sidebar">
+            <div class="sidebar-card quick-stats">
+                <h3 class="sidebar-title" style="color: white; border-color: rgba(255,255,255,0.3);">Performance Metrics</h3>
+                <div class="stat-item">
+                    <span>Energy Accuracy (MAE)</span>
+                    <strong>&lt; 30 meV/atom</strong>
+                </div>
+                <div class="stat-item">
+                    <span>Force Accuracy (MAE)</span>
+                    <strong>&lt; 0.1 eV/Å</strong>
+                </div>
+                <div class="stat-item">
+                    <span>Speed Improvement</span>
+                    <strong>1000-10000x</strong>
+                </div>
+                <div class="stat-item">
+                    <span>Element Coverage</span>
+                    <strong>89 Elements</strong>
+                </div>
+                <div class="stat-item">
+                    <span>Training Data</span>
+                    <strong>1.5M+ Structures</strong>
+                </div>
+            </div>
+            
+            <div class="sidebar-card advantages">
+                <h3 class="sidebar-title" style="color: white; border-color: rgba(255,255,255,0.3);">Key Advantages</h3>
+                <div class="advantage-item">Dramatically reduced computational cost</div>
+                <div class="advantage-item">DFT-level accuracy for most systems</div>
+                <div class="advantage-item">Simultaneous multi-property prediction</div>
+                <div class="advantage-item">No need for expensive supercomputers</div>
+                <div class="advantage-item">Enables large-scale materials screening</div>
+                <div class="advantage-item">Supports structure optimization</div>
+                <div class="advantage-item">Magnetic properties prediction</div>
+            </div>
+            
+            <div class="sidebar-card">
+                <h3 class="sidebar-title">Model Architecture</h3>
+                <p><strong>Type:</strong> Graph Neural Network</p>
+                <p><strong>Parameters:</strong> 412,525</p>
+                <p><strong>Input:</strong> Crystal structure (CIF/POSCAR)</p>
+                <p><strong>Output:</strong> Energy, Forces, Stress, Magnetism</p>
+                <p><strong>Training:</strong> Materials Project DFT data</p>
+                <p><strong>Framework:</strong> PyTorch-based</p>
+            </div>
+        </div>
+    </div>
+    
+    <div style="text-align: center; padding: 40px; color: #666; background: #f8f9fa; border-top: 1px solid #dee2e6;">
+        <p>This documentation is designed for materials science researchers using CHGNet for crystal structure analysis.<br>
+        For the most up-to-date information, please visit the official CHGNet website and GitHub repository.</p>
+    </div>
+</body>
+</html>

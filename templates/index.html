@@ -39,6 +39,28 @@
         .header-controls {
             display: flex;
             gap: 10px;
+            align-items: center;
+        }
+
+        .chgnet-help-btn {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .chgnet-help-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            border-color: rgba(255, 255, 255, 0.5);
+            transform: translateY(-1px);
         }
 
 
@@ -1334,6 +1356,9 @@
     <div class="header">
         <h1 class="header-title">CrystalNexus</h1>
         <div class="header-controls">
+            <a href="/static/chgnet_info.html" target="_blank" class="chgnet-help-btn" title="About CHGNet - Learn more about the prediction model">
+                ❓ CHGNet Help
+            </a>
             <button class="load-new-cif-btn" id="load-new-cif-btn" onclick="resetAndLoadNewCIF()">
                 🔄 Reset & Load New CIF
             </button>
