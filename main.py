@@ -388,6 +388,17 @@ async def analyze_sample_cif(data: dict):
         
         result = await analyze_cif_file(file_path)
         result["filename"] = safe_name
+        
+        # Store the original structure for consistency with uploaded files
+        try:
+            from pymatgen.core import Structure
+            structure = Structure.from_file(str(file_path))
+            result["structure_data"] = structure.as_dict()
+            logger.info(f"Successfully stored structure data for sample file: {safe_name}")
+        except Exception as struct_error:
+            logger.warning(f"Failed to store structure data for sample file: {struct_error}")
+            # Sample files can still work without structure_data since file is available
+        
         return result
     except ValueError as e:
         logger.warning(f"Invalid input in analyze_sample_cif: {e}")
@@ -603,10 +614,20 @@ async def create_supercell(data: dict):
             if "structure_data" in crystal_data:
                 try:
                     from pymatgen.core import Structure
-                    original_structure = Structure.from_dict(crystal_data["structure_data"])
-                    logger.info(f"Loaded structure from stored structure_data for: {filename}")
+                    structure_data = crystal_data["structure_data"]
+                    if structure_data and isinstance(structure_data, dict):
+                        original_structure = Structure.from_dict(structure_data)
+                        logger.info(f"Loaded structure from stored structure_data for: {filename}")
+                        # Validate the loaded structure
+                        if len(original_structure.sites) == 0:
+                            logger.warning(f"Structure has no sites: {filename}")
+                            original_structure = None
+                    else:
+                        logger.warning(f"Invalid structure_data format: {type(structure_data)}")
                 except Exception as e:
-                    logger.warning(f"Failed to load from structure_data: {e}")
+                    logger.error(f"Failed to load from structure_data: {e}")
+                    logger.error(f"Structure data content: {crystal_data.get('structure_data', 'None')[:200]}...")
+                    original_structure = None
             
             # Method 2: Try to load from CIF file (for sample files)
             if original_structure is None and filename != "unknown.cif":
@@ -616,35 +637,16 @@ async def create_supercell(data: dict):
                     original_structure = parser.get_structures()[0]
                     logger.info(f"Loaded structure from CIF file: {filename}")
             
-            # Method 3: If no structure available, create from crystal_data
+            # If no structure available, this is an error condition
             if original_structure is None:
-                logger.info(f"Creating structure from crystal_data for {filename}")
-                # Extract structure info from crystal_data - lattice parameters are in nested object
-                lattice_params_dict = crystal_data.get("lattice_parameters", {})
-                lattice_params = [
-                    lattice_params_dict.get("a", crystal_data.get("a", 1.0)),
-                    lattice_params_dict.get("b", crystal_data.get("b", 1.0)), 
-                    lattice_params_dict.get("c", crystal_data.get("c", 1.0)),
-                    lattice_params_dict.get("alpha", crystal_data.get("alpha", 90.0)),
-                    lattice_params_dict.get("beta", crystal_data.get("beta", 90.0)),
-                    lattice_params_dict.get("gamma", crystal_data.get("gamma", 90.0))
-                ]
-                logger.info(f"Using lattice parameters: {lattice_params}")
-                
-                # Create a simple structure using crystal_data info
-                from pymatgen.core import Lattice
-                lattice = Lattice.from_parameters(*lattice_params)
-                
-                # Use sites data if available, otherwise create a minimal structure
-                sites_data = crystal_data.get("sites", [])
-                if sites_data:
-                    species = [site.get("element", "H") for site in sites_data]
-                    coords = [site.get("abc", [0.0, 0.0, 0.0]) for site in sites_data]
-                    original_structure = Structure(lattice, species, coords)
+                error_msg = f"Failed to load structure for {filename}. "
+                if "structure_data" in crystal_data:
+                    error_msg += "Structure data was provided but could not be parsed. "
                 else:
-                    # Fallback: create a minimal H structure
-                    original_structure = Structure(lattice, ["H"], [[0.0, 0.0, 0.0]])
-                    logger.warning(f"Created minimal fallback structure for {filename}")
+                    error_msg += "No structure data available and file not found in sample directory. "
+                error_msg += "Please ensure the CIF file is valid and properly uploaded."
+                logger.error(error_msg)
+                raise HTTPException(status_code=500, detail=error_msg)
             
             # Create supercell
             supercell_structure = original_structure.copy()
