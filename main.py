@@ -408,15 +408,44 @@ async def analyze_uploaded_cif(file: UploadFile = File(...)):
         if len(contents) > MAX_FILE_SIZE:
             raise HTTPException(status_code=413, detail=f"File too large. Maximum size: {MAX_FILE_SIZE} bytes")
         
-        # セキュアな一時ファイル作成
-        with tempfile.NamedTemporaryFile(suffix='.cif', delete=False) as tmp_file:
-            tmp_file.write(contents)
+        # セキュアな一時ファイル作成（UTF-8エンコーディング明示）
+        try:
+            # Try to decode as UTF-8 first
+            contents_str = contents.decode('utf-8')
+            # Remove BOM if present
+            if contents_str.startswith('\ufeff'):
+                contents_str = contents_str[1:]
+            logger.info("Successfully decoded CIF file as UTF-8")
+        except UnicodeDecodeError:
+            try:
+                # Fallback to latin-1
+                contents_str = contents.decode('latin-1')
+                logger.info("Decoded CIF file as latin-1")
+            except UnicodeDecodeError as decode_error:
+                logger.error(f"Failed to decode CIF file: {decode_error}")
+                raise ValueError("CIF file encoding error. Please ensure the file is saved in UTF-8 or ASCII format.")
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.cif', delete=False, encoding='utf-8') as tmp_file:
+            tmp_file.write(contents_str)
             temp_path = Path(tmp_file.name)
         
         try:
             result = await analyze_cif_file(temp_path)
             safe_name = safe_filename(file.filename)
             result["filename"] = safe_name
+            
+            # Store the original structure for later use in createSupercell
+            # Parse the structure and add it to the result
+            try:
+                from pymatgen.core import Structure
+                structure = Structure.from_file(str(temp_path))
+                # Store structure as a dictionary for JSON serialization
+                result["structure_data"] = structure.as_dict()
+                logger.info(f"Successfully stored structure data for uploaded file: {safe_name}")
+            except Exception as struct_error:
+                logger.warning(f"Failed to store structure data: {struct_error}")
+                # Continue without structure data - fallback will handle this
+            
             return result
         finally:
             if temp_path.exists():
@@ -424,18 +453,68 @@ async def analyze_uploaded_cif(file: UploadFile = File(...)):
                 
     except ValueError as e:
         logger.warning(f"Invalid input in analyze_uploaded_cif: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        # Provide user-friendly error message for common CIF issues
+        error_msg = str(e)
+        if "Invalid CIF file format" in error_msg:
+            user_msg = "CIF file format error. Please ensure your file follows standard CIF format with proper symmetry operations and atomic coordinates."
+        elif "No structures found" in error_msg:
+            user_msg = "No crystal structures found in CIF file. Please verify the file contains valid atomic site data."
+        elif "no atomic sites" in error_msg.lower():
+            user_msg = "CIF file contains no atomic positions. Please ensure your file includes atom site coordinates."
+        else:
+            user_msg = f"CIF file validation error: {error_msg}"
+        raise HTTPException(status_code=400, detail=user_msg)
     except Exception as e:
         logger.error(f"Error in analyze_uploaded_cif: {e}")
+        logger.error(f"Error type: {type(e)}")
+        logger.error(f"Error traceback: {str(e)}", exc_info=True)
         # Windows固有のファイル操作エラーをより詳細に報告
         if WINDOWS_PLATFORM and ("permission" in str(e).lower() or "access" in str(e).lower()):
             raise HTTPException(status_code=500, detail="Windows file access error - check file permissions")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 async def analyze_cif_file(file_path: Path) -> Dict:
     try:
-        # CIF file parsing - same as ZrO2test.py
-        structure = Structure.from_file(str(file_path))
+        # CIF file parsing with enhanced validation
+        logger.info(f"Parsing CIF file: {file_path}")
+        
+        # Try multiple parsing methods for better compatibility
+        structure = None
+        parsing_errors = []
+        
+        # Method 1: Direct Structure.from_file
+        try:
+            structure = Structure.from_file(str(file_path))
+            logger.info("Successfully parsed with Structure.from_file")
+        except Exception as e:
+            parsing_errors.append(f"Structure.from_file: {str(e)}")
+            logger.warning(f"Structure.from_file failed: {e}")
+        
+        # Method 2: CifParser with explicit handling
+        if structure is None:
+            try:
+                from pymatgen.io.cif import CifParser
+                parser = CifParser(str(file_path))
+                structures = parser.get_structures()
+                if structures:
+                    structure = structures[0]
+                    logger.info("Successfully parsed with CifParser")
+                else:
+                    parsing_errors.append("CifParser: No structures found in CIF file")
+            except Exception as e:
+                parsing_errors.append(f"CifParser: {str(e)}")
+                logger.warning(f"CifParser failed: {e}")
+        
+        if structure is None:
+            error_msg = "Failed to parse CIF file. Common issues: " + "; ".join(parsing_errors)
+            logger.error(f"All parsing methods failed: {error_msg}")
+            raise ValueError(f"Invalid CIF file format. {error_msg}")
+        
+        # Validate structure
+        if len(structure.sites) == 0:
+            raise ValueError("CIF file contains no atomic sites")
+        
+        logger.info(f"Successfully loaded structure with {len(structure.sites)} sites")
         
         # Basic structure information
         lattice = structure.lattice
@@ -472,6 +551,9 @@ async def analyze_cif_file(file_path: Path) -> Dict:
             "num_sites": len(structure.sites)
         }
     except Exception as e:
+        logger.error(f"Error in analyze_cif_file: {e}")
+        logger.error(f"Error type: {type(e)}")
+        logger.error(f"Error traceback: {str(e)}", exc_info=True)
         # Windows固有のpymatgenエラーを詳細に報告
         if WINDOWS_PLATFORM and "fortran" in str(e).lower():
             raise HTTPException(status_code=500, detail="Windows Fortran library error - install Microsoft Visual C++ Redistributable")
@@ -484,6 +566,9 @@ async def create_supercell(data: dict):
         supercell_size_raw = data.get("supercell_size", [1, 1, 1])
         filename = data.get("filename")
         session_id = data.get("session_id")
+        
+        logger.info(f"DEBUG: create_supercell called with crystal_data: {crystal_data}")
+        logger.info(f"DEBUG: filename from crystal_data: {crystal_data.get('filename') if crystal_data else None}")
         
         if not crystal_data:
             raise HTTPException(status_code=400, detail="Crystal data is required")
@@ -514,26 +599,37 @@ async def create_supercell(data: dict):
             filename = crystal_data.get("filename", "unknown.cif")
             original_structure = None
             
-            # Try to load from CIF file first
-            if filename != "unknown.cif":
+            # Method 1: Try to load from stored structure_data (for uploaded files)
+            if "structure_data" in crystal_data:
+                try:
+                    from pymatgen.core import Structure
+                    original_structure = Structure.from_dict(crystal_data["structure_data"])
+                    logger.info(f"Loaded structure from stored structure_data for: {filename}")
+                except Exception as e:
+                    logger.warning(f"Failed to load from structure_data: {e}")
+            
+            # Method 2: Try to load from CIF file (for sample files)
+            if original_structure is None and filename != "unknown.cif":
                 cif_path = SAMPLE_CIF_DIR / filename
                 if cif_path.exists():
                     parser = CifParser(str(cif_path))
                     original_structure = parser.get_structures()[0]
                     logger.info(f"Loaded structure from CIF file: {filename}")
             
-            # If CIF file not found, create structure from crystal_data
+            # Method 3: If no structure available, create from crystal_data
             if original_structure is None:
                 logger.info(f"Creating structure from crystal_data for {filename}")
-                # Extract structure info from crystal_data
+                # Extract structure info from crystal_data - lattice parameters are in nested object
+                lattice_params_dict = crystal_data.get("lattice_parameters", {})
                 lattice_params = [
-                    crystal_data.get("a", 1.0),
-                    crystal_data.get("b", 1.0), 
-                    crystal_data.get("c", 1.0),
-                    crystal_data.get("alpha", 90.0),
-                    crystal_data.get("beta", 90.0),
-                    crystal_data.get("gamma", 90.0)
+                    lattice_params_dict.get("a", crystal_data.get("a", 1.0)),
+                    lattice_params_dict.get("b", crystal_data.get("b", 1.0)), 
+                    lattice_params_dict.get("c", crystal_data.get("c", 1.0)),
+                    lattice_params_dict.get("alpha", crystal_data.get("alpha", 90.0)),
+                    lattice_params_dict.get("beta", crystal_data.get("beta", 90.0)),
+                    lattice_params_dict.get("gamma", crystal_data.get("gamma", 90.0))
                 ]
+                logger.info(f"Using lattice parameters: {lattice_params}")
                 
                 # Create a simple structure using crystal_data info
                 from pymatgen.core import Lattice
@@ -845,36 +941,47 @@ async def generate_modified_structure_cif(request: dict):
 @app.post("/api/generate-supercell-cif-direct")
 async def generate_supercell_cif_direct(request: dict):
     """
-    Generate supercell CIF directly from original CIF file using pymatgen
-    This is the most reliable approach - no intermediate data conversion
+    Generate supercell CIF directly from structure data or CIF file using pymatgen
+    Supports both uploaded files and sample files
     """
     try:
         # Extract request parameters
         filename = request.get("filename")
         supercell_size = request.get("supercell_size", [1, 1, 1])
+        session_id = request.get("session_id")
         
         if not filename:
             raise HTTPException(status_code=400, detail="Filename is required")
         
         logger.info(f"Generating supercell CIF for {filename} with size {supercell_size}")
         
-        # Construct CIF file path
-        cif_path = SAMPLE_CIF_DIR / filename
+        original_structure = None
         
-        if not cif_path.exists():
+        # Method 1: Try to get structure from session (for uploaded files)
+        if session_id:
+            try:
+                session_info = session_manager.get_session_info(session_id)
+                if session_info and 'original_structure' in session_info:
+                    original_structure = session_info['original_structure']
+                    logger.info(f"Loaded structure from session for uploaded file: {filename}")
+            except Exception as e:
+                logger.warning(f"Could not load structure from session: {e}")
+        
+        # Method 2: Try to load from CIF file (for sample files)
+        if original_structure is None:
+            cif_path = SAMPLE_CIF_DIR / filename
+            if cif_path.exists():
+                logger.debug(f"Reading CIF file: {cif_path}")
+                from pymatgen.io.cif import CifParser
+                parser = CifParser(str(cif_path))
+                structures = parser.get_structures(primitive=False)  # Keep original lattice - don't convert to primitive
+                if structures:
+                    original_structure = structures[0]
+                    logger.info(f"Loaded structure from sample CIF file: {filename}")
+        
+        if not original_structure:
             raise HTTPException(status_code=404, detail=f"CIF file not found: {filename}")
         
-        logger.debug(f"Reading CIF file: {cif_path}")
-        
-        # Parse original CIF file
-        from pymatgen.io.cif import CifParser, CifWriter
-        parser = CifParser(str(cif_path))
-        structures = parser.get_structures(primitive=False)  # Keep original lattice - don't convert to primitive
-        
-        if not structures:
-            raise HTTPException(status_code=400, detail="No structures found in CIF file")
-        
-        original_structure = structures[0]
         logger.info(f"Original structure loaded: {original_structure.formula}")
         
         # Create supercell
@@ -885,6 +992,7 @@ async def generate_supercell_cif_direct(request: dict):
         logger.info(f"Number of sites: {len(supercell_structure.sites)}")
         
         # Generate CIF using pymatgen CifWriter
+        from pymatgen.io.cif import CifWriter
         cif_writer = CifWriter(
             supercell_structure,
             write_magmoms=False,

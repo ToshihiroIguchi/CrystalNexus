@@ -1570,6 +1570,7 @@
 
         async function analyzeUploadedFile(file) {
             try {
+                console.log('DEBUG: Starting file upload analysis for:', file.name);
                 const formData = new FormData();
                 formData.append('file', file);
                 
@@ -1578,16 +1579,23 @@
                     body: formData
                 });
                 
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
                 const data = await response.json();
+                console.log('DEBUG: Received CIF analysis data:', data);
                 displayCrystalInfo(data);
             } catch (error) {
                 console.error('Error analyzing uploaded file:', error);
-                alert('Error analyzing CIF file');
+                alert(`Error analyzing CIF file: ${error.message}`);
             }
         }
 
         function displayCrystalInfo(data) {
+            console.log('DEBUG: DisplayCrystalInfo called with data:', data);
             window.currentCrystalData = data;
+            console.log('DEBUG: Set window.currentCrystalData to:', window.currentCrystalData);
             
             const infoContent = document.getElementById('infoContent');
             // Display information in the same order as ZrO2test.py
@@ -2708,6 +2716,9 @@
             const bSize = document.getElementById('supercell-b').value;
             const cSize = document.getElementById('supercell-c').value;
             
+            console.log('DEBUG: Creating supercell with sizes:', [aSize, bSize, cSize]);
+            console.log('DEBUG: Current crystal data:', window.currentCrystalData);
+            
             try {
                 const response = await fetch('/api/create-supercell', {
                     method: 'POST',
@@ -3457,7 +3468,8 @@
                 // Use new direct CIF generation API
                 const requestData = {
                     filename: window.currentFilename,
-                    supercell_size: window.currentSupercellSize
+                    supercell_size: window.currentSupercellSize,
+                    session_id: window.sessionId
                 };
                 
                 console.log('📡 Requesting supercell CIF from direct API...');
