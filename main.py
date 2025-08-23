@@ -213,6 +213,45 @@ def validate_element(element: str) -> str:
     
     return element
 
+def validate_occupancy(structure) -> None:
+    """Validate that all atomic sites have full occupancy (1.0)"""
+    partial_sites = []
+    
+    for i, site in enumerate(structure.sites):
+        # Check if site has partial occupancy
+        total_occupancy = sum(site.species.values())
+        if abs(total_occupancy - 1.0) > 1e-6:  # Allow small numerical errors
+            # Get species with partial occupancy
+            species_info = []
+            for species, occupancy in site.species.items():
+                if occupancy < 1.0:
+                    species_info.append(f"{species}: {occupancy:.3f}")
+            
+            partial_sites.append({
+                'site_index': i + 1,
+                'species': species_info,
+                'total_occupancy': total_occupancy,
+                'position': [round(coord, 3) for coord in site.frac_coords]
+            })
+    
+    if partial_sites:
+        # Format detailed error message
+        error_details = []
+        for site in partial_sites:
+            species_str = ", ".join(site['species'])
+            pos_str = f"({site['position'][0]}, {site['position'][1]}, {site['position'][2]})"
+            error_details.append(f"Site {site['site_index']}: {species_str} at {pos_str}")
+        
+        error_message = (
+            f"Partial occupancy detected in {len(partial_sites)} atomic site(s). "
+            f"CHGNet predictions require fully occupied crystal structures.\n\n"
+            f"Detected partial occupancies:\n" + "\n".join(f"- {detail}" for detail in error_details) +
+            f"\n\nPlease provide a CIF file with all atomic sites having occupancy = 1.0, "
+            f"or create an ordered supercell model of your structure."
+        )
+        
+        raise ValueError(error_message)
+
 
 class SessionManager:
     """Session management class - manages structure data and metadata"""
@@ -525,6 +564,9 @@ async def analyze_cif_file(file_path: Path) -> Dict:
         if len(structure.sites) == 0:
             raise ValueError("CIF file contains no atomic sites")
         
+        # Validate occupancy
+        validate_occupancy(structure)
+        
         logger.info(f"Successfully loaded structure with {len(structure.sites)} sites")
         
         # Basic structure information
@@ -565,6 +607,9 @@ async def analyze_cif_file(file_path: Path) -> Dict:
         logger.error(f"Error in analyze_cif_file: {e}")
         logger.error(f"Error type: {type(e)}")
         logger.error(f"Error traceback: {str(e)}", exc_info=True)
+        # Handle specific error types appropriately
+        if "Partial occupancy detected" in str(e):
+            raise HTTPException(status_code=400, detail=str(e))
         # Report Windows-specific pymatgen errors in detail
         if WINDOWS_PLATFORM and "fortran" in str(e).lower():
             raise HTTPException(status_code=500, detail="Windows Fortran library error - install Microsoft Visual C++ Redistributable")

@@ -42,7 +42,7 @@
             align-items: center;
         }
 
-        .chgnet-help-btn {
+        .help-btn {
             background: rgba(255, 255, 255, 0.1);
             color: white;
             border: 1px solid rgba(255, 255, 255, 0.3);
@@ -57,7 +57,7 @@
             gap: 5px;
         }
 
-        .chgnet-help-btn:hover {
+        .help-btn:hover {
             background: rgba(255, 255, 255, 0.2);
             border-color: rgba(255, 255, 255, 0.5);
             transform: translateY(-1px);
@@ -470,8 +470,8 @@
             background: #95a5a6 !important;
             color: white;
             border: 1px solid #7f8c8d !important;
-            padding: 10px 16px;
-            font-size: 14px;
+            padding: 8px 12px;
+            font-size: 13px;
             font-weight: 500;
             opacity: 0.9;
             border-radius: 6px;
@@ -932,6 +932,14 @@
             border-top: 1px solid #e0e0e0;
             padding-top: 15px;
         }
+        
+        .calculation-time {
+            font-size: 11px;
+            color: #888;
+            text-align: right;
+            margin-top: 10px;
+            font-style: italic;
+        }
 
         .result-section {
             margin-bottom: 15px;
@@ -1356,8 +1364,8 @@
     <div class="header">
         <h1 class="header-title">CrystalNexus</h1>
         <div class="header-controls">
-            <a href="/static/chgnet_info.html" target="_blank" class="chgnet-help-btn" title="About CHGNet - Learn more about the prediction model">
-                ❓ CHGNet Help
+            <a href="/static/user_guide.html" target="_blank" class="help-btn" title="CrystalNexus User Guide - How to use this application">
+                📖 User Guide
             </a>
             <button class="load-new-cif-btn" id="load-new-cif-btn" onclick="resetAndLoadNewCIF()">
                 🔄 Reset & Load New CIF
@@ -1373,7 +1381,7 @@
             </div>
             
             <div class="panel-section">
-                <div class="panel-title">Crystal Information</div>
+                <div class="panel-title">Crystal Information <a href="/static/user_guide.html#limitations" target="_blank" title="Important: CHGNet may overestimate lattice constants - Click for details" style="font-size: 12px; color: #e74c3c; text-decoration: none; margin-left: 5px;">⚠️</a></div>
                 <div id="main-crystal-info" class="mock-text">Structure details will be displayed here</div>
             </div>
         </div>
@@ -1418,6 +1426,9 @@
                     </div>
                     
                     <div class="chgnet-results" id="chgnet-results" style="display: none;">
+                        
+                        <!-- Calculation Time Display -->
+                        <div class="calculation-time" id="calculation-time" style="display: none;"></div>
                         
                         <!-- Energy Result Item -->
                         <div class="result-item" id="energy-item">
@@ -1668,11 +1679,26 @@
                     body: JSON.stringify({ filename: filename })
                 });
                 
+                if (!response.ok) {
+                    // Try to get detailed error message from response
+                    let errorMessage = `HTTP error! status: ${response.status}`;
+                    try {
+                        const errorData = await response.json();
+                        if (errorData.detail) {
+                            errorMessage = errorData.detail;
+                        }
+                    } catch (e) {
+                        // If we can't parse JSON, use status text
+                        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                    }
+                    throw new Error(errorMessage);
+                }
+                
                 const data = await response.json();
                 displayCrystalInfo(data);
             } catch (error) {
                 console.error('Error analyzing sample file:', error);
-                alert('Error analyzing CIF file');
+                alert(`Error analyzing CIF file: ${error.message}`);
             }
         }
 
@@ -1688,7 +1714,18 @@
                 });
                 
                 if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                    // Try to get detailed error message from response
+                    let errorMessage = `HTTP error! status: ${response.status}`;
+                    try {
+                        const errorData = await response.json();
+                        if (errorData.detail) {
+                            errorMessage = errorData.detail;
+                        }
+                    } catch (e) {
+                        // If we can't parse JSON, use status text
+                        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                    }
+                    throw new Error(errorMessage);
                 }
                 
                 const data = await response.json();
@@ -1835,6 +1872,14 @@
             } else {
                 detailDiv.style.display = 'none';
                 button.innerHTML = 'Details ▼';
+            }
+        }
+
+        function displayCalculationTime(executionTime) {
+            const timeDiv = document.getElementById('calculation-time');
+            if (timeDiv) {
+                timeDiv.textContent = `Calculation completed in ${executionTime}s`;
+                timeDiv.style.display = 'block';
             }
         }
 
@@ -2015,6 +2060,13 @@
             if (detailAnalysisBtn) {
                 detailAnalysisBtn.style.display = 'none';
                 document.getElementById('downloadAnalysisBtn').style.display = 'none';
+            }
+            
+            // Reset calculation time display
+            const timeDiv = document.getElementById('calculation-time');
+            if (timeDiv) {
+                timeDiv.style.display = 'none';
+                timeDiv.textContent = '';
             }
             
             // Show structure status message
@@ -2594,6 +2646,9 @@
 
         async function runCHGNetAnalysis() {
             try {
+                // Record start time for calculation duration
+                const startTime = performance.now();
+                
                 // Start processing state with animation
                 setCHGNetButtonState('relaxing');
                 
@@ -2642,7 +2697,14 @@
                 // Update 3D visualization with relaxed structure
                 await updateRelaxed3DVisualization();
                 
-                showNotification('CHGNet structure analysis completed successfully!', 'success');
+                // Calculate and display execution time
+                const endTime = performance.now();
+                const executionTime = ((endTime - startTime) / 1000).toFixed(2);
+                
+                showNotification(`CHGNet structure analysis completed successfully! (${executionTime}s)`, 'success');
+                
+                // Display calculation time in results
+                displayCalculationTime(executionTime);
                 
                 // Clear status message after successful analysis
                 clearStatusMessage();

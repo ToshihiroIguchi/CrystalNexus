@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CrystalNexus User Guide</title>
+    <style>
+        body {
+            font-family: Times, "Times New Roman", serif;
+            line-height: 1.6;
+            margin: 40px auto;
+            max-width: 800px;
+            color: #000;
+            background: #fff;
+            padding: 0 20px;
+        }
+        h1 {
+            text-align: center;
+            font-size: 24px;
+            margin-bottom: 30px;
+            font-weight: bold;
+        }
+        h2 {
+            font-size: 18px;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            font-weight: bold;
+        }
+        h3 {
+            font-size: 16px;
+            margin-top: 20px;
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+        p {
+            text-align: justify;
+            margin-bottom: 12px;
+        }
+        .abstract {
+            margin: 30px 0;
+            padding: 20px;
+            border: 1px solid #000;
+            background: #f9f9f9;
+        }
+        .references {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #ccc;
+        }
+        .ref-item {
+            margin-bottom: 10px;
+            padding-left: 20px;
+            text-indent: -20px;
+        }
+        ol, ul {
+            margin-left: 30px;
+            margin-bottom: 15px;
+        }
+        li {
+            margin-bottom: 5px;
+        }
+        .equation {
+            text-align: center;
+            margin: 20px 0;
+            font-style: italic;
+        }
+        .close-btn {
+            position: fixed;
+            top: 10px;
+            right: 20px;
+            padding: 5px 10px;
+            background: #f0f0f0;
+            border: 1px solid #ccc;
+            cursor: pointer;
+        }
+        code {
+            font-family: "Courier New", monospace;
+            background: #f5f5f5;
+            padding: 2px 4px;
+            border: 1px solid #ddd;
+        }
+        .workflow {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            background: #fafafa;
+        }
+        a {
+            color: #0066cc;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .citation {
+            color: #0066cc;
+            text-decoration: none;
+            font-weight: bold;
+        }
+        .citation:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <button class="close-btn" onclick="window.close()">Close</button>
+    
+    <h1>CrystalNexus: A Web-based Crystal Structure Analysis Platform Using CHGNet</h1>
+    
+    <div class="abstract">
+        <h3>Abstract</h3>
+        <p>CrystalNexus is a web-based application for rapid crystal structure analysis utilizing the Crystal Hamiltonian Graph Neural Network (CHGNet). This platform enables materials scientists to perform density functional theory (DFT)-quality predictions of energetic and magnetic properties for crystalline materials within seconds. The application implements structure optimization, element substitution, and supercell generation capabilities while maintaining rigorous validation protocols for input crystallographic data.</p>
+    </div>
+    
+    <h2>1. Introduction</h2>
+    
+    <p>The development of machine learning interatomic potentials has revolutionized computational materials science by enabling rapid predictions of material properties without the computational overhead of traditional density functional theory calculations<sup><a href="#ref1" class="citation">[1]</a>,<a href="#ref2" class="citation">[2]</a></sup>. Among these approaches, the Crystal Hamiltonian Graph Neural Network (CHGNet) represents a significant advancement in universal neural network potentials for solid-state materials<sup><a href="#ref3" class="citation">[3]</a></sup>.</p>
+    
+    <p>CrystalNexus leverages CHGNet to provide an accessible web interface for crystal structure analysis, targeting materials researchers who require rapid property predictions for structure screening and optimization tasks. The platform addresses the growing need for efficient computational tools that bridge the gap between high-accuracy quantum mechanical calculations and practical materials discovery workflows.</p>
+    
+    <h2>2. Theoretical Background: CHGNet Algorithm</h2>
+    
+    <h3>2.1 Graph Neural Network Architecture</h3>
+    
+    <p>CHGNet employs a graph neural network architecture where crystal structures are represented as undirected graphs G = (V, E), with vertices V corresponding to atoms and edges E representing interatomic interactions<sup><a href="#ref3" class="citation">[3]</a></sup>. Each atom i is characterized by an initial feature vector h<sub>i</sub><sup>(0)</sup> encoding atomic number, coordination environment, and local chemical information.</p>
+    
+    <p>The model utilizes a message-passing framework where atomic representations are iteratively updated through L layers:</p>
+    
+    <div class="equation">
+        h<sub>i</sub><sup>(l+1)</sup> = UPDATE<sup>(l)</sup>(h<sub>i</sub><sup>(l)</sup>, AGGREGATE<sup>(l)</sup>({h<sub>j</sub><sup>(l)</sup> : j ∈ N(i)}))
+    </div>
+    
+    <p>where N(i) represents the neighborhood of atom i, determined by a distance cutoff radius of 5.0 Å<sup><a href="#ref3" class="citation">[3]</a></sup>.</p>
+    
+    <h3>2.2 Multi-task Learning Framework</h3>
+    
+    <p>CHGNet implements a multi-task learning approach, simultaneously predicting multiple target properties through shared representations. The total loss function is formulated as:</p>
+    
+    <div class="equation">
+        L<sub>total</sub> = λ<sub>E</sub>L<sub>energy</sub> + λ<sub>F</sub>L<sub>forces</sub> + λ<sub>S</sub>L<sub>stress</sub> + λ<sub>M</sub>L<sub>magmom</sub>
+    </div>
+    
+    <p>where λ values represent task-specific weighting coefficients optimized during training<sup><a href="#ref3" class="citation">[3]</a></sup>. This approach ensures consistent predictions across all physical quantities while maintaining computational efficiency.</p>
+    
+    <h3>2.3 Training Dataset and Validation</h3>
+    
+    <p>The CHGNet model was trained on 1,580,395 structures from the Materials Project database, encompassing 89 elements from hydrogen to actinium<sup><a href="#ref3" class="citation">[3]</a>,<a href="#ref4" class="citation">[4]</a></sup>. The training set includes diverse crystal systems, space groups, and chemical compositions to ensure broad applicability. Validation against DFT calculations demonstrates mean absolute errors of 29.8 meV/atom for energies and 0.076 eV/Å for forces<sup><a href="#ref3" class="citation">[3]</a></sup>.</p>
+    
+    <h2>3. CrystalNexus Implementation</h2>
+    
+    <h3>3.1 System Architecture</h3>
+    
+    <p>CrystalNexus is implemented as a FastAPI-based web application with a JavaScript frontend utilizing the 3Dmol.js library for molecular visualization<sup><a href="#ref5" class="citation">[5]</a></sup>. The backend integrates Pymatgen<sup><a href="#ref6" class="citation">[6]</a></sup> for crystallographic data processing and CHGNet for property predictions. The system architecture follows a client-server model with RESTful API endpoints for data exchange.</p>
+    
+    <h3>3.2 Input Validation and Data Processing</h3>
+    
+    <p>The application implements rigorous validation protocols for Crystallographic Information File (CIF) inputs. Occupancy validation ensures all atomic sites possess full occupancy (1.0 ± 10<sup>-6</sup>), as partial occupancy structures are incompatible with the CHGNet training paradigm. Element validation restricts inputs to the 89 elements supported by the underlying model.</p>
+    
+    <h3>3.3 Structure Optimization Protocol</h3>
+    
+    <p>Structure relaxation employs the Broyden-Fletcher-Goldfarb-Shanno (BFGS) algorithm with force tolerance criteria of 0.1 eV/Å and maximum iteration limits of 100 steps. The optimization simultaneously adjusts atomic positions and lattice parameters without space group constraints, allowing for complete structural relaxation to the nearest local energy minimum.</p>
+    
+    <h2>4. User Interface and Workflow</h2>
+    
+    <div class="workflow">
+        <h3>Standard Analysis Workflow:</h3>
+        <ol>
+            <li><strong>Structure Input:</strong> Upload CIF files or select from curated sample structures</li>
+            <li><strong>Validation:</strong> Automated checks for occupancy completeness and element compatibility</li>
+            <li><strong>Supercell Generation:</strong> Optional expansion to larger unit cells (maximum 5×5×5)</li>
+            <li><strong>Structure Modification:</strong> Element substitution and atom deletion capabilities</li>
+            <li><strong>Property Prediction:</strong> CHGNet-based calculation of energies and magnetic moments</li>
+            <li><strong>Results Analysis:</strong> Visualization of optimized structures and quantitative property data</li>
+        </ol>
+    </div>
+    
+    <h3>4.1 Output Specifications</h3>
+    
+    <p>The application provides the following quantitative outputs:</p>
+    
+    <ul>
+        <li><strong>Total Energy:</strong> System energy in electron volts (eV)</li>
+        <li><strong>Energy per Atom:</strong> Normalized energy values for comparative analysis</li>
+        <li><strong>Magnetic Moments:</strong> Atomic and total magnetic moments in Bohr magnetons (μ<sub>B</sub>)</li>
+        <li><strong>Optimized Geometry:</strong> Relaxed atomic positions and lattice parameters</li>
+        <li><strong>Computational Metrics:</strong> Calculation time and convergence statistics</li>
+    </ul>
+    
+    <h2 id="limitations">5. Limitations and Applicability</h2>
+    
+    <h3>5.1 Model Limitations</h3>
+    
+    <p>CHGNet predictions are most reliable within the chemical and structural space of the training data. Extrapolation to extreme conditions, novel chemical environments, or structures significantly different from the Materials Project database may yield reduced accuracy<sup><a href="#ref3" class="citation">[3]</a></sup>. Surface and defect calculations require careful validation against higher-level theoretical methods.</p>
+    
+    <p>Recent research has identified systematic errors in CHGNet and other universal machine learning interatomic potentials, including systematic softening effects that lead to energy and force underprediction<sup><a href="#ref8" class="citation">[8]</a></sup>. CHGNet exhibits a tendency to overestimate lattice constants and underestimate densities, which originates from the systematic biases present in the DFT training data and the sampling bias toward near-equilibrium atomic configurations in the training dataset.</p>
+    
+    <h3>5.2 Input Constraints</h3>
+    
+    <p>The current implementation restricts analysis to:</p>
+    <ul>
+        <li>Fully occupied crystalline structures (occupancy = 1.0)</li>
+        <li>Elements within the training set (H-Ac)</li>
+        <li>File sizes below 10 MB</li>
+        <li>Supercell dimensions ≤ 5 in each direction</li>
+    </ul>
+    
+    <h2>6. Performance Benchmarking</h2>
+    
+    <p>Computational performance analysis demonstrates typical calculation times of 2-30 seconds for systems containing 4-200 atoms, representing a 10<sup>3</sup>-10<sup>4</sup> fold speedup compared to equivalent DFT calculations<sup><a href="#ref3" class="citation">[3]</a></sup>. Memory requirements scale linearly with system size, enabling analysis on standard desktop hardware.</p>
+    
+    <h2>7. Data Export and Integration</h2>
+    
+    <p>Results may be exported in standard formats including CIF files for optimized structures, CSV files for numerical data (crystal information, atomic properties, stress tensor, trajectory data), and text files for energy and magnetic properties. This facilitates integration with existing computational workflows and enables subsequent analysis using specialized crystallographic software packages<sup><a href="#ref7" class="citation">[7]</a></sup>.</p>
+    
+    <h2>8. Conclusion</h2>
+    
+    <p>CrystalNexus provides an accessible platform for rapid crystal structure analysis using state-of-the-art machine learning methods. The integration of CHGNet enables materials researchers to perform high-throughput screening and property prediction tasks with minimal computational overhead while maintaining scientifically rigorous validation protocols.</p>
+    
+    <div class="references">
+        <h2>References</h2>
+        
+        <div class="ref-item" id="ref1">
+            [1] Behler, J. & Parrinello, M. Generalized neural-network representation of high-dimensional potential-energy surfaces. <em>Phys. Rev. Lett.</em> <strong>98</strong>, 146401 (2007). <a href="https://doi.org/10.1103/PhysRevLett.98.146401" target="_blank">https://doi.org/10.1103/PhysRevLett.98.146401</a>
+        </div>
+        
+        <div class="ref-item" id="ref2">
+            [2] Bartók, A. P., Payne, M. C., Kondor, R. & Csányi, G. Gaussian approximation potentials: The accuracy of quantum mechanics, without the electrons. <em>Phys. Rev. Lett.</em> <strong>104</strong>, 136403 (2010). <a href="https://doi.org/10.1103/PhysRevLett.104.136403" target="_blank">https://doi.org/10.1103/PhysRevLett.104.136403</a>
+        </div>
+        
+        <div class="ref-item" id="ref3">
+            [3] Deng, B., Zhong, P., Jun, K. <em>et al.</em> CHGNet as a pretrained universal neural network potential for charge-informed atomistic modelling. <em>Nat. Mach. Intell.</em> <strong>5</strong>, 1031–1041 (2023). <a href="https://doi.org/10.1038/s42256-023-00716-3" target="_blank">https://doi.org/10.1038/s42256-023-00716-3</a>
+        </div>
+        
+        <div class="ref-item" id="ref4">
+            [4] Jain, A. <em>et al.</em> Commentary: The Materials Project: A materials genome approach to accelerating materials innovation. <em>APL Mater.</em> <strong>1</strong>, 011002 (2013). <a href="https://doi.org/10.1063/1.4812323" target="_blank">https://doi.org/10.1063/1.4812323</a>
+        </div>
+        
+        <div class="ref-item" id="ref5">
+            [5] Rego, N. & Koes, D. 3Dmol.js: molecular visualization with WebGL. <em>Bioinformatics</em> <strong>31</strong>, 1322–1324 (2015). <a href="https://doi.org/10.1093/bioinformatics/btu829" target="_blank">https://doi.org/10.1093/bioinformatics/btu829</a>
+        </div>
+        
+        <div class="ref-item" id="ref6">
+            [6] Ong, S. P. <em>et al.</em> Python Materials Genomics (pymatgen): A robust, open-source python library for materials analysis. <em>Comput. Mater. Sci.</em> <strong>68</strong>, 314–319 (2013). <a href="https://doi.org/10.1016/j.commatsci.2012.10.028" target="_blank">https://doi.org/10.1016/j.commatsci.2012.10.028</a>
+        </div>
+        
+        <div class="ref-item" id="ref7">
+            [7] Aroyo, M. I. <em>et al.</em> Crystallography online: Bilbao Crystallographic Server. <em>Bulg. Chem. Commun.</em> <strong>43</strong>, 183–197 (2011). <a href="http://www.cryst.ehu.es/" target="_blank">http://www.cryst.ehu.es/</a>
+        </div>
+        
+        <div class="ref-item" id="ref8">
+            [8] Deng, B. <em>et al.</em> Systematic softening in universal machine learning interatomic potentials. <em>npj Comput. Mater.</em> <strong>10</strong>, 252 (2024). <a href="https://doi.org/10.1038/s41524-024-01500-6" target="_blank">https://doi.org/10.1038/s41524-024-01500-6</a>
+        </div>
+    </div>
+    
+</body>
+</html>
