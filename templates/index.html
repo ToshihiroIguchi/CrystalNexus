@@ -2104,7 +2104,10 @@
                                 opacity: 0.8,
                                 linewidth: 2
                             },
-                            axes: displayAxes  // Include axes based on state
+                            axes: displayAxes,  // Include axes based on state
+                            alwaysUseConventionalCell: true,  // Force conventional cell usage
+                            scalingFactor: 1.0,  // Ensure 1:1 aspect ratio
+                            keepAspectRatio: true  // Maintain proper cubic proportions
                         });
                         console.log(`   Unit cell added successfully (attempt ${attempt + 1})`);
                         break;
@@ -3388,8 +3391,14 @@
                 return;
             }
             
-            // Create 3Dmol viewer with white background
-            const config = { backgroundColor: 'white' };
+            // Create 3Dmol viewer with proper aspect ratio settings
+            const config = { 
+                backgroundColor: 'white',
+                orthographic: false,  // Use perspective projection for better depth perception
+                antialias: true,  // Smooth edges
+                preserveAspectRatio: true,  // Maintain proper proportions
+                disableInternalControls: false  // Allow rotation/zoom
+            };
             window.viewer3D = $3Dmol.createViewer(element, config);
             
             console.log('✅ 3Dmol.js viewer initialized');
