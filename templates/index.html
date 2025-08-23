@@ -428,28 +428,60 @@
             box-shadow: 0 2px 6px rgba(149, 165, 166, 0.3);
         }
         
-        /* Special Actions: Load, Analysis - Clean solid color design */
-        .special-action, .load-new-cif-btn, .detail-analysis-btn {
+        /* Special Actions: Analysis - Clean solid color design */
+        .special-action, .detail-analysis-btn {
             background: #3498db !important;
             color: white;
             border: 2px solid #3498db !important;
             position: relative;
         }
         
-        .special-action:hover:not(:disabled), .load-new-cif-btn:hover:not(:disabled), .detail-analysis-btn:hover:not(:disabled) {
+        .special-action:hover:not(:disabled), .detail-analysis-btn:hover:not(:disabled) {
             background: #2980b9 !important;
             border-color: #2980b9 !important;
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
         }
         
+        /* Reset & Load New CIF Button - Subdued secondary style */
+        .load-new-cif-btn {
+            background: #95a5a6 !important;
+            color: white;
+            border: 1px solid #7f8c8d !important;
+            padding: 10px 16px;
+            font-size: 14px;
+            font-weight: 500;
+            opacity: 0.9;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .load-new-cif-btn:hover:not(:disabled) {
+            background: #7f8c8d !important;
+            border-color: #7f8c8d !important;
+            opacity: 1;
+            transform: none;
+            box-shadow: 0 2px 4px rgba(127, 140, 141, 0.3);
+        }
+        
         /* Common disabled state for all buttons */
         .success-action:disabled, .warning-action:disabled, 
         .destructive-action:disabled, .secondary-action:disabled, .special-action:disabled,
         .execute-button:disabled, .reset-operations-btn:disabled, .substitute-button:disabled,
-        .delete-button:disabled, .load-new-cif-btn:disabled, .detail-analysis-btn:disabled {
+        .delete-button:disabled, .detail-analysis-btn:disabled {
             background: #bdc3c7 !important;
             cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+            color: #ffffff;
+        }
+        
+        .load-new-cif-btn:disabled {
+            background: #bdc3c7 !important;
+            border-color: #95a5a6 !important;
+            cursor: not-allowed;
+            opacity: 0.6;
             transform: none;
             box-shadow: none;
             color: #ffffff;
@@ -1349,7 +1381,7 @@
                         <!-- Energy Result Item -->
                         <div class="result-item" id="energy-item">
                             <div class="result-summary">
-                                <span id="energy-summary">⚡ Energy: - eV/atom</span>
+                                <span id="energy-summary">⚡ Energy: - eV</span>
                                 <button class="detail-btn" onclick="toggleDetail('energy')" id="energy-detail-btn" style="display: none;">Details ▼</button>
                             </div>
                             <div class="detail-drawer" id="energy-detail" style="display: none;">
@@ -1900,21 +1932,41 @@
             const energyDetailBtn = document.getElementById('energy-detail-btn');
             
             if (energySummary) {
-                energySummary.textContent = '⚡ Energy: - eV/atom';
+                energySummary.textContent = '⚡ Energy: - eV';
             }
             if (energyDetailBtn) {
                 energyDetailBtn.style.display = 'none';
+                energyDetailBtn.innerHTML = 'Details ▼';  // Reset button text
             }
             
-            // Reset magnetic display
+            // Close energy details drawer if open
+            const energyDetail = document.getElementById('energy-detail');
+            if (energyDetail) {
+                energyDetail.style.display = 'none';
+            }
+            
+            // Reset magnetic display (keep visible with placeholder)
             const magneticItem = document.getElementById('magnetic-item');
             const magneticSummary = document.getElementById('magnetic-summary');
             
             if (magneticItem) {
-                magneticItem.style.display = 'none';
+                magneticItem.style.display = 'block';  // Keep visible
             }
             if (magneticSummary) {
                 magneticSummary.textContent = '🧲 Magnetic: - µB total';
+            }
+            
+            // Close magnetic details drawer if open
+            const magneticDetail = document.getElementById('magnetic-detail');
+            if (magneticDetail) {
+                magneticDetail.style.display = 'none';
+            }
+            
+            // Hide magnetic details button for consistency
+            const magneticDetailBtn = document.querySelector('#magnetic-item .detail-btn');
+            if (magneticDetailBtn) {
+                magneticDetailBtn.style.display = 'none';
+                magneticDetailBtn.innerHTML = 'Details ▼';  // Reset button text
             }
             
             // Hide detailed analysis button
@@ -2277,6 +2329,34 @@
             showCopyFeedback(button, result.success);
         }
         
+        // Copy magnetic value functions
+        async function copyTotalMagnetic() {
+            if (!window.currentMagneticData?.totalMagnetic) {
+                console.warn('No total magnetic data available');
+                return;
+            }
+            
+            const value = window.currentMagneticData.totalMagnetic;
+            console.log('Copying total magnetic moment (µB):', value);
+            const result = await smartCopyToClipboard(value.toFixed(3));
+            
+            const button = document.getElementById('copy-total-magnetic');
+            showCopyFeedback(button, result.success);
+        }
+        
+        async function copySiteMagnetic(siteIndex) {
+            if (!window.currentMagneticData?.siteMagnetic || !window.currentMagneticData.siteMagnetic[siteIndex]) {
+                console.warn('No site magnetic data available for index:', siteIndex);
+                return;
+            }
+            
+            const value = window.currentMagneticData.siteMagnetic[siteIndex];
+            const result = await smartCopyToClipboard(value.toFixed(3));
+            
+            const button = document.getElementById(`copy-site-magnetic-${siteIndex}`);
+            showCopyFeedback(button, result.success);
+        }
+        
         // Sync button states with current display state
         function syncButtonStates() {
             console.log('🔄 ROBUST: Syncing button states...');
@@ -2366,15 +2446,27 @@
                 const totalMag = magmoms.reduce((sum, mag) => sum + Math.abs(mag), 0);
                 
                 magneticItem.style.display = 'block';
-                magneticSummary.innerHTML = `🧲 Magnetic: <span class="magnetic-moment">${totalMag.toFixed(3)} µB total</span>`;
+                magneticSummary.innerHTML = `🧲 Magnetic: <span class="magnetic-moment">${totalMag.toFixed(3)} µB total</span><button class="copy-btn" id="copy-total-magnetic" onclick="copyTotalMagnetic()" title="Copy: Total Magnetic Moment">📋</button>`;
                 
-                let tableHTML = `<tr><td>Total |Magnetic Moment|:</td><td class="magnetic-moment">${totalMag.toFixed(3)} µB</td></tr>`;
+                // Store magnetic data for copy functionality
+                window.currentMagneticData = {
+                    totalMagnetic: totalMag,
+                    siteMagnetic: magmoms
+                };
+                
+                let tableHTML = `<tr><td>Total |Magnetic Moment|:</td><td class="magnetic-moment">${totalMag.toFixed(3)} µB</td><td><button class="copy-btn" onclick="smartCopyToClipboard('${totalMag.toFixed(3)}'); showCopyFeedback(this, true);" title="Copy: Total Magnetic Moment">📋</button></td></tr>`;
                 magmoms.forEach((mag, i) => {
                     // Use current labels to reflect any element substitutions
                     const atomLabel = window.currentLabels && window.currentLabels[i] ? window.currentLabels[i] : `Site ${i+1}`;
-                    tableHTML += `<tr><td>${atomLabel}:</td><td class="magnetic-moment">${mag.toFixed(3)} µB</td></tr>`;
+                    tableHTML += `<tr><td>${atomLabel}:</td><td class="magnetic-moment">${mag.toFixed(3)} µB</td><td><button class="copy-btn" id="copy-site-magnetic-${i}" onclick="copySiteMagnetic(${i})" title="Copy: ${atomLabel} Magnetic Moment">📋</button></td></tr>`;
                 });
                 magneticTable.innerHTML = tableHTML;
+                
+                // Show details button when magnetic data exists
+                const magneticDetailBtn = document.querySelector('#magnetic-item .detail-btn');
+                if (magneticDetailBtn) {
+                    magneticDetailBtn.style.display = 'inline-block';
+                }
             } else {
                 magneticItem.style.display = 'none';
             }
