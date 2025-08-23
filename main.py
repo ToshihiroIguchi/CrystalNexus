@@ -19,7 +19,7 @@ from pymatgen.core import Structure, Element
 from pymatgen.io.cif import CifParser
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
-# ログ設定（早期初期化）
+# Logging configuration (early initialization)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -57,15 +57,15 @@ except Exception as e:
 
 def get_chgnet_supported_elements() -> Set[str]:
     """
-    CHGnetからサポートされている元素を動的に取得
-    フォールバックメカニズム付き
+    Dynamically retrieve supported elements from CHGNet
+    With fallback mechanism
     """
     if not CHGNET_AVAILABLE:
         logger.warning("CHGNet not available, using fallback element list")
         return _get_fallback_elements()
     
     try:
-        # 方法1: CHGnetモデルから直接取得を試行
+        # Method 1: Try direct retrieval from CHGNet model
         supported_elements = _get_elements_from_chgnet()
         if supported_elements:
             logger.info(f"Retrieved {len(supported_elements)} elements from CHGNet")
@@ -75,7 +75,7 @@ def get_chgnet_supported_elements() -> Set[str]:
         logger.warning(f"Failed to get elements from CHGNet: {e}")
     
     try:
-        # 方法2: pymatgenの周期表から安全な範囲を取得
+        # Method 2: Get safe range from pymatgen periodic table
         supported_elements = _get_elements_from_periodic_table()
         if supported_elements:
             logger.info(f"Using periodic table range: {len(supported_elements)} elements")
@@ -89,25 +89,25 @@ def get_chgnet_supported_elements() -> Set[str]:
     return _get_fallback_elements()
 
 def _get_elements_from_chgnet() -> Optional[Set[str]]:
-    """CHGnetモデルから元素リストを取得"""
+    """Get element list from CHGNet model"""
     try:
         from chgnet.model import CHGNet
         
         # CHGnetモデルをロード
         model = CHGNet.load(use_device="cpu")
         
-        # モデルの設定から元素情報を取得
+        # Get element information from model configuration
         if hasattr(model, 'atom_embedding'):
             # 原子番号の範囲を推定（通常1-94程度）
             max_atomic_num = 94
             
             # 実際に使用されている原子番号を確認
             supported_elements = set()
-            for z in range(1, min(max_atomic_num + 1, 95)):  # 1から94まで
+            for z in range(1, min(max_atomic_num + 1, 95)):  # 1 to 94
                 try:
                     element = Element.from_Z(z)
-                    # ノーブルガス・アクチノイド除外（CHGnetの特性に基づく）
-                    if z not in [2, 10, 18, 36, 54, 86] and z <= 92:  # He, Ne, Ar, Kr, Xe, Rn, U以降除外
+                    # Exclude noble gases and actinoids (based on CHGNet characteristics)
+                    if z not in [2, 10, 18, 36, 54, 86] and z <= 92:  # He, Ne, Ar, Kr, Xe, Rn, exclude U and beyond
                         supported_elements.add(element.symbol)
                 except:
                     continue
@@ -119,16 +119,16 @@ def _get_elements_from_chgnet() -> Optional[Set[str]]:
         return None
 
 def _get_elements_from_periodic_table() -> Optional[Set[str]]:
-    """pymatgenの周期表から妥当な元素範囲を取得"""
+    """Get valid element range from pymatgen periodic table"""
     try:
         supported_elements = set()
         
-        # Materials Project/CHGnetで一般的にサポートされる範囲
-        # 原子番号1-92（Uまで、ノーブルガス・放射性元素の一部除外）
+        # Range generally supported by Materials Project/CHGNet
+        # Atomic numbers 1-92 (up to U, excluding some noble gases and radioactive elements)
         excluded_elements = {
-            # ノーブルガス
+            # Noble gases
             'He', 'Ne', 'Ar', 'Kr', 'Xe', 'Rn',
-            # アクチノイドの一部（安定性が低い）
+            # Some actinoids (low stability)
             'Np', 'Pu', 'Am', 'Cm', 'Bk', 'Cf', 'Es', 'Fm', 'Md', 'No', 'Lr'
         }
         
@@ -147,8 +147,8 @@ def _get_elements_from_periodic_table() -> Optional[Set[str]]:
 
 def _get_fallback_elements() -> Set[str]:
     """
-    最終フォールバック: 確実にサポートされている元素のみ
-    Materials Projectで高頻度使用される安全な元素リスト
+    Final fallback: only reliably supported elements
+    Safe element list frequently used in Materials Project
     """
     return {
         # 1-2周期
@@ -169,19 +169,19 @@ def _get_fallback_elements() -> Set[str]:
         'Th', 'U'
     }
 
-# グローバル変数として一度だけ初期化
+# Initialize once as global variable
 ALLOWED_ELEMENTS: Set[str] = get_chgnet_supported_elements()
 
-# セキュリティ関数群
+# Security functions
 def safe_filename(filename: str) -> str:
-    """ファイル名の安全化（パストラバーサル対策）"""
+    """Secure filename (path traversal protection)"""
     if not filename:
         raise ValueError("Filename cannot be empty")
     
-    # パストラバーサル文字を除去
+    # Remove path traversal characters
     safe_name = os.path.basename(filename).replace('..', '')
     
-    # 危険な文字をチェック
+    # Check dangerous characters
     if not safe_name or '/' in safe_name or '\\' in safe_name:
         raise ValueError("Invalid filename")
     
@@ -192,7 +192,7 @@ def safe_filename(filename: str) -> str:
     return safe_name
 
 def validate_supercell_size(supercell_size: List[int]) -> List[int]:
-    """スーパーセルサイズの検証"""
+    """Validate supercell size"""
     if not isinstance(supercell_size, list) or len(supercell_size) != 3:
         raise ValueError("Supercell size must be a list of 3 integers")
     
@@ -203,7 +203,7 @@ def validate_supercell_size(supercell_size: List[int]) -> List[int]:
     return supercell_size
 
 def validate_element(element: str) -> str:
-    """元素の検証（インジェクション対策）"""
+    """Element validation (injection protection)"""
     if not isinstance(element, str):
         raise ValueError("Element must be a string")
     
@@ -215,13 +215,13 @@ def validate_element(element: str) -> str:
 
 
 class SessionManager:
-    """セッション管理クラス - 構造データとメタデータを管理"""
+    """Session management class - manages structure data and metadata"""
     
     def __init__(self):
         self.sessions: Dict[str, Dict] = {}
         
     def create_session(self, session_id: str, filename: str, original_structure: Structure) -> None:
-        """新しいセッションを作成"""
+        """Create new session"""
         self.sessions[session_id] = {
             'filename': filename,
             'original_structure': original_structure,
@@ -233,13 +233,13 @@ class SessionManager:
         logger.info(f"Created session {session_id[:8]}... for {filename}")
     
     def get_current_structure(self, session_id: str) -> Optional[Structure]:
-        """現在の構造を取得"""
+        """Get current structure"""
         if session_id in self.sessions:
             return self.sessions[session_id]['current_structure']
         return None
     
     def update_structure(self, session_id: str, structure: Structure, operations: List = None, supercell_size: List = None) -> None:
-        """構造を更新"""
+        """Update structure"""
         if session_id in self.sessions:
             self.sessions[session_id]['current_structure'] = structure
             if operations is not None:
@@ -249,11 +249,11 @@ class SessionManager:
             logger.info(f"Updated structure for session {session_id[:8]}...")
     
     def get_session_info(self, session_id: str) -> Optional[Dict]:
-        """セッション情報を取得"""
+        """Get session information"""
         return self.sessions.get(session_id)
     
     def debug_sessions(self) -> Dict:
-        """デバッグ用：全セッション情報を取得"""
+        """Debug: get all session information"""
         return {
             'total_sessions': len(self.sessions),
             'session_ids': list(self.sessions.keys()),
@@ -270,7 +270,7 @@ class SessionManager:
         }
     
     def cleanup_old_sessions(self, max_age_hours: int = 24) -> None:
-        """古いセッションをクリーンアップ"""
+        """Clean up old sessions"""
         cutoff_time = time.time() - (max_age_hours * 3600)
         
         old_sessions = [
@@ -282,7 +282,7 @@ class SessionManager:
             del self.sessions[sid]
             logger.info(f"Cleaned up old session {sid[:8]}...")
 
-# セッション管理インスタンス
+# Session management instance
 session_manager = SessionManager()
 
 app = FastAPI(title="CrystalNexus")
@@ -291,14 +291,14 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 SAMPLE_CIF_DIR = Path("sample_cif")
 
-# セキュアなデフォルト設定
+# Secure default settings
 HOST = os.getenv('CRYSTALNEXUS_HOST', '0.0.0.0')
 PORT = int(os.getenv('CRYSTALNEXUS_PORT', '8080'))
 DEBUG = os.getenv('CRYSTALNEXUS_DEBUG', 'False').lower() == 'true'
 MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', str(50 * 1024 * 1024)))  # 50MB
 MAX_SUPERCELL_DIM = int(os.getenv('MAX_SUPERCELL_DIM', '10'))
 
-# DEBUG設定を適用
+# Apply DEBUG settings
 if DEBUG:
     logger.setLevel(logging.DEBUG)
 
@@ -379,7 +379,7 @@ async def analyze_sample_cif(data: dict):
         if not filename:
             raise HTTPException(status_code=400, detail="Filename is required")
         
-        # セキュアなファイル名検証
+        # Secure filename validation
         safe_name = safe_filename(filename)
         file_path = SAMPLE_CIF_DIR / safe_name
         
@@ -410,16 +410,16 @@ async def analyze_sample_cif(data: dict):
 @app.post("/api/analyze-cif-upload")
 async def analyze_uploaded_cif(file: UploadFile = File(...)):
     try:
-        # ファイル名とサイズの検証
+        # Filename and size validation
         if not file.filename or not file.filename.lower().endswith('.cif'):
             raise HTTPException(status_code=400, detail="File must be a CIF file")
         
-        # ファイルサイズ制限
+        # File size limit
         contents = await file.read()
         if len(contents) > MAX_FILE_SIZE:
             raise HTTPException(status_code=413, detail=f"File too large. Maximum size: {MAX_FILE_SIZE} bytes")
         
-        # セキュアな一時ファイル作成（UTF-8エンコーディング明示）
+        # Create secure temporary file (explicit UTF-8 encoding)
         try:
             # Try to decode as UTF-8 first
             contents_str = contents.decode('utf-8')
@@ -479,7 +479,7 @@ async def analyze_uploaded_cif(file: UploadFile = File(...)):
         logger.error(f"Error in analyze_uploaded_cif: {e}")
         logger.error(f"Error type: {type(e)}")
         logger.error(f"Error traceback: {str(e)}", exc_info=True)
-        # Windows固有のファイル操作エラーをより詳細に報告
+        # Report Windows-specific file operation errors in more detail
         if WINDOWS_PLATFORM and ("permission" in str(e).lower() or "access" in str(e).lower()):
             raise HTTPException(status_code=500, detail="Windows file access error - check file permissions")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
@@ -565,7 +565,7 @@ async def analyze_cif_file(file_path: Path) -> Dict:
         logger.error(f"Error in analyze_cif_file: {e}")
         logger.error(f"Error type: {type(e)}")
         logger.error(f"Error traceback: {str(e)}", exc_info=True)
-        # Windows固有のpymatgenエラーを詳細に報告
+        # Report Windows-specific pymatgen errors in detail
         if WINDOWS_PLATFORM and "fortran" in str(e).lower():
             raise HTTPException(status_code=500, detail="Windows Fortran library error - install Microsoft Visual C++ Redistributable")
         raise HTTPException(status_code=500, detail=f"Error in pymatgen analysis: {str(e)}")
@@ -586,7 +586,7 @@ async def create_supercell(data: dict):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required")
         
-        # スーパーセルサイズの検証
+        # Validate supercell size
         supercell_size = validate_supercell_size(supercell_size_raw)
         
         # Calculate supercell information
@@ -856,7 +856,7 @@ async def generate_modified_structure_cif(request: dict):
                     site_index = operation["index"]
                     new_element_raw = operation["to"]
                     
-                    # 元素の検証（セキュリティ対策）
+                    # Element validation (security measures)
                     new_element = validate_element(new_element_raw)
                     
                     if site_index < len(structure.sites):
@@ -1133,12 +1133,16 @@ def evaluate_convergence(trajectory, fmax):
     # Ensure return type is Python bool (not numpy.bool)
     return bool(final_converged)
 
-def safe_get_prediction(pred):
+def safe_get_prediction(pred, num_atoms=None):
     """Extract prediction results safely from CHGNet output"""
     out = {}
     for k in ("energy", "e", "energy_per_atom", "e_per_atom"):
         if k in pred:
-            out["energy_eV_per_atom"] = float(getattr(pred[k], "item", lambda: pred[k])())
+            energy_per_atom = float(getattr(pred[k], "item", lambda: pred[k])())
+            out["energy_eV_per_atom"] = energy_per_atom
+            # Convert to total energy if number of atoms is provided
+            if num_atoms is not None:
+                out["total_energy_eV"] = energy_per_atom * num_atoms
             break
     for k in ("forces", "f", "force"):
         if k in pred:
@@ -1262,8 +1266,8 @@ async def chgnet_predict_structure(request: dict):
         except TypeError:
             pred = chgnet.predict_structure(structure)
         
-        # Extract results
-        results = safe_get_prediction(pred)
+        # Extract results with number of atoms for energy conversion
+        results = safe_get_prediction(pred, num_atoms=len(structure.sites))
         
         # Add structure information
         results.update({
@@ -1351,11 +1355,11 @@ async def chgnet_relax_structure(request: dict):
                                                    return_site_energies=True,
                                                    return_atom_feas=True,
                                                    return_crystal_feas=True)
-            initial_results = safe_get_prediction(pred_initial)
+            initial_results = safe_get_prediction(pred_initial, num_atoms=len(structure.sites))
         except TypeError:
             # Fallback if detailed prediction fails
             pred_initial = chgnet.predict_structure(structure)
-            initial_results = safe_get_prediction(pred_initial)
+            initial_results = safe_get_prediction(pred_initial, num_atoms=len(structure.sites))
         except Exception as e:
             logger.warning(f"Initial prediction failed: {e}")
             initial_results = {"energy_eV_per_atom": None}
@@ -1381,20 +1385,22 @@ async def chgnet_relax_structure(request: dict):
                                                  return_site_energies=True,
                                                  return_atom_feas=True,
                                                  return_crystal_feas=True)
-            final_results = safe_get_prediction(pred_final)
+            final_results = safe_get_prediction(pred_final, num_atoms=len(final_structure.sites))
         except TypeError:
             # Fallback if detailed prediction fails
             pred_final = chgnet.predict_structure(final_structure)
-            final_results = safe_get_prediction(pred_final)
+            final_results = safe_get_prediction(pred_final, num_atoms=len(final_structure.sites))
         except Exception as e:
             logger.warning(f"Final prediction failed: {e}")
             final_results = {"energy_eV_per_atom": None}
         
-        # Calculate energy difference
+        # Calculate energy difference in total eV
         energy_diff = None
-        if (initial_results.get("energy_eV_per_atom") is not None and 
-            final_results.get("energy_eV_per_atom") is not None):
-            energy_diff = final_results["energy_eV_per_atom"] - initial_results["energy_eV_per_atom"]
+        energy_diff_per_atom = None
+        if (initial_results.get("total_energy_eV") is not None and 
+            final_results.get("total_energy_eV") is not None):
+            energy_diff = final_results["total_energy_eV"] - initial_results["total_energy_eV"]
+            energy_diff_per_atom = final_results["energy_eV_per_atom"] - initial_results["energy_eV_per_atom"]
         
         # Extract relaxation information with CHGNet-compliant convergence evaluation
         trajectory = result.get("trajectory")
@@ -1419,7 +1425,8 @@ async def chgnet_relax_structure(request: dict):
             "steps": steps,
             "fmax": fmax,
             "max_steps": max_steps,
-            "energy_change_eV_per_atom": energy_diff
+            "energy_change_eV": energy_diff,
+            "energy_change_eV_per_atom": energy_diff_per_atom
         }
         
         # Add structure information
@@ -1578,7 +1585,7 @@ async def reset_session_structure(request: dict):
 
 @app.get("/api/debug-sessions")
 async def debug_sessions():
-    """デバッグ用：セッション情報を取得"""
+    """Debug: get session information"""
     return session_manager.debug_sessions()
 
 @app.post("/api/generate-relaxed-structure-cif")

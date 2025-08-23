@@ -51,6 +51,13 @@ Thumbs.db
 requirements-*-update.txt
 test_*.py
 
+# Test files and folders
+test*.cif
+tests/
+
+# Claude Code configuration
+.claude/
+
 # Result files
 *_results.json
 *_summary.csv

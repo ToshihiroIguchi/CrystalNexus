@@ -1015,6 +1015,41 @@
             color: #e74c3c;
             font-weight: bold;
         }
+        
+        /* Copy button styles */
+        .copy-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 18px;
+            height: 18px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            opacity: 0.6;
+            transition: opacity 0.2s, transform 0.1s;
+            margin-left: 6px;
+            vertical-align: middle;
+            font-size: 12px;
+            color: #666;
+            position: relative;
+        }
+        
+        .copy-btn:hover {
+            opacity: 1;
+            transform: scale(1.1);
+            color: #333;
+        }
+        
+        .copy-btn:active {
+            transform: scale(0.95);
+        }
+        
+        .copy-btn:focus {
+            outline: 1px solid #007bff;
+            outline-offset: 1px;
+            border-radius: 2px;
+        }
 
         /* Detailed Analysis Modal Styles */
         .analysis-modal {
@@ -1779,32 +1814,44 @@
                 if (finalPred.forces_eV_per_A) {
                     numAtoms = finalPred.forces_eV_per_A.length;
                 }
-                const totalEnergy = energyPerAtom * numAtoms;
+                // Use total_energy_eV from backend if available, otherwise calculate
+                const totalEnergy = finalPred.total_energy_eV !== undefined ? finalPred.total_energy_eV : energyPerAtom * numAtoms;
                 
-                // Summary: Show final energy values only (most important information)
-                energySummary.innerHTML = `⚡ Energy: <span class="${energyPerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${totalEnergy.toFixed(2)} eV</span> (${energyPerAtom.toFixed(3)} eV/atom, ${numAtoms} atoms)`;
+                // Summary: Show final energy values with copy buttons
+                energySummary.innerHTML = `⚡ Energy: <span class="${energyPerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${totalEnergy.toFixed(2)} eV</span><button class="copy-btn" id="copy-total-energy" onclick="copyTotalEnergy()" title="Copy: Total Energy">📋</button>`;
                 
                 // Show Details button
                 energyDetailBtn.style.display = 'inline-block';
                 
-                // Prepare Site Energies details table
+                // Prepare Energy details table
                 let detailsHTML = '';
+                
+                // Add basic energy information
+                detailsHTML += '<table class="detail-table">';
+                detailsHTML += '<tr><th colspan="2">Energy Details</th></tr>';
+                detailsHTML += `<tr><td><strong>Energy per atom:</strong></td><td>${energyPerAtom.toFixed(6)} eV/atom</td></tr>`;
+                detailsHTML += `<tr><td><strong>Number of atoms:</strong></td><td>${numAtoms} atoms</td></tr>`;
+                detailsHTML += `<tr><td><strong>Total energy:</strong></td><td>${totalEnergy.toFixed(6)} eV</td></tr>`;
+                detailsHTML += '</table><br>';
                 
                 // Add Site Energies if available
                 if (finalPred.site_energies_eV) {
                     const siteEnergies = finalPred.site_energies_eV;
+                    // Store site energies for copy functionality
+                    window.currentSiteEnergies = siteEnergies;
+                    
                     detailsHTML += '<table class="detail-table">';
-                    detailsHTML += '<tr><th colspan="2">Site Energies</th></tr>';
+                    detailsHTML += '<tr><th colspan="3">Site Energies</th></tr>';
                     
                     siteEnergies.forEach((energy, i) => {
                         // Use current labels to reflect any element substitutions
                         const atomLabel = window.currentLabels && window.currentLabels[i] ? window.currentLabels[i] : `Site ${i+1}`;
-                        detailsHTML += `<tr><td>${atomLabel}:</td><td class="site-energy">${energy.toFixed(6)} eV</td></tr>`;
+                        detailsHTML += `<tr><td>${atomLabel}:</td><td class="site-energy">${energy.toFixed(6)} eV</td><td><button class="copy-btn" id="copy-site-energy-${i}" onclick="copySiteEnergy(${i})" title="Copy: ${atomLabel} Energy">📋</button></td></tr>`;
                     });
                     
                     // Add verification
                     const siteSum = siteEnergies.reduce((sum, e) => sum + e, 0);
-                    detailsHTML += `<tr><td style="padding-top: 10px;"><em>Sum of site energies:</em></td><td style="padding-top: 10px;"><em>${siteSum.toFixed(6)} eV</em></td></tr>`;
+                    detailsHTML += `<tr><td style="padding-top: 10px;"><em>Sum of site energies:</em></td><td style="padding-top: 10px;"><em>${siteSum.toFixed(6)} eV</em></td><td style="padding-top: 10px;"><button class="copy-btn" onclick="smartCopyToClipboard('${siteSum}'); showCopyFeedback(this, true);" title="Copy: Site Energy Total">📋</button></td></tr>`;
                     detailsHTML += '</table>';
                 } else {
                     detailsHTML = '<p>Site energies not available for this calculation.</p>';
@@ -1821,11 +1868,12 @@
                         numAtoms: numAtoms
                     }
                 };
+                console.log('Energy analysis data set:', window.energyAnalysisData);
                 
                 // Add initial data if available (for relaxation)
                 if (isRelaxation && initialPred && initialPred.energy_eV_per_atom !== undefined) {
                     const initialEnergyPerAtom = initialPred.energy_eV_per_atom;
-                    const initialTotalEnergy = initialEnergyPerAtom * numAtoms;
+                    const initialTotalEnergy = initialPred.total_energy_eV !== undefined ? initialPred.total_energy_eV : initialEnergyPerAtom * numAtoms;
                     
                     window.energyAnalysisData.initial = {
                         totalEnergy: initialTotalEnergy,
@@ -2124,6 +2172,110 @@
         }
         
         // Simplified: Using 3Dmol.js built-in axes functionality through addUnitCell options
+        
+        // === Clipboard Copy Functionality ===
+        
+        // Smart clipboard copy with fallback support
+        async function smartCopyToClipboard(text) {
+            try {
+                // Modern browsers with Clipboard API
+                if (navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(text);
+                    return { success: true, method: 'modern' };
+                } else {
+                    // Fallback for older browsers or non-HTTPS
+                    const textarea = document.createElement('textarea');
+                    textarea.value = text;
+                    textarea.style.cssText = 'position:fixed;opacity:0;pointer-events:none;left:-9999px;';
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    textarea.setSelectionRange(0, text.length);
+                    
+                    const success = document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                    
+                    if (success) {
+                        return { success: true, method: 'legacy' };
+                    } else {
+                        throw new Error('execCommand copy failed');
+                    }
+                }
+            } catch (error) {
+                console.error('Copy operation failed:', error);
+                return { success: false, error: error.message };
+            }
+        }
+        
+        // Show copy feedback tooltip
+        function showCopyFeedback(button, success) {
+            const tooltip = document.createElement('div');
+            tooltip.className = 'copy-tooltip';
+            tooltip.textContent = success ? 'Copied' : 'Copy failed';
+            tooltip.style.cssText = `
+                position: absolute;
+                background: ${success ? '#27ae60' : '#e74c3c'};
+                color: white;
+                padding: 4px 8px;
+                border-radius: 4px;
+                font-size: 12px;
+                white-space: nowrap;
+                z-index: 1000;
+                pointer-events: none;
+                opacity: 0;
+                transition: opacity 0.2s;
+            `;
+            
+            // Position tooltip above button
+            const rect = button.getBoundingClientRect();
+            tooltip.style.left = (rect.left + window.scrollX - 10) + 'px';
+            tooltip.style.top = (rect.top + window.scrollY - 30) + 'px';
+            
+            document.body.appendChild(tooltip);
+            
+            // Show tooltip
+            requestAnimationFrame(() => {
+                tooltip.style.opacity = '1';
+            });
+            
+            // Hide and remove tooltip
+            setTimeout(() => {
+                tooltip.style.opacity = '0';
+                setTimeout(() => {
+                    if (tooltip.parentNode) {
+                        document.body.removeChild(tooltip);
+                    }
+                }, 200);
+            }, 1500);
+        }
+        
+        // Copy energy value functions
+        async function copyTotalEnergy() {
+            if (!window.energyAnalysisData?.final?.totalEnergy) {
+                console.warn('No total energy data available');
+                return;
+            }
+            
+            const value = window.energyAnalysisData.final.totalEnergy;
+            console.log('Copying total energy (eV):', value);
+            const result = await smartCopyToClipboard(value.toString());
+            
+            const button = document.getElementById('copy-total-energy');
+            showCopyFeedback(button, result.success);
+        }
+        
+        
+        async function copySiteEnergy(siteIndex) {
+            if (!window.currentSiteEnergies || !window.currentSiteEnergies[siteIndex]) {
+                console.warn('No site energy data available for index:', siteIndex);
+                return;
+            }
+            
+            const value = window.currentSiteEnergies[siteIndex];
+            const result = await smartCopyToClipboard(value.toString());
+            
+            const button = document.getElementById(`copy-site-energy-${siteIndex}`);
+            showCopyFeedback(button, result.success);
+        }
         
         // Sync button states with current display state
         function syncButtonStates() {
@@ -3929,12 +4081,9 @@
             }
             
             // Reset supercell inputs
-            document.getElementById('supercell_x').value = '1';
-            document.getElementById('supercell_y').value = '1';
-            document.getElementById('supercell_z').value = '1';
-            
-            // Force refresh of the page state
-            location.reload();
+            document.getElementById('supercell-a').value = '1';
+            document.getElementById('supercell-b').value = '1';
+            document.getElementById('supercell-c').value = '1';
             
             console.log('✓ Application state completely reset for new CIF loading');
         }
@@ -4028,8 +4177,8 @@
                 const numAtoms = data.structure_info?.num_atoms || finalPred.forces_eV_per_A?.length || 0;
                 
                 // Calculate energies
-                const initialTotalEnergy = initialPred ? initialPred.energy_eV_per_atom * numAtoms : null;
-                const finalTotalEnergy = finalPred.energy_eV_per_atom * numAtoms;
+                const initialTotalEnergy = initialPred ? (initialPred.total_energy_eV !== undefined ? initialPred.total_energy_eV : initialPred.energy_eV_per_atom * numAtoms) : null;
+                const finalTotalEnergy = finalPred.total_energy_eV !== undefined ? finalPred.total_energy_eV : finalPred.energy_eV_per_atom * numAtoms;
                 const energyChange = initialTotalEnergy ? finalTotalEnergy - initialTotalEnergy : null;
                 const energyChangePerAtom = data.energy_change_eV_per_atom || 0;
                 
@@ -5138,7 +5287,7 @@
                 // Extract energy data from direct calculation
                 if (analysisData.final_prediction?.energy_eV_per_atom !== undefined) {
                     const energyPerAtom = analysisData.final_prediction.energy_eV_per_atom;
-                    const totalEnergy = energyPerAtom * numAtoms;
+                    const totalEnergy = analysisData.final_prediction.total_energy_eV !== undefined ? analysisData.final_prediction.total_energy_eV : energyPerAtom * numAtoms;
                     
                     energyData = {
                         total: totalEnergy,
