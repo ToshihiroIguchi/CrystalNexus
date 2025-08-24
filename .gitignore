@@ -58,6 +58,9 @@ tests/
 # Claude Code configuration
 .claude/
 
+# Development notes
+UPGRADE_NOTES.md
+
 # Result files
 *_results.json
 *_summary.csv
