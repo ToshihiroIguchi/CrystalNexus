@@ -14,7 +14,7 @@
         }
 
         body {
-            font-family: Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             background-color: #f5f5f5;
         }
 
@@ -265,6 +265,10 @@
             overflow: hidden;
             border-left: 4px solid #95a5a6;
             cursor: pointer;
+        }
+
+        .crystal-info.summary #infoContent {
+            display: none;
         }
 
         .crystal-info.detailed {
@@ -641,7 +645,7 @@
         }
 
         .detail-table td:last-child {
-            font-family: 'Courier New', monospace;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
             color: #2c3e50;
         }
 
@@ -656,7 +660,7 @@
         }
 
         .force-vector {
-            font-family: 'Courier New', monospace;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
             font-size: 11px;
             color: #8e44ad;
         }
@@ -704,7 +708,7 @@
         .stress-matrix table {
             border-collapse: separate;
             border-spacing: 8px 4px;
-            font-family: 'Courier New', monospace;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
             font-size: 12px;
         }
 
@@ -958,7 +962,7 @@
         .result-value {
             font-size: 13px;
             color: #34495e;
-            font-family: 'Courier New', monospace;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
             word-break: break-all;
         }
 
@@ -1381,7 +1385,9 @@
             </div>
             
             <div class="panel-section">
-                <div class="panel-title">Crystal Information <a href="/static/user_guide.html#limitations" target="_blank" title="Important: CHGNet may overestimate lattice constants - Click for details" style="font-size: 12px; color: #e74c3c; text-decoration: none; margin-left: 5px;">⚠️</a></div>
+                <div class="panel-title">Crystal Information 
+                    <button class="copy-btn" id="copy-main-crystal-info" onclick="copyMainCrystalInfo()" title="Copy: All Crystal Information" style="margin-left: 8px; display: none;">📋</button>
+                </div>
                 <div id="main-crystal-info" class="mock-text">Structure details will be displayed here</div>
             </div>
         </div>
@@ -1416,20 +1422,6 @@
                                 </div>
                             </details>
                             
-                            <details style="margin-bottom: 10px; opacity: 0.6;">
-                                <summary style="font-size: 11px; color: #666; cursor: pointer; padding: 3px 0; user-select: none;">
-                                    ⚙️ System Limits
-                                </summary>
-                                <div style="margin-top: 8px; padding: 8px; background-color: #f8f9fa; border-radius: 4px; border-left: 2px solid #ddd;">
-                                    <div class="setting-group">
-                                        <label for="max-atoms-limit" style="font-size: 11px; color: #777;">Max total atoms:</label>
-                                        <input type="number" id="max-atoms-limit" value="200" min="50" max="2000" step="10" style="width: 60px; font-size: 10px; padding: 2px; border: 1px solid #ccc;">
-                                    </div>
-                                    <div style="font-size: 10px; color: #999; margin-top: 3px;">
-                                        Supercells exceeding this limit will be rejected to prevent long calculations
-                                    </div>
-                                </div>
-                            </details>
                         </div>
                     </div>
                     
@@ -1523,9 +1515,10 @@
                 </div>
             </div>
             
-            <div id="crystalInfo" class="crystal-info hidden summary">
+            <div id="crystalInfo" class="crystal-info hidden">
                 <div class="expand-toggle" id="expandToggle">▼ Details</div>
                 <strong>Crystal Information:</strong>
+                <button class="copy-btn" id="copy-crystal-info" onclick="copyAllCrystalInfo()" title="Copy: All Crystal Information" style="margin-left: 8px;">📋</button>
                 <div id="infoContent"></div>
             </div>
             
@@ -1543,6 +1536,23 @@
                     <div class="supercell-input-group">
                         <label for="supercell-c">c-direction:</label>
                         <input type="number" id="supercell-c" value="1" min="1" max="10">
+                    </div>
+                </div>
+                
+                <!-- System Limits Settings -->
+                <div class="system-limits-container" style="margin-top: 15px;">
+                    <div class="system-limits-toggle" style="cursor: pointer; font-size: 12px; color: #666; display: flex; align-items: center; justify-content: space-between; padding: 8px 0;">
+                        <span>⚙️ System Limits</span>
+                        <span id="system-limits-arrow" style="font-size: 10px; transition: transform 0.2s;">▼</span>
+                    </div>
+                    <div id="system-limits-panel" style="display: none; margin-top: 8px; padding: 12px; background-color: #f8f9fa; border-radius: 4px; border-left: 3px solid #3498db;">
+                        <div style="margin-bottom: 10px;">
+                            <label for="modal-max-atoms-limit" style="font-size: 12px; color: #555; display: block; margin-bottom: 5px;">Max total atoms:</label>
+                            <input type="number" id="modal-max-atoms-limit" value="200" min="50" max="2000" step="10" style="width: 80px; font-size: 12px; padding: 4px; border: 1px solid #ddd; border-radius: 3px;">
+                        </div>
+                        <div style="font-size: 10px; color: #888;">
+                            Higher limits may slow down analysis and visualization
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1662,6 +1672,23 @@
                     createSupercell();
                 }
             });
+
+            // System Limits toggle
+            const systemLimitsToggle = document.querySelector('.system-limits-toggle');
+            const systemLimitsPanel = document.getElementById('system-limits-panel');
+            const systemLimitsArrow = document.getElementById('system-limits-arrow');
+            
+            if (systemLimitsToggle && systemLimitsPanel && systemLimitsArrow) {
+                systemLimitsToggle.addEventListener('click', function() {
+                    if (systemLimitsPanel.style.display === 'none') {
+                        systemLimitsPanel.style.display = 'block';
+                        systemLimitsArrow.style.transform = 'rotate(180deg)';
+                    } else {
+                        systemLimitsPanel.style.display = 'none';
+                        systemLimitsArrow.style.transform = 'rotate(0deg)';
+                    }
+                });
+            }
         }
 
         async function loadSampleFiles() {
@@ -1791,6 +1818,7 @@
             
             const crystalInfoElement = document.getElementById('crystalInfo');
             crystalInfoElement.classList.remove('hidden');
+            crystalInfoElement.classList.add('summary'); // Start in collapsed state
             document.getElementById('supercellSection').classList.remove('hidden');
             document.getElementById('confirmButton').disabled = false;
             
@@ -2465,6 +2493,136 @@
             const button = document.getElementById(`copy-site-magnetic-${siteIndex}`);
             showCopyFeedback(button, result.success);
         }
+
+        // Copy all crystal information function
+        async function copyMainCrystalInfo() {
+            // Check if we have relaxed structure data (prioritize over original)
+            if (window.currentStructureInfo) {
+                // Use relaxed structure data
+                const relaxedInfo = window.currentStructureInfo;
+                const supercellSize = window.currentSupercellSize || [1, 1, 1];
+                const aSize = supercellSize[0];
+                const bSize = supercellSize[1];
+                const cSize = supercellSize[2];
+                
+                // Format relaxed crystal information
+                const crystalInfoText = `Crystal Information:
+
+Relaxed Supercell Structure Information:
+Formula: ${relaxedInfo.formula}
+Supercell size: ${aSize} × ${bSize} × ${cSize}
+Total atoms: ${relaxedInfo.num_sites}
+Density: ${relaxedInfo.density.toFixed(4)} g/cm³
+
+Relaxed Lattice Parameters:
+a = ${relaxedInfo.lattice_parameters.a.toFixed(5)} Å
+b = ${relaxedInfo.lattice_parameters.b.toFixed(5)} Å
+c = ${relaxedInfo.lattice_parameters.c.toFixed(5)} Å
+α = ${relaxedInfo.lattice_parameters.alpha.toFixed(5)}°
+β = ${relaxedInfo.lattice_parameters.beta.toFixed(5)}°
+γ = ${relaxedInfo.lattice_parameters.gamma.toFixed(5)}°
+Volume = ${relaxedInfo.volume.toFixed(5)} Ų
+
+⚡ Structure relaxed with CHGNet
+Note: CHGNet may overestimate lattice constants and underestimate density`;
+                
+                console.log('Copying relaxed crystal information');
+                const result = await smartCopyToClipboard(crystalInfoText);
+                
+                const button = document.getElementById('copy-main-crystal-info');
+                showCopyFeedback(button, result.success);
+                return;
+            }
+            
+            // Fallback to original supercell data if no relaxed data available
+            if (!supercellData) {
+                console.warn('No crystal data available');
+                return;
+            }
+            
+            const original = supercellData.original_data;
+            const supercell = supercellData.supercell_info;
+            
+            // Calculate supercell lattice parameters
+            const aSize = supercell.size[0];
+            const bSize = supercell.size[1];
+            const cSize = supercell.size[2];
+            
+            const supercellLattice = {
+                a: original.lattice_parameters.a * aSize,
+                b: original.lattice_parameters.b * bSize,
+                c: original.lattice_parameters.c * cSize,
+                alpha: original.lattice_parameters.alpha,
+                beta: original.lattice_parameters.beta,
+                gamma: original.lattice_parameters.gamma
+            };
+            
+            const supercellDensity = supercell.density || original.density;
+            
+            // Format original supercell crystal information
+            const crystalInfoText = `Crystal Information:
+
+Supercell Structure Information:
+Formula: ${supercell.formula}
+Supercell size: ${aSize} × ${bSize} × ${cSize}
+Total atoms: ${supercell.num_sites}
+Density: ${supercellDensity.toFixed(4)} g/cm³
+
+Supercell Lattice Parameters:
+a = ${supercellLattice.a.toFixed(5)} Å
+b = ${supercellLattice.b.toFixed(5)} Å
+c = ${supercellLattice.c.toFixed(5)} Å
+α = ${supercellLattice.alpha.toFixed(5)}°
+β = ${supercellLattice.beta.toFixed(5)}°
+γ = ${supercellLattice.gamma.toFixed(5)}°
+Volume = ${supercell.volume.toFixed(5)} Ų
+
+Note: Symmetry information excluded for supercell structure`;
+            
+            console.log('Copying original crystal information');
+            const result = await smartCopyToClipboard(crystalInfoText);
+            
+            const button = document.getElementById('copy-main-crystal-info');
+            showCopyFeedback(button, result.success);
+        }
+        
+        async function copyAllCrystalInfo() {
+            if (!window.currentCrystalData) {
+                console.warn('No crystal data available');
+                return;
+            }
+            
+            const data = window.currentCrystalData;
+            
+            // Format all crystal information into a readable text
+            const crystalInfoText = `Crystal Information:
+
+Basic Structure Information:
+Formula: ${data.formula}
+Number of atoms: ${data.num_atoms}
+Density: ${data.density.toFixed(4)} g/cm³
+
+Lattice Parameters:
+a = ${data.lattice_parameters.a.toFixed(5)} Å
+b = ${data.lattice_parameters.b.toFixed(5)} Å
+c = ${data.lattice_parameters.c.toFixed(5)} Å
+α = ${data.lattice_parameters.alpha.toFixed(5)}°
+β = ${data.lattice_parameters.beta.toFixed(5)}°
+γ = ${data.lattice_parameters.gamma.toFixed(5)}°
+Volume = ${data.volume.toFixed(5)} Ų
+
+Symmetry Information:
+International notation: ${data.space_group}
+Space group number: ${data.space_group_number}
+Point group: ${data.point_group}
+Crystal system: ${data.crystal_system}`;
+            
+            console.log('Copying all crystal information');
+            const result = await smartCopyToClipboard(crystalInfoText);
+            
+            const button = document.getElementById('copy-crystal-info');
+            showCopyFeedback(button, result.success);
+        }
         
         // Sync button states with current display state
         function syncButtonStates() {
@@ -2750,7 +2908,7 @@
             
             infoElement.innerHTML = `
                 <div style="margin-bottom: 15px;">
-                    <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Relaxed Supercell Structure Information:</div>
+                    <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Relaxed Supercell Structure Information: <a href="/static/user_guide.html#limitations" target="_blank" title="Important: CHGNet may overestimate lattice constants and underestimate density - Click for details" style="color: #e74c3c; text-decoration: none; margin-left: 5px;">⚠️</a></div>
                     <div><strong>Formula:</strong> ${relaxedStructureInfo.formula}</div>
                     <div><strong>Supercell size:</strong> ${aSize} × ${bSize} × ${cSize}</div>
                     <div><strong>Total atoms:</strong> ${relaxedStructureInfo.num_sites}</div>
@@ -2772,7 +2930,8 @@
                 
                 
                 <div style="font-size: 12px; color: #e74c3c; font-style: italic;">
-                    ⚡ Structure relaxed with CHGNet
+                    ⚡ Structure relaxed with CHGNet<br>
+                    <span style="font-size: 11px; margin-top: 3px; display: block;">Note: CHGNet may overestimate lattice constants and underestimate density</span>
                 </div>
             `;
             
@@ -3078,8 +3237,10 @@
         }
         
         function validateAtomCount(totalAtoms) {
-            const maxAtomsInput = document.getElementById('max-atoms-limit');
-            const maxAtoms = parseInt(maxAtomsInput?.value) || 200;
+            // Try modal input first, then fallback to sidebar input
+            const modalMaxAtomsInput = document.getElementById('modal-max-atoms-limit');
+            const sidebarMaxAtomsInput = document.getElementById('max-atoms-limit');
+            const maxAtoms = parseInt(modalMaxAtomsInput?.value || sidebarMaxAtomsInput?.value) || 200;
             
             if (totalAtoms > maxAtoms) {
                 alert(`Total atoms (${totalAtoms}) exceeds the system limit (${maxAtoms}).\n\nPlease reduce the supercell dimensions or increase the limit in System Limits settings.`);
@@ -3256,6 +3417,12 @@
                     Note: Symmetry information excluded for supercell structure
                 </div>
             `;
+            
+            // Show copy button for main crystal info
+            const copyBtn = document.getElementById('copy-main-crystal-info');
+            if (copyBtn) {
+                copyBtn.style.display = 'inline-flex';
+            }
         }
 
         async function loadCHGnetElements() {
