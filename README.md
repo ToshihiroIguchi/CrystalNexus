@@ -40,9 +40,12 @@ A comprehensive web-based crystal structure analysis and machine learning applic
 
 ### 🎨 **Professional Interface**
 - **Responsive Design**: Clean, modern UI optimized for research workflows
+- **Branded Interface**: Custom logo and favicon for professional appearance
+- **One-Click Copy**: Copy crystal information, energy data, and analysis results to clipboard
 - **Real-time Updates**: Live property updates during modifications
 - **Toast Notifications**: User-friendly feedback system
 - **Progress Tracking**: Visual indicators for long-running calculations
+- **Comprehensive User Guide**: Built-in documentation accessible from the interface
 
 ## Directory Structure
 
@@ -51,7 +54,6 @@ CrystalNexus/
 ├── main.py                 # FastAPI backend application
 ├── start_crystalnexus.py   # Application startup script
 ├── requirements.txt        # Python dependencies (2025 latest versions)
-├── UPGRADE_NOTES.md        # Version upgrade notes and compatibility info
 ├── .gitignore             # Git ignore configuration
 ├── README.md              # Project documentation
 ├── sample_cif/            # Sample crystal structure files
@@ -62,13 +64,10 @@ CrystalNexus/
 │   └── ZrO2.cif          # Zirconia (ceramic)
 ├── templates/             # HTML templates
 │   └── index.html        # Main application interface
-├── static/               # Static web assets (empty - using CDN)
-├── tests/                # Test suite
-│   ├── __init__.py
-│   ├── test_main.py      # Unit tests
-│   ├── test_security.py  # Security tests
-│   └── integration/      # Integration tests
-│       └── test_app.py
+├── static/               # Static web assets
+│   ├── favicon.ico       # Browser favicon
+│   ├── crystalnexus_whitelogo.png  # Application logo
+│   └── user_guide.html   # Comprehensive user documentation
 ```
 
 ## Installation & Setup
@@ -226,7 +225,7 @@ pip install -r requirements.txt
 ```
 
 **Legacy Compatibility Issues:**
-If you encounter issues with the latest versions, check `UPGRADE_NOTES.md` for detailed compatibility information and migration steps from older versions.
+If you encounter issues with the latest versions, ensure you're using Python 3.8+ and have the latest pip version installed.
 
 **Permission Issues:**
 ```bash
@@ -316,17 +315,17 @@ CrystalNexus includes 5 carefully selected sample structures representing differ
 
 ### Running Tests
 ```bash
-# Run all tests
-python -m pytest tests/
+# Install testing dependencies
+pip install pytest pytest-cov
 
-# Run specific test files
-python -m pytest tests/test_main.py
-python -m pytest tests/test_security.py
-python -m pytest tests/integration/test_app.py
+# Run basic application tests
+python -c "import main; print('Application imports successfully')"
 
-# Run with coverage
-pip install pytest-cov
-python -m pytest tests/ --cov=main --cov-report=html
+# Test CHGNet integration
+python -c "from chgnet.model import CHGNet; CHGNet.load(); print('CHGNet loaded successfully')"
+
+# Verify server startup
+python start_crystalnexus.py  # Should start without errors
 ```
 
 ### Development Mode
