@@ -4586,19 +4586,16 @@ Crystal system: ${data.crystal_system}`;
                         <td><strong>Number of atoms</strong></td>
                         <td>${numAtoms || '-'}</td>
                         <td>${numAtoms || '-'}</td>
-                        <td>-</td>
                     </tr>
                     <tr>
                         <td><strong>Total Energy (eV)</strong></td>
                         <td>${initialTotalEnergy ? initialTotalEnergy.toFixed(6) : '-'}</td>
                         <td><span class="${finalPred.energy_eV_per_atom < 0 ? 'energy-negative' : 'energy-positive'}">${finalTotalEnergy.toFixed(6)}</span></td>
-                        <td>${energyChange ? getChangeDisplay(energyChange) : '-'}</td>
                     </tr>
                     <tr>
                         <td><strong>Energy per atom (eV/atom)</strong></td>
                         <td>${initialPred ? initialPred.energy_eV_per_atom.toFixed(6) : '-'}</td>
                         <td><span class="${finalPred.energy_eV_per_atom < 0 ? 'energy-negative' : 'energy-positive'}">${finalPred.energy_eV_per_atom.toFixed(6)}</span></td>
-                        <td>${getChangeDisplay(energyChangePerAtom)}</td>
                     </tr>
                 `;
             }
@@ -4611,17 +4608,6 @@ Crystal system: ${data.crystal_system}`;
             if (data.final) {
                 const stability = data.final.energyPerAtom < 0 ? 'stable' : 'unstable';
                 insights += `<li><strong>Stability:</strong> The final structure is ${stability} with ${data.final.energyPerAtom.toFixed(3)} eV/atom.</li>`;
-                
-                if (data.changes) {
-                    const energyChange = data.changes.energyChangePerAtom;
-                    if (Math.abs(energyChange) < 0.001) {
-                        insights += '<li><strong>Relaxation:</strong> Very small energy change indicates structure was already well-optimized.</li>';
-                    } else if (energyChange < 0) {
-                        insights += '<li><strong>Relaxation:</strong> Energy decreased during relaxation, indicating structural optimization was successful.</li>';
-                    } else {
-                        insights += '<li><strong>Relaxation:</strong> Energy increased during relaxation, which may indicate numerical issues or metastable states.</li>';
-                    }
-                }
                 
                 insights += `<li><strong>System Size:</strong> Calculation performed on ${data.final.numAtoms} atoms.</li>`;
             }
@@ -4664,13 +4650,9 @@ Crystal system: ${data.crystal_system}`;
                 </div>
             `;
             
-            // Energy Change
-            const energyChange = data.energy_change_eV_per_atom || 0;
+            // Energy Values (Initial and Final only)
             energyEl.innerHTML = `
-                <div class="${energyChange < 0 ? 'energy-negative' : 'energy-positive'}">
-                    ${energyChange.toFixed(6)} eV/atom
-                </div>
-                <div style="font-size: 14px; margin-top: 5px;">
+                <div style="font-size: 14px;">
                     Initial: ${data.initial_prediction?.energy_eV_per_atom?.toFixed(6) || 'N/A'} eV/atom<br>
                     Final: ${data.final_prediction?.energy_eV_per_atom?.toFixed(6) || 'N/A'} eV/atom
                 </div>
@@ -5156,10 +5138,6 @@ Crystal system: ${data.crystal_system}`;
                         <span class="stat-value">${finalEnergy.toFixed(6)} eV/atom</span>
                     </div>
                     <div class="stat-item">
-                        <span class="stat-label">Change:</span>
-                        <span class="stat-value ${totalChange < 0 ? 'energy-negative' : 'energy-positive'}">${totalChange >= 0 ? '+' : ''}${totalChange.toFixed(6)} eV/atom</span>
-                    </div>
-                    <div class="stat-item">
                         <span class="stat-label">Min:</span>
                         <span class="stat-value">${minEnergy.toFixed(6)} eV/atom</span>
                     </div>
@@ -5194,10 +5172,6 @@ Crystal system: ${data.crystal_system}`;
                     <div class="stat-item">
                         <span class="stat-label">Final Max:</span>
                         <span class="stat-value">${finalForce.toFixed(4)} eV/Å</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-label">Change:</span>
-                        <span class="stat-value ${totalChange < 0 ? 'energy-negative' : 'energy-positive'}">${totalChange >= 0 ? '+' : ''}${totalChange.toFixed(4)} eV/Å</span>
                     </div>
                     <div class="stat-item">
                         <span class="stat-label">Peak:</span>
@@ -5245,7 +5219,7 @@ Crystal system: ${data.crystal_system}`;
                                     <div id="summary-convergence">-</div>
                                 </div>
                                 <div class="summary-card">
-                                    <h4>Energy Change</h4>
+                                    <h4>Energy Information</h4>
                                     <div id="summary-energy">-</div>
                                 </div>
                                 <div class="summary-card">
@@ -5271,7 +5245,6 @@ Crystal system: ${data.crystal_system}`;
                                         <th>Property</th>
                                         <th>Initial Structure</th>
                                         <th>Final Structure</th>
-                                        <th>Change</th>
                                     </tr>
                                 </thead>
                                 <tbody id="energy-analysis-body">

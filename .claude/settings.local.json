@@ -20,7 +20,8 @@
       "Bash(grep:*)",
       "Bash(git rm:*)",
       "Bash(git restore:*)",
-      "Bash(git pull:*)"
+      "Bash(git pull:*)",
+      "Bash(start http://localhost:8080)"
     ],
     "deny": [],
     "ask": []
