@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CrystalNexus</title>
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <style>
@@ -34,6 +35,15 @@
             font-size: 24px;
             font-weight: 600;
             color: white;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .header-logo {
+            height: 1.8em;
+            width: auto;
+            vertical-align: middle;
         }
 
         .header-controls {
@@ -1366,7 +1376,10 @@
 </head>
 <body>
     <div class="header">
-        <h1 class="header-title">CrystalNexus</h1>
+        <h1 class="header-title">
+            <img src="/static/crystalnexus_whitelogo.png" alt="CrystalNexus Logo" class="header-logo">
+            CrystalNexus
+        </h1>
         <div class="header-controls">
             <a href="/static/user_guide.html" target="_blank" class="help-btn" title="CrystalNexus User Guide - How to use this application">
                 📖 User Guide
