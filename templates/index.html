@@ -2066,11 +2066,34 @@ Crystal system: ${data.crystal_system}`;
                     🔄 Reset Operations
                 </button>
                 
-                <div class="element-selector">
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
+                    <span style="font-size: 14px; font-weight: bold;">Mode:</span>
+                    <label style="display: flex; align-items: center; gap: 3px; font-size: 13px; cursor: pointer;"
+                           title="Select element type - automatically finds the most energy-stable atom of that type">
+                        <input type="radio" name="selection-mode" value="auto" id="auto-mode" checked>Auto
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 3px; font-size: 13px; cursor: pointer;" 
+                           title="Select specific atom by label">
+                        <input type="radio" name="selection-mode" value="manual" id="manual-mode">Manual
+                    </label>
+                </div>
+                
+                <div class="element-selector" id="manual-selector" style="display: none;">
                     <label for="element-dropdown">Select Atom to Modify:</label>
                     <select id="element-dropdown">
                         <option value="">Choose an atom...</option>
                         ${labels.map(label => `<option value="${label}">${label}</option>`).join('')}
+                    </select>
+                </div>
+                
+                <div class="element-selector" id="auto-selector">
+                    <label for="element-type-dropdown" 
+                           title="Auto mode will test all atoms of this type and select the most energy-stable option">
+                        Select Element Type:
+                    </label>
+                    <select id="element-type-dropdown" 
+                            title="Choose an element type to automatically find the optimal atom for modification">
+                        <option value="">Choose element type...</option>
                     </select>
                 </div>
                 
@@ -2090,26 +2113,106 @@ Crystal system: ${data.crystal_system}`;
                         Execute
                     </button>
                 </div>
+                
+                <div class="execute-status" id="execute-status" style="display: none;">
+                    <div class="status-text" id="execute-status-text">Ready</div>
+                    <div class="progress-bar" id="execute-progress-bar" style="display: none;">
+                        <div class="progress-fill"></div>
+                    </div>
+                </div>
             `;
+            
+            // Extract unique elements from current structure labels
+            const uniqueElements = extractUniqueElements(labels);
+            
+            // Populate element type dropdown with unique elements from current structure
+            populateElementTypeDropdown(uniqueElements);
             
             // Add event listeners
             setupOperationListeners();
         }
 
+        function extractUniqueElements(labels) {
+            const uniqueElements = new Set();
+            labels.forEach(label => {
+                // Extract element symbol by removing numbers
+                const element = label.replace(/\d+$/, '');
+                uniqueElements.add(element);
+            });
+            return Array.from(uniqueElements).sort();
+        }
+
+        function populateElementTypeDropdown(uniqueElements) {
+            const elementTypeDropdown = document.getElementById('element-type-dropdown');
+            if (!elementTypeDropdown || !uniqueElements) return;
+            
+            // Clear existing options except the first one
+            elementTypeDropdown.innerHTML = '<option value="">Choose element type...</option>';
+            
+            // Add unique elements from current structure
+            uniqueElements.forEach(element => {
+                const option = document.createElement('option');
+                option.value = element;
+                option.textContent = element;
+                elementTypeDropdown.appendChild(option);
+            });
+        }
+
         function setupOperationListeners() {
             const atomDropdown = document.getElementById('element-dropdown');
+            const elementTypeDropdown = document.getElementById('element-type-dropdown');
             const operationSelect = document.getElementById('substitute-element');
             const executeBtn = document.getElementById('execute-btn');
             const resetOperationsBtn = document.getElementById('reset-operations-btn');
+            const manualMode = document.getElementById('manual-mode');
+            const autoMode = document.getElementById('auto-mode');
+            const manualSelector = document.getElementById('manual-selector');
+            const autoSelector = document.getElementById('auto-selector');
             
             // Enable reset operations button if original data exists
             if (resetOperationsBtn && window.originalSupercellData && window.originalLabels.length > 0) {
                 resetOperationsBtn.disabled = false;
             }
             
+            // Initialize Auto mode as default (since auto-mode is checked by default)
+            operationSelect.disabled = !elementTypeDropdown.value;
+            
+            // Selection mode toggle handlers
+            manualMode.addEventListener('change', function() {
+                if (this.checked) {
+                    manualSelector.style.display = 'block';
+                    autoSelector.style.display = 'none';
+                    // Reset selections
+                    elementTypeDropdown.value = '';
+                    operationSelect.disabled = !atomDropdown.value;
+                    updateExecuteButton();
+                }
+            });
+            
+            autoMode.addEventListener('change', function() {
+                if (this.checked) {
+                    manualSelector.style.display = 'none';
+                    autoSelector.style.display = 'block';
+                    // Reset selections
+                    atomDropdown.value = '';
+                    operationSelect.disabled = !elementTypeDropdown.value;
+                    updateExecuteButton();
+                }
+            });
+            
             atomDropdown.addEventListener('change', function() {
                 const selected = this.value;
-                operationSelect.disabled = !selected;
+                if (manualMode.checked) {
+                    operationSelect.disabled = !selected;
+                }
+                updateExecuteButton();
+            });
+            
+            elementTypeDropdown.addEventListener('change', function() {
+                const selected = this.value;
+                if (autoMode.checked) {
+                    operationSelect.disabled = !selected;
+                }
                 updateExecuteButton();
             });
             
@@ -2120,19 +2223,28 @@ Crystal system: ${data.crystal_system}`;
             executeBtn.addEventListener('click', async function(event) {
                 event.preventDefault(); // Prevent default button behavior
                 
-                const selectedAtom = atomDropdown.value;
                 const selectedOperation = operationSelect.value;
+                const isAutoMode = autoMode.checked;
                 
-                if (selectedAtom && selectedOperation) {
-                    // Disable button during operation
-                    executeBtn.disabled = true;
-                    executeBtn.textContent = 'Processing...';
-                    
+                // Get target selection based on mode
+                const selectedTarget = isAutoMode ? elementTypeDropdown.value : atomDropdown.value;
+                
+                if (selectedTarget && selectedOperation) {
                     try {
-                        if (selectedOperation === 'DELETE') {
-                            await handleDeletion(selectedAtom);
+                        if (isAutoMode) {
+                            // Auto mode: Find optimal atom through energy calculations
+                            if (selectedOperation === 'DELETE') {
+                                await handleOptimalDeletion(selectedTarget);
+                            } else {
+                                await handleOptimalSubstitution(selectedTarget, selectedOperation);
+                            }
                         } else {
-                            await handleSubstitution(selectedAtom, selectedOperation);
+                            // Manual mode: Direct operation
+                            if (selectedOperation === 'DELETE') {
+                                await handleDeletion(selectedTarget);
+                            } else {
+                                await handleSubstitution(selectedTarget, selectedOperation);
+                            }
                         }
                     } catch (error) {
                         console.error('Operation failed:', error);
@@ -2154,22 +2266,34 @@ Crystal system: ${data.crystal_system}`;
 
         function updateExecuteButton() {
             const atomDropdown = document.getElementById('element-dropdown');
+            const elementTypeDropdown = document.getElementById('element-type-dropdown');
             const operationSelect = document.getElementById('substitute-element');
             const executeBtn = document.getElementById('execute-btn');
+            const manualMode = document.getElementById('manual-mode');
             
-            const selectedAtom = atomDropdown.value;
+            // Determine current mode and selection
+            const isManualMode = manualMode && manualMode.checked;
+            const selectedTarget = isManualMode ? atomDropdown.value : elementTypeDropdown.value;
             const selectedOperation = operationSelect.value;
             
-            // Enable if both atom and operation are selected
-            executeBtn.disabled = !selectedAtom || !selectedOperation;
+            // Enable if both target and operation are selected
+            executeBtn.disabled = !selectedTarget || !selectedOperation;
             
-            // Update button text based on operation
-            if (selectedAtom && selectedOperation) {
+            // Update button text based on operation and mode
+            if (selectedTarget && selectedOperation) {
                 if (selectedOperation === 'DELETE') {
-                    executeBtn.textContent = `Delete ${selectedAtom}`;
+                    if (isManualMode) {
+                        executeBtn.textContent = `Delete ${selectedTarget}`;
+                    } else {
+                        executeBtn.textContent = `Auto Delete ${selectedTarget} (optimal)`;
+                    }
                     executeBtn.style.backgroundColor = '#e74c3c'; // Red for deletion
                 } else {
-                    executeBtn.textContent = `${selectedAtom} → ${selectedOperation}`;
+                    if (isManualMode) {
+                        executeBtn.textContent = `${selectedTarget} → ${selectedOperation}`;
+                    } else {
+                        executeBtn.textContent = `Auto ${selectedTarget} → ${selectedOperation} (optimal)`;
+                    }
                     executeBtn.style.backgroundColor = '#27ae60'; // Green for substitution
                 }
             } else {
@@ -2388,6 +2512,350 @@ Crystal system: ${data.crystal_system}`;
                 .join(' ');
         }
 
+
+        // Execute status functions using same system as Analyze Structure
+        function setExecuteButtonState(state, text) {
+            const executeBtn = document.getElementById('execute-btn');
+            if (!executeBtn) return;
+
+            switch(state) {
+                case 'processing':
+                    executeBtn.disabled = true;
+                    executeBtn.classList.add('button-processing');
+                    executeBtn.textContent = text || '⏳ Processing...';
+                    break;
+                case 'complete':
+                    executeBtn.disabled = false;
+                    executeBtn.classList.remove('button-processing');
+                    updateExecuteButton(); // Restore original text
+                    break;
+                default:
+                    executeBtn.disabled = false;
+                    executeBtn.classList.remove('button-processing');
+                    updateExecuteButton(); // Restore original text
+            }
+        }
+
+        function showExecuteStatus(message, showProgress = false) {
+            const statusDiv = document.getElementById('execute-status');
+            const statusText = document.getElementById('execute-status-text');
+            const progressBar = document.getElementById('execute-progress-bar');
+            
+            statusDiv.style.display = 'block';
+            statusText.textContent = message;
+            
+            if (showProgress) {
+                progressBar.style.display = 'block';
+            } else {
+                progressBar.style.display = 'none';
+            }
+        }
+
+        function updateExecuteProgress(current, total) {
+            const progressBar = document.getElementById('execute-progress-bar');
+            const progressFill = progressBar.querySelector('.progress-fill');
+            
+            if (total === 0) {
+                progressFill.style.width = '0%';
+                return;
+            }
+            
+            const percentage = Math.min((current / total) * 100, 100);
+            progressFill.style.width = `${percentage}%`;
+        }
+
+        function hideExecuteStatus() {
+            const statusDiv = document.getElementById('execute-status');
+            statusDiv.style.display = 'none';
+        }
+
+        // Optimal atom selection functions for Auto mode
+        async function handleOptimalSubstitution(elementType, newElement) {
+            if (!window.currentStructureData || window.currentLabels.length === 0) {
+                showNotification('No structure data available for modification', 'error');
+                return;
+            }
+            
+            // Find all atoms of the specified element type
+            const targetAtoms = findAtomsOfType(elementType);
+            
+            if (targetAtoms.length === 0) {
+                showNotification(`No ${elementType} atoms found in the structure`, 'error');
+                return;
+            }
+            
+            // Set button to processing state and show status
+            setExecuteButtonState('processing', '⏳ Starting...');
+            showExecuteStatus('Initializing energy calculations...', true);
+            updateExecuteProgress(0, targetAtoms.length);
+            
+            let bestAtom = null;
+            let lowestEnergy = Infinity;
+            const energyResults = [];
+            
+            try {
+                // Test each atom individually
+                for (let i = 0; i < targetAtoms.length; i++) {
+                    const atom = targetAtoms[i];
+                    
+                    // Update status with current atom
+                    showExecuteStatus(`Testing ${atom.label} → ${newElement}... (${i + 1}/${targetAtoms.length})`, true);
+                    
+                    // Calculate energy for this substitution
+                    const energy = await calculateSubstitutionEnergy(atom.label, newElement);
+                    
+                    if (energy !== null) {
+                        energyResults.push({
+                            atom: atom.label,
+                            energy: energy,
+                            index: atom.index
+                        });
+                        
+                        if (energy < lowestEnergy) {
+                            lowestEnergy = energy;
+                            bestAtom = atom;
+                        }
+                        
+                        console.log(`${atom.label} → ${newElement}: ${energy.toFixed(6)} eV/atom`);
+                    }
+                    
+                    // Update progress bar after each atom
+                    updateExecuteProgress(i + 1, targetAtoms.length);
+                }
+                
+                if (bestAtom) {
+                    // Show optimal atom found
+                    showExecuteStatus('Optimal atom found, executing substitution...', false);
+                    
+                    // Display results summary
+                    const resultSummary = energyResults
+                        .sort((a, b) => a.energy - b.energy)
+                        .map((r, i) => `${i + 1}. ${r.atom}: ${r.energy.toFixed(6)} eV/atom`)
+                        .join('\\n');
+                    
+                    console.log(`Energy comparison results:\\n${resultSummary}`);
+                    
+                    // Execute the optimal substitution
+                    await handleSubstitution(bestAtom.label, newElement);
+                    
+                    // Hide status and restore button
+                    hideExecuteStatus();
+                    setExecuteButtonState('complete');
+                    
+                    // Show success notification only after completion
+                    showNotification(`✅ Optimal substitution completed: ${bestAtom.label} → ${newElement}`, 'success');
+                    
+                } else {
+                    hideExecuteStatus();
+                    setExecuteButtonState('complete');
+                    showNotification('❌ Energy calculations failed', 'error');
+                }
+                
+            } catch (error) {
+                console.error('Error in optimal substitution:', error);
+                hideExecuteStatus();
+                setExecuteButtonState('complete');
+                showNotification('❌ Error during optimal substitution', 'error');
+            }
+        }
+        
+        async function handleOptimalDeletion(elementType) {
+            if (!window.currentStructureData || window.currentLabels.length === 0) {
+                showNotification('No structure data available for modification', 'error');
+                return;
+            }
+            
+            // Find all atoms of the specified element type
+            const targetAtoms = findAtomsOfType(elementType);
+            
+            if (targetAtoms.length === 0) {
+                showNotification(`No ${elementType} atoms found in the structure`, 'error');
+                return;
+            }
+            
+            // Set button to processing state and show status
+            setExecuteButtonState('processing', '⏳ Starting...');
+            showExecuteStatus('Initializing energy calculations...', true);
+            updateExecuteProgress(0, targetAtoms.length);
+            
+            let bestAtom = null;
+            let lowestEnergy = Infinity;
+            const energyResults = [];
+            
+            try {
+                // Test each atom individually
+                for (let i = 0; i < targetAtoms.length; i++) {
+                    const atom = targetAtoms[i];
+                    
+                    // Update status with current atom
+                    showExecuteStatus(`Testing delete ${atom.label}... (${i + 1}/${targetAtoms.length})`, true);
+                    
+                    // Calculate energy for this deletion
+                    const energy = await calculateDeletionEnergy(atom.label);
+                    
+                    if (energy !== null) {
+                        energyResults.push({
+                            atom: atom.label,
+                            energy: energy,
+                            index: atom.index
+                        });
+                        
+                        if (energy < lowestEnergy) {
+                            lowestEnergy = energy;
+                            bestAtom = atom;
+                        }
+                        
+                        console.log(`Delete ${atom.label}: ${energy.toFixed(6)} eV/atom`);
+                    }
+                    
+                    // Update progress bar after each atom
+                    updateExecuteProgress(i + 1, targetAtoms.length);
+                }
+                
+                if (bestAtom) {
+                    // Show optimal atom found
+                    showExecuteStatus('Optimal atom found, executing deletion...', false);
+                    
+                    // Display results summary
+                    const resultSummary = energyResults
+                        .sort((a, b) => a.energy - b.energy)
+                        .map((r, i) => `${i + 1}. Delete ${r.atom}: ${r.energy.toFixed(6)} eV/atom`)
+                        .join('\\n');
+                    
+                    console.log(`Energy comparison results:\\n${resultSummary}`);
+                    
+                    // Execute the optimal deletion
+                    await handleDeletion(bestAtom.label);
+                    
+                    // Hide status and restore button
+                    hideExecuteStatus();
+                    setExecuteButtonState('complete');
+                    
+                    // Show success notification only after completion
+                    showNotification(`✅ Optimal deletion completed: ${bestAtom.label} removed`, 'success');
+                    
+                } else {
+                    hideExecuteStatus();
+                    setExecuteButtonState('complete');
+                    showNotification('❌ Energy calculations failed', 'error');
+                }
+                
+            } catch (error) {
+                console.error('Error in optimal deletion:', error);
+                hideExecuteStatus();
+                setExecuteButtonState('complete');
+                showNotification('❌ Error during optimal deletion', 'error');
+            }
+        }
+        
+        function findAtomsOfType(elementType) {
+            const atoms = [];
+            window.currentLabels.forEach((label, index) => {
+                const element = label.replace(/\d+$/, ''); // Remove numbers to get element symbol
+                if (element === elementType) {
+                    atoms.push({
+                        label: label,
+                        index: index,
+                        element: element
+                    });
+                }
+            });
+            return atoms;
+        }
+        
+        async function calculateSubstitutionEnergy(atomLabel, newElement) {
+            try {
+                // Create a temporary operation for this substitution
+                const atomIndex = window.currentLabels.indexOf(atomLabel);
+                if (atomIndex === -1) {
+                    console.error(`Atom ${atomLabel} not found`);
+                    return null;
+                }
+                
+                const tempOperations = [...window.atomicOperations, {
+                    action: "substitute",
+                    index: atomIndex,
+                    from: atomLabel.replace(/\d+$/, ''),
+                    to: newElement
+                }];
+                
+                // Call backend API for energy calculation
+                const response = await fetch('/api/chgnet-predict', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        filename: window.currentStructureData?.original_data?.filename || 'structure.cif',
+                        operations: tempOperations,
+                        supercell_size: window.currentStructureData?.supercell_info?.size || [1, 1, 1]
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                
+                if (result.status === 'success' && result.prediction?.energy_eV_per_atom) {
+                    return result.prediction.energy_eV_per_atom;
+                } else {
+                    console.error('Energy calculation failed:', result);
+                    return null;
+                }
+                
+            } catch (error) {
+                console.error('Error calculating substitution energy:', error);
+                return null;
+            }
+        }
+        
+        async function calculateDeletionEnergy(atomLabel) {
+            try {
+                // Create a temporary operation for this deletion
+                const atomIndex = window.currentLabels.indexOf(atomLabel);
+                if (atomIndex === -1) {
+                    console.error(`Atom ${atomLabel} not found`);
+                    return null;
+                }
+                
+                const tempOperations = [...window.atomicOperations, {
+                    action: "delete",
+                    index: atomIndex
+                }];
+                
+                // Call backend API for energy calculation
+                const response = await fetch('/api/chgnet-predict', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        filename: window.currentStructureData?.original_data?.filename || 'structure.cif',
+                        operations: tempOperations,
+                        supercell_size: window.currentStructureData?.supercell_info?.size || [1, 1, 1]
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                
+                if (result.status === 'success' && result.prediction?.energy_eV_per_atom) {
+                    return result.prediction.energy_eV_per_atom;
+                } else {
+                    console.error('Energy calculation failed:', result);
+                    return null;
+                }
+                
+            } catch (error) {
+                console.error('Error calculating deletion energy:', error);
+                return null;
+            }
+        }
 
         async function resetToOriginalStructure() {
             if (!window.originalSupercellData || window.originalLabels.length === 0) {
