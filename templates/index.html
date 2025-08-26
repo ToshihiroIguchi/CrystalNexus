@@ -567,10 +567,14 @@
             }
         }
 
-        function displayCalculationTime(executionTime) {
+        function displayCalculationTime(executionTime, steps) {
             const timeDiv = document.getElementById('calculation-time');
             if (timeDiv) {
-                timeDiv.textContent = `Calculation completed in ${executionTime}s`;
+                let text = `Calculation completed in ${executionTime}s`;
+                if (steps !== undefined && steps !== null) {
+                    text += ` (${steps} steps)`;
+                }
+                timeDiv.textContent = text;
                 timeDiv.style.display = 'block';
             }
         }
@@ -1455,8 +1459,9 @@ Crystal system: ${data.crystal_system}`;
                 
                 showNotification(`CHGNet structure analysis completed successfully! (${executionTime}s)`, 'success');
                 
-                // Display calculation time in results
-                displayCalculationTime(executionTime);
+                // Display calculation time in results with steps
+                const steps = data.relaxation_info?.steps;
+                displayCalculationTime(executionTime, steps);
                 
                 // Clear status message after successful analysis
                 clearStatusMessage();

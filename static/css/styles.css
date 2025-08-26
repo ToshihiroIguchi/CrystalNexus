@@ -63,6 +63,13 @@ body {
     transform: translateY(-1px);
 }
 
+.help-btn[target="_blank"]::after {
+    content: " ↗";
+    font-size: 0.8em;
+    color: rgba(255, 255, 255, 0.7);
+    margin-left: 2px;
+}
+
 .reset-operations-btn {
     background: #f39c12;
     color: white;
@@ -504,7 +511,7 @@ body {
 .button-processing {
     background: linear-gradient(-45deg, #3498db, #2ecc71, #3498db, #2ecc71);
     background-size: 400% 400%;
-    animation: gradientShift 1.5s ease-in-out infinite;
+    animation: gradientShift 1.5s ease-in-out infinite, pulse 2s ease-in-out infinite;
     color: white;
     cursor: wait;
     position: relative;
@@ -522,6 +529,7 @@ body {
     animation: shimmer 2s infinite;
 }
 
+
 @keyframes shimmer {
     0% { left: -100%; }
     100% { left: 100%; }
@@ -536,6 +544,24 @@ body {
     }
     100% {
         background-position: 0% 50%;
+    }
+}
+
+@keyframes pulse {
+    0%, 100% { 
+        transform: scale(1); 
+    }
+    50% { 
+        transform: scale(1.02); 
+    }
+}
+
+@keyframes spin {
+    from { 
+        transform: translateY(-50%) rotate(0deg); 
+    }
+    to { 
+        transform: translateY(-50%) rotate(360deg); 
     }
 }
 
