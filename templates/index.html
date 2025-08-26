@@ -2119,6 +2119,9 @@ Crystal system: ${data.crystal_system}`;
                     <div class="progress-bar" id="execute-progress-bar" style="display: none;">
                         <div class="progress-fill"></div>
                     </div>
+                    <button class="cancel-btn" id="cancel-btn" style="display: none; margin-top: 8px; padding: 4px 8px; background: #e74c3c; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                        ❌ Cancel Operation
+                    </button>
                 </div>
             `;
             
@@ -2130,6 +2133,9 @@ Crystal system: ${data.crystal_system}`;
             
             // Add event listeners
             setupOperationListeners();
+            
+            // Initialize cancel button
+            initializeCancelButton();
         }
 
         function extractUniqueElements(labels) {
@@ -2536,10 +2542,11 @@ Crystal system: ${data.crystal_system}`;
             }
         }
 
-        function showExecuteStatus(message, showProgress = false) {
+        function showExecuteStatus(message, showProgress = false, showCancel = false) {
             const statusDiv = document.getElementById('execute-status');
             const statusText = document.getElementById('execute-status-text');
             const progressBar = document.getElementById('execute-progress-bar');
+            const cancelBtn = document.getElementById('cancel-btn');
             
             statusDiv.style.display = 'block';
             statusText.textContent = message;
@@ -2548,6 +2555,12 @@ Crystal system: ${data.crystal_system}`;
                 progressBar.style.display = 'block';
             } else {
                 progressBar.style.display = 'none';
+            }
+            
+            if (showCancel) {
+                cancelBtn.style.display = 'block';
+            } else {
+                cancelBtn.style.display = 'none';
             }
         }
 
@@ -2566,7 +2579,26 @@ Crystal system: ${data.crystal_system}`;
 
         function hideExecuteStatus() {
             const statusDiv = document.getElementById('execute-status');
+            const cancelBtn = document.getElementById('cancel-btn');
             statusDiv.style.display = 'none';
+            cancelBtn.style.display = 'none';
+        }
+
+        // Global abort controller for canceling operations
+        let currentAbortController = null;
+
+        function initializeCancelButton() {
+            const cancelBtn = document.getElementById('cancel-btn');
+            if (cancelBtn) {
+                cancelBtn.addEventListener('click', function() {
+                    if (currentAbortController) {
+                        currentAbortController.abort();
+                        hideExecuteStatus();
+                        setExecuteButtonState('complete');
+                        showNotification('⚠️ Operation cancelled by user', 'warning');
+                    }
+                });
+            }
         }
 
         // Optimal atom selection functions for Auto mode
@@ -2584,9 +2616,12 @@ Crystal system: ${data.crystal_system}`;
                 return;
             }
             
-            // Set button to processing state and show status
+            // Initialize abort controller
+            currentAbortController = new AbortController();
+            
+            // Set button to processing state and show status with cancel button
             setExecuteButtonState('processing', '⏳ Starting...');
-            showExecuteStatus('Initializing energy calculations...', true);
+            showExecuteStatus('Initializing energy calculations...', true, true);
             updateExecuteProgress(0, targetAtoms.length);
             
             let bestAtom = null;
@@ -2596,13 +2631,23 @@ Crystal system: ${data.crystal_system}`;
             try {
                 // Test each atom individually
                 for (let i = 0; i < targetAtoms.length; i++) {
+                    // Check if operation was cancelled
+                    if (currentAbortController.signal.aborted) {
+                        return;
+                    }
+                    
                     const atom = targetAtoms[i];
                     
                     // Update status with current atom
-                    showExecuteStatus(`Testing ${atom.label} → ${newElement}... (${i + 1}/${targetAtoms.length})`, true);
+                    showExecuteStatus(`Testing ${atom.label} → ${newElement}... (${i + 1}/${targetAtoms.length})`, true, true);
                     
                     // Calculate energy for this substitution
-                    const energy = await calculateSubstitutionEnergy(atom.label, newElement);
+                    const energy = await calculateSubstitutionEnergy(atom.label, newElement, currentAbortController.signal);
+                    
+                    // Check if operation was cancelled during calculation
+                    if (currentAbortController.signal.aborted) {
+                        return;
+                    }
                     
                     if (energy !== null) {
                         energyResults.push({
@@ -2652,10 +2697,16 @@ Crystal system: ${data.crystal_system}`;
                 }
                 
             } catch (error) {
+                if (error.name === 'AbortError') {
+                    // Operation was cancelled, cleanup already handled
+                    return;
+                }
                 console.error('Error in optimal substitution:', error);
                 hideExecuteStatus();
                 setExecuteButtonState('complete');
                 showNotification('❌ Error during optimal substitution', 'error');
+            } finally {
+                currentAbortController = null;
             }
         }
         
@@ -2673,9 +2724,12 @@ Crystal system: ${data.crystal_system}`;
                 return;
             }
             
-            // Set button to processing state and show status
+            // Initialize abort controller
+            currentAbortController = new AbortController();
+            
+            // Set button to processing state and show status with cancel button
             setExecuteButtonState('processing', '⏳ Starting...');
-            showExecuteStatus('Initializing energy calculations...', true);
+            showExecuteStatus('Initializing energy calculations...', true, true);
             updateExecuteProgress(0, targetAtoms.length);
             
             let bestAtom = null;
@@ -2685,13 +2739,23 @@ Crystal system: ${data.crystal_system}`;
             try {
                 // Test each atom individually
                 for (let i = 0; i < targetAtoms.length; i++) {
+                    // Check if operation was cancelled
+                    if (currentAbortController.signal.aborted) {
+                        return;
+                    }
+                    
                     const atom = targetAtoms[i];
                     
                     // Update status with current atom
-                    showExecuteStatus(`Testing delete ${atom.label}... (${i + 1}/${targetAtoms.length})`, true);
+                    showExecuteStatus(`Testing delete ${atom.label}... (${i + 1}/${targetAtoms.length})`, true, true);
                     
                     // Calculate energy for this deletion
-                    const energy = await calculateDeletionEnergy(atom.label);
+                    const energy = await calculateDeletionEnergy(atom.label, currentAbortController.signal);
+                    
+                    // Check if operation was cancelled during calculation
+                    if (currentAbortController.signal.aborted) {
+                        return;
+                    }
                     
                     if (energy !== null) {
                         energyResults.push({
@@ -2741,10 +2805,16 @@ Crystal system: ${data.crystal_system}`;
                 }
                 
             } catch (error) {
+                if (error.name === 'AbortError') {
+                    // Operation was cancelled, cleanup already handled
+                    return;
+                }
                 console.error('Error in optimal deletion:', error);
                 hideExecuteStatus();
                 setExecuteButtonState('complete');
                 showNotification('❌ Error during optimal deletion', 'error');
+            } finally {
+                currentAbortController = null;
             }
         }
         
@@ -2763,7 +2833,7 @@ Crystal system: ${data.crystal_system}`;
             return atoms;
         }
         
-        async function calculateSubstitutionEnergy(atomLabel, newElement) {
+        async function calculateSubstitutionEnergy(atomLabel, newElement, signal) {
             try {
                 // Create a temporary operation for this substitution
                 const atomIndex = window.currentLabels.indexOf(atomLabel);
@@ -2789,7 +2859,8 @@ Crystal system: ${data.crystal_system}`;
                         filename: window.currentStructureData?.original_data?.filename || 'structure.cif',
                         operations: tempOperations,
                         supercell_size: window.currentStructureData?.supercell_info?.size || [1, 1, 1]
-                    })
+                    }),
+                    signal: signal
                 });
                 
                 if (!response.ok) {
@@ -2811,7 +2882,7 @@ Crystal system: ${data.crystal_system}`;
             }
         }
         
-        async function calculateDeletionEnergy(atomLabel) {
+        async function calculateDeletionEnergy(atomLabel, signal) {
             try {
                 // Create a temporary operation for this deletion
                 const atomIndex = window.currentLabels.indexOf(atomLabel);
@@ -2835,7 +2906,8 @@ Crystal system: ${data.crystal_system}`;
                         filename: window.currentStructureData?.original_data?.filename || 'structure.cif',
                         operations: tempOperations,
                         supercell_size: window.currentStructureData?.supercell_info?.size || [1, 1, 1]
-                    })
+                    }),
+                    signal: signal
                 });
                 
                 if (!response.ok) {

@@ -235,3 +235,22 @@ function safeJSONParse(jsonString, defaultValue = null) {
         return defaultValue;
     }
 }
+
+/**
+ * Copy text to clipboard with notification
+ * @param {string} text - Text to copy
+ * @param {string} message - Success message to show (optional)
+ */
+async function copyToClipboard(text, message = 'Copied to clipboard!') {
+    try {
+        const result = await smartCopyToClipboard(text);
+        if (result.success) {
+            showNotification(message, 'success');
+        } else {
+            showNotification('Failed to copy to clipboard', 'error');
+        }
+    } catch (error) {
+        console.error('Copy failed:', error);
+        showNotification('Failed to copy to clipboard', 'error');
+    }
+}
