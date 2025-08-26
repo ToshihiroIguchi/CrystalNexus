@@ -84,7 +84,7 @@ def get_chgnet_supported_elements() -> Set[str]:
     except Exception as e:
         logger.error(f"Failed to get elements from periodic table: {e}")
     
-    # 方法3: 最終フォールバック
+    # Method 3: Final fallback
     logger.warning("Using hardcoded fallback element list")
     return _get_fallback_elements()
 
@@ -93,7 +93,7 @@ def _get_elements_from_chgnet() -> Optional[Set[str]]:
     try:
         from chgnet.model import CHGNet
         
-        # CHGnetモデルをロード
+        # Load CHGNet model
         model = CHGNet.load(use_device="cpu")
         
         # Get element information from model configuration
@@ -172,6 +172,66 @@ def _get_fallback_elements() -> Set[str]:
 # Initialize once as global variable
 ALLOWED_ELEMENTS: Set[str] = get_chgnet_supported_elements()
 
+# CHGNet Model Manager (Singleton Pattern)
+class CHGNetModelManager:
+    """
+    Singleton pattern for CHGNet model management
+    Ensures only one model instance is loaded in memory
+    Thread-safe with asyncio.Lock
+    """
+    _instance: Optional['CHGNetModelManager'] = None
+    _model = None
+    _relaxer = None
+    _lock = asyncio.Lock()
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
+    async def get_model(self):
+        """Get CHGNet model instance (lazy loading)"""
+        if self._model is None:
+            async with self._lock:
+                if self._model is None:  # Double-check locking
+                    await self._load_model()
+        return self._model
+    
+    async def get_relaxer(self):
+        """Get StructOptimizer instance (lazy loading)"""
+        if self._relaxer is None:
+            async with self._lock:
+                if self._relaxer is None:  # Double-check locking
+                    model = await self.get_model()
+                    from chgnet.model import StructOptimizer
+                    self._relaxer = StructOptimizer(model=model, use_device="cpu", optimizer_class="FIRE")
+                    logger.info("CHGNet StructOptimizer created and cached")
+        return self._relaxer
+    
+    async def _load_model(self):
+        """Internal method to load CHGNet model"""
+        if not CHGNET_AVAILABLE:
+            raise RuntimeError("CHGNet not available")
+        
+        try:
+            from chgnet.model.model import CHGNet
+            
+            if WINDOWS_PLATFORM:
+                self._model = CHGNet.load(use_device="cpu", verbose=False)
+                logger.info("CHGNet model loaded with Windows compatibility settings (cached)")
+            else:
+                self._model = CHGNet.load(use_device="cpu", verbose=False)
+                logger.info("CHGNet model loaded and cached")
+                
+        except Exception as load_error:
+            if WINDOWS_PLATFORM and "Buffer dtype mismatch" in str(load_error):
+                raise RuntimeError("Windows CHGNet compatibility issue. Try: pip install -r requirements-windows.txt")
+            else:
+                raise RuntimeError(f"Failed to load CHGNet model: {load_error}")
+
+# Global model manager instance
+chgnet_manager = CHGNetModelManager()
+
 # Security functions
 def safe_filename(filename: str) -> str:
     """Secure filename (path traversal protection)"""
@@ -185,7 +245,7 @@ def safe_filename(filename: str) -> str:
     if not safe_name or '/' in safe_name or '\\' in safe_name:
         raise ValueError("Invalid filename")
     
-    # CIFファイル以外を拒否
+    # Reject non-CIF files
     if not safe_name.lower().endswith('.cif'):
         raise ValueError("Only CIF files are allowed")
     
@@ -871,9 +931,9 @@ async def generate_modified_structure_cif(request: dict):
         if not filename:
             raise HTTPException(status_code=400, detail="Filename is required")
         
-        print(f"Generating modified structure CIF for {filename}")
-        print(f"Supercell size: {supercell_size}")
-        print(f"Operations to apply: {len(operations)}")
+        logger.info(f"Generating modified structure CIF for {filename}")
+        logger.info(f"Supercell size: {supercell_size}")
+        logger.info(f"Operations to apply: {len(operations)}")
         
         # Construct CIF file path
         cif_path = SAMPLE_CIF_DIR / filename
@@ -887,11 +947,11 @@ async def generate_modified_structure_cif(request: dict):
         parser = CifParser(str(cif_path))
         structure = parser.get_structures(primitive=False)[0]  # Keep original lattice
         
-        print(f"Original structure: {structure.formula}")
+        logger.info(f"Original structure: {structure.formula}")
         
         # Create supercell
         structure.make_supercell(supercell_size)
-        print(f"Supercell created: {structure.formula} ({len(structure.sites)} sites)")
+        logger.info(f"Supercell created: {structure.formula} ({len(structure.sites)} sites)")
         
         # Apply atomic operations in sequence
         operations_applied = 0
@@ -1280,27 +1340,11 @@ async def chgnet_predict_structure(request: dict):
                         if op.get("index", 0) > site_index:
                             op["index"] -= 1
         
-        # Load CHGNet model
-        if not CHGNET_AVAILABLE:
-            raise HTTPException(status_code=503, detail="CHGNet not available. Please install with: pip install chgnet")
-        
-        from chgnet.model.model import CHGNet
-        # CHGNet 0.4.0 loading with compatibility settings
+        # Load CHGNet model (using singleton pattern)
         try:
-            if WINDOWS_PLATFORM:
-                # Force CPU usage and disable verbose for Windows stability
-                chgnet = CHGNet.load(use_device="cpu", verbose=False)
-                logger.info("CHGNet 0.4.0 loaded with Windows compatibility settings")
-            else:
-                chgnet = CHGNet.load(use_device="cpu", verbose=False)
-        except Exception as load_error:
-            if WINDOWS_PLATFORM and "Buffer dtype mismatch" in str(load_error):
-                raise HTTPException(
-                    status_code=500, 
-                    detail="Windows CHGNet compatibility issue. Try: pip install -r requirements-windows.txt"
-                )
-            else:
-                raise load_error
+            chgnet = await chgnet_manager.get_model()
+        except RuntimeError as e:
+            raise HTTPException(status_code=503, detail=str(e))
         
         # Predict structure properties
         try:
@@ -1369,30 +1413,12 @@ async def chgnet_relax_structure(request: dict):
         logger.info(f"CHGNet relaxation for session {session_id[:8]}... ({filename}) with fmax={fmax}, max_steps={max_steps}")
         logger.info(f"Structure: {structure.composition} ({len(structure)} sites)")
         
-        # Load CHGNet and relaxer
-        if not CHGNET_AVAILABLE:
-            raise HTTPException(status_code=503, detail="CHGNet not available")
-        
-        from chgnet.model.model import CHGNet
-        from chgnet.model import StructOptimizer
-        
-        # CHGNet 0.4.0 loading with compatibility settings
+        # Load CHGNet model and relaxer (using singleton pattern)
         try:
-            if WINDOWS_PLATFORM:
-                chgnet = CHGNet.load(use_device="cpu", verbose=False)
-                logger.info("CHGNet 0.4.0 loaded with Windows compatibility settings")
-            else:
-                chgnet = CHGNet.load(use_device="cpu", verbose=False)
-        except Exception as load_error:
-            if WINDOWS_PLATFORM and "Buffer dtype mismatch" in str(load_error):
-                raise HTTPException(
-                    status_code=500, 
-                    detail="Windows CHGNet compatibility issue. Try: pip install -r requirements-windows.txt"
-                )
-            else:
-                raise load_error
-                
-        relaxer = StructOptimizer(model=chgnet, use_device="cpu", optimizer_class="FIRE")
+            chgnet = await chgnet_manager.get_model()
+            relaxer = await chgnet_manager.get_relaxer()
+        except RuntimeError as e:
+            raise HTTPException(status_code=503, detail=str(e))
         
         # Predict initial structure
         try:
