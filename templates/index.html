@@ -2233,6 +2233,11 @@ Crystal system: ${data.crystal_system}`;
                     <div class="progress-bar" id="execute-progress-bar" style="display: none;">
                         <div class="progress-fill"></div>
                     </div>
+                    <div class="current-best" id="current-best" style="display: none; margin-top: 8px; padding: 6px 8px; background: rgba(46, 204, 113, 0.1); border: 1px solid rgba(46, 204, 113, 0.3); border-radius: 4px; font-size: 11px; color: #27ae60;">
+                        <div style="font-weight: bold; margin-bottom: 2px;">Current Best:</div>
+                        <div id="current-best-energy" style="font-family: monospace;">-</div>
+                        <div id="current-best-atom" style="color: #2c3e50;">-</div>
+                    </div>
                     <button class="cancel-btn" id="cancel-btn" style="display: none; margin-top: 8px; padding: 4px 8px; background: #e74c3c; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
                         ❌ Cancel Operation
                     </button>
@@ -2694,8 +2699,44 @@ Crystal system: ${data.crystal_system}`;
         function hideExecuteStatus() {
             const statusDiv = document.getElementById('execute-status');
             const cancelBtn = document.getElementById('cancel-btn');
+            const currentBest = document.getElementById('current-best');
             statusDiv.style.display = 'none';
             cancelBtn.style.display = 'none';
+            if (currentBest) {
+                currentBest.style.display = 'none';
+            }
+        }
+
+        // Update current best result during calculation
+        function updateCurrentBest(energy, atomLabel, operationType) {
+            const currentBest = document.getElementById('current-best');
+            const energyElement = document.getElementById('current-best-energy');
+            const atomElement = document.getElementById('current-best-atom');
+            
+            if (!currentBest || !energyElement || !atomElement) {
+                return;
+            }
+            
+            // Format energy with appropriate precision
+            energyElement.textContent = `${energy.toFixed(6)} eV/atom`;
+            
+            // Format atom info based on operation type
+            if (operationType === 'DELETE') {
+                atomElement.textContent = `${atomLabel} (deletion)`;
+            } else {
+                atomElement.textContent = `${atomLabel} → ${operationType}`;
+            }
+            
+            // Show the current best display
+            currentBest.style.display = 'block';
+        }
+
+        // Hide current best result
+        function hideCurrentBest() {
+            const currentBest = document.getElementById('current-best');
+            if (currentBest) {
+                currentBest.style.display = 'none';
+            }
         }
 
         // Global abort controller for canceling operations
@@ -2708,6 +2749,7 @@ Crystal system: ${data.crystal_system}`;
                     if (currentAbortController) {
                         currentAbortController.abort();
                         hideExecuteStatus();
+                        hideCurrentBest();
                         setExecuteButtonState('complete');
                         showNotification('⚠️ Operation cancelled by user', 'warning');
                     }
@@ -2773,6 +2815,8 @@ Crystal system: ${data.crystal_system}`;
                         if (energy < lowestEnergy) {
                             lowestEnergy = energy;
                             bestAtom = atom;
+                            // Update current best result in real-time
+                            updateCurrentBest(energy, atom.label, newElement);
                         }
                         
                         console.log(`${atom.label} → ${newElement}: ${energy.toFixed(6)} eV/atom`);
@@ -2799,6 +2843,7 @@ Crystal system: ${data.crystal_system}`;
                     
                     // Hide status and restore button
                     hideExecuteStatus();
+                    hideCurrentBest();
                     setExecuteButtonState('complete');
                     
                     // Show success notification only after completion
@@ -2806,6 +2851,7 @@ Crystal system: ${data.crystal_system}`;
                     
                 } else {
                     hideExecuteStatus();
+                    hideCurrentBest();
                     setExecuteButtonState('complete');
                     showNotification('❌ Energy calculations failed', 'error');
                 }
@@ -2881,6 +2927,8 @@ Crystal system: ${data.crystal_system}`;
                         if (energy < lowestEnergy) {
                             lowestEnergy = energy;
                             bestAtom = atom;
+                            // Update current best result in real-time
+                            updateCurrentBest(energy, atom.label, 'DELETE');
                         }
                         
                         console.log(`Delete ${atom.label}: ${energy.toFixed(6)} eV/atom`);
@@ -2907,6 +2955,7 @@ Crystal system: ${data.crystal_system}`;
                     
                     // Hide status and restore button
                     hideExecuteStatus();
+                    hideCurrentBest();
                     setExecuteButtonState('complete');
                     
                     // Show success notification only after completion
@@ -2914,6 +2963,7 @@ Crystal system: ${data.crystal_system}`;
                     
                 } else {
                     hideExecuteStatus();
+                    hideCurrentBest();
                     setExecuteButtonState('complete');
                     showNotification('❌ Energy calculations failed', 'error');
                 }
