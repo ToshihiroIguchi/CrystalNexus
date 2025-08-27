@@ -502,6 +502,9 @@ async def analyze_sample_cif(data: dict):
     except ValueError as e:
         logger.warning(f"Invalid input in analyze_sample_cif: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        # Re-raise HTTPExceptions (like 400 errors from validate_occupancy) without modification
+        raise
     except Exception as e:
         logger.error(f"Error in analyze_sample_cif: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -574,6 +577,9 @@ async def analyze_uploaded_cif(file: UploadFile = File(...)):
         else:
             user_msg = f"CIF file validation error: {error_msg}"
         raise HTTPException(status_code=400, detail=user_msg)
+    except HTTPException:
+        # Re-raise HTTPExceptions (like 400 errors from validate_occupancy) without modification
+        raise
     except Exception as e:
         logger.error(f"Error in analyze_uploaded_cif: {e}")
         logger.error(f"Error type: {type(e)}")
@@ -581,7 +587,7 @@ async def analyze_uploaded_cif(file: UploadFile = File(...)):
         # Report Windows-specific file operation errors in more detail
         if WINDOWS_PLATFORM and ("permission" in str(e).lower() or "access" in str(e).lower()):
             raise HTTPException(status_code=500, detail="Windows file access error - check file permissions")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error occurred")
 
 async def analyze_cif_file(file_path: Path) -> Dict:
     try:

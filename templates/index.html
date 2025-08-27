@@ -372,15 +372,23 @@
                 
                 if (!response.ok) {
                     // Try to get detailed error message from response
-                    let errorMessage = `HTTP error! status: ${response.status}`;
+                    let errorMessage = 'An error occurred while analyzing the file.';
                     try {
-                        const errorData = await response.json();
+                        const errorText = await response.text();
+                        console.log('Error response text:', errorText);
+                        const errorData = JSON.parse(errorText);
                         if (errorData.detail) {
+                            // Use server's detailed error message (user-friendly)
                             errorMessage = errorData.detail;
                         }
                     } catch (e) {
-                        // If we can't parse JSON, use status text
-                        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                        console.log('Failed to parse error response:', e);
+                        // If we can't parse JSON, provide generic user-friendly message
+                        if (response.status === 400) {
+                            errorMessage = 'Invalid file format or structure data.';
+                        } else if (response.status === 500) {
+                            errorMessage = 'Server error occurred. Please try again later.';
+                        }
                     }
                     throw new Error(errorMessage);
                 }
@@ -406,15 +414,23 @@
                 
                 if (!response.ok) {
                     // Try to get detailed error message from response
-                    let errorMessage = `HTTP error! status: ${response.status}`;
+                    let errorMessage = 'An error occurred while analyzing the file.';
                     try {
-                        const errorData = await response.json();
+                        const errorText = await response.text();
+                        console.log('Error response text:', errorText);
+                        const errorData = JSON.parse(errorText);
                         if (errorData.detail) {
+                            // Use server's detailed error message (user-friendly)
                             errorMessage = errorData.detail;
                         }
                     } catch (e) {
-                        // If we can't parse JSON, use status text
-                        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                        console.log('Failed to parse error response:', e);
+                        // If we can't parse JSON, provide generic user-friendly message
+                        if (response.status === 400) {
+                            errorMessage = 'Invalid file format or structure data.';
+                        } else if (response.status === 500) {
+                            errorMessage = 'Server error occurred. Please try again later.';
+                        }
                     }
                     throw new Error(errorMessage);
                 }
@@ -1428,8 +1444,21 @@ Crystal system: ${data.crystal_system}`;
                 });
                 
                 if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.detail || `HTTP ${response.status}`);
+                    let errorMessage = 'Error occurred during CHGNet analysis.';
+                    try {
+                        const errorData = await response.json();
+                        if (errorData.detail) {
+                            errorMessage = errorData.detail;
+                        }
+                    } catch (e) {
+                        // If we can't parse JSON, provide user-friendly message
+                        if (response.status === 400) {
+                            errorMessage = 'Invalid structure data. Fully occupied crystal structure required.';
+                        } else if (response.status === 500) {
+                            errorMessage = 'Server error occurred. Please try again later.';
+                        }
+                    }
+                    throw new Error(errorMessage);
                 }
                 
                 // Structure calculation phase
@@ -1586,7 +1615,21 @@ Crystal system: ${data.crystal_system}`;
                     console.error(`  ├─ Error text length: ${errorText.length}`);
                     console.error(`  ├─ Error text preview: ${errorText.substring(0, 500)}`);
                     console.error(`  └─ Full error text: ${errorText}`);
-                    throw new Error(`HTTP ${response.status}: ${errorText}`);
+                    
+                    let errorMessage = 'Error occurred while fetching structure data.';
+                    try {
+                        const errorData = JSON.parse(errorText);
+                        if (errorData.detail) {
+                            errorMessage = errorData.detail;
+                        }
+                    } catch (e) {
+                        if (response.status === 400) {
+                            errorMessage = 'Invalid structure data.';
+                        } else if (response.status === 500) {
+                            errorMessage = 'Server error occurred. Please try again later.';
+                        }
+                    }
+                    throw new Error(errorMessage);
                 }
                 
                 // CIF data processing
@@ -2869,7 +2912,20 @@ Crystal system: ${data.crystal_system}`;
                 });
                 
                 if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                    let errorMessage = 'Error occurred during atom substitution prediction.';
+                    try {
+                        const errorData = await response.json();
+                        if (errorData.detail) {
+                            errorMessage = errorData.detail;
+                        }
+                    } catch (e) {
+                        if (response.status === 400) {
+                            errorMessage = 'Invalid structure data or operation.';
+                        } else if (response.status === 500) {
+                            errorMessage = 'Server error occurred. Please try again later.';
+                        }
+                    }
+                    throw new Error(errorMessage);
                 }
                 
                 const result = await response.json();
@@ -2916,7 +2972,20 @@ Crystal system: ${data.crystal_system}`;
                 });
                 
                 if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                    let errorMessage = 'Error occurred during atom deletion prediction.';
+                    try {
+                        const errorData = await response.json();
+                        if (errorData.detail) {
+                            errorMessage = errorData.detail;
+                        }
+                    } catch (e) {
+                        if (response.status === 400) {
+                            errorMessage = 'Invalid structure data or operation.';
+                        } else if (response.status === 500) {
+                            errorMessage = 'Server error occurred. Please try again later.';
+                        }
+                    }
+                    throw new Error(errorMessage);
                 }
                 
                 const result = await response.json();
@@ -2962,8 +3031,20 @@ Crystal system: ${data.crystal_system}`;
                 });
                 
                 if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.detail || `HTTP ${response.status}`);
+                    let errorMessage = 'Error occurred during session reset.';
+                    try {
+                        const errorData = await response.json();
+                        if (errorData.detail) {
+                            errorMessage = errorData.detail;
+                        }
+                    } catch (e) {
+                        if (response.status === 400) {
+                            errorMessage = 'Invalid session data.';
+                        } else if (response.status === 500) {
+                            errorMessage = 'Server error occurred. Please try again later.';
+                        }
+                    }
+                    throw new Error(errorMessage);
                 }
                 
                 const result = await response.json();
@@ -3168,8 +3249,21 @@ Crystal system: ${data.crystal_system}`;
                 console.log(`📡 Response status: ${response.status} ${response.statusText}`);
                 
                 if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(`HTTP ${response.status}: ${errorText}`);
+                    let errorMessage = 'Error occurred during supercell generation.';
+                    try {
+                        const errorText = await response.text();
+                        const errorData = JSON.parse(errorText);
+                        if (errorData.detail) {
+                            errorMessage = errorData.detail;
+                        }
+                    } catch (e) {
+                        if (response.status === 400) {
+                            errorMessage = 'Invalid parameters or structure data.';
+                        } else if (response.status === 500) {
+                            errorMessage = 'Server error occurred. Please try again later.';
+                        }
+                    }
+                    throw new Error(errorMessage);
                 }
                 
                 const cifData = await response.text();
@@ -3257,8 +3351,21 @@ Crystal system: ${data.crystal_system}`;
                 console.log(`📡 Response status: ${response.status} ${response.statusText}`);
                 
                 if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(`HTTP ${response.status}: ${errorText}`);
+                    let errorMessage = 'Error occurred during structure modification.';
+                    try {
+                        const errorText = await response.text();
+                        const errorData = JSON.parse(errorText);
+                        if (errorData.detail) {
+                            errorMessage = errorData.detail;
+                        }
+                    } catch (e) {
+                        if (response.status === 400) {
+                            errorMessage = 'Invalid parameters or structure data.';
+                        } else if (response.status === 500) {
+                            errorMessage = 'Server error occurred. Please try again later.';
+                        }
+                    }
+                    throw new Error(errorMessage);
                 }
                 
                 const cifData = await response.text();
