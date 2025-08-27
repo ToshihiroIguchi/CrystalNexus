@@ -351,23 +351,6 @@ class SessionManager:
         """Get session information"""
         return self.sessions.get(session_id)
     
-    def debug_sessions(self) -> Dict:
-        """Debug: get all session information"""
-        return {
-            'total_sessions': len(self.sessions),
-            'session_ids': list(self.sessions.keys()),
-            'session_details': {
-                sid: {
-                    'filename': info.get('filename'),
-                    'created_at': info.get('created_at'),
-                    'supercell_size': info.get('supercell_size'),
-                    'operations_count': len(info.get('operations', [])),
-                    'has_current_structure': info.get('current_structure') is not None
-                }
-                for sid, info in self.sessions.items()
-            }
-        }
-    
     def cleanup_old_sessions(self, max_age_hours: int = 24) -> None:
         """Clean up old sessions"""
         cutoff_time = time.time() - (max_age_hours * 3600)
@@ -1660,10 +1643,6 @@ async def reset_session_structure(request: dict):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to reset session: {str(e)}")
 
-@app.get("/api/debug-sessions")
-async def debug_sessions():
-    """Debug: get session information"""
-    return session_manager.debug_sessions()
 
 @app.post("/api/generate-relaxed-structure-cif")
 async def generate_relaxed_structure_cif(request: dict):

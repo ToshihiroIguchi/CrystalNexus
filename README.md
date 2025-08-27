@@ -9,6 +9,14 @@ A comprehensive web-based crystal structure analysis and machine learning applic
 - **Interactive 3D Visualization**: Real-time 3D crystal structure visualization with 3Dmol.js
 - **Supercell Generation**: Create supercells with custom dimensions
 - **Structure Modification**: 
+  - **Manual Mode**: Select specific atoms for substitution or deletion
+  - **Auto Mode (AI-Optimized)**: CHGNet-powered optimal atom selection for substitution/deletion
+    - Automatically tests all atoms of selected element type
+    - Uses CHGNet machine learning energy calculations to find the most energy-stable configuration
+    - Real-time progress display showing current best energy and selected atom
+    - Intelligent optimization algorithms for materials property enhancement
+    - Supports both element substitution (e.g., Ca → Ti) and atom deletion
+    - Cancellable operations with progress tracking
   - Substitute atoms with CHGnet-supported elements (86 elements available)
   - Delete atoms from crystal structures
   - Real-time formula and density updates
@@ -52,7 +60,7 @@ A comprehensive web-based crystal structure analysis and machine learning applic
 ```
 CrystalNexus/
 ├── main.py                 # FastAPI backend application
-├── start_crystalnexus.py   # Application startup script
+├── start_crystalnexus.py   # Smart startup script with health monitoring
 ├── requirements.txt        # Python dependencies (2025 latest versions)
 ├── .gitignore             # Git ignore configuration
 ├── README.md              # Project documentation
@@ -133,8 +141,19 @@ python start_crystalnexus.py
 5. **Access the application:**
 - Open your web browser
 - Navigate to: **http://localhost:8080**
-- The startup script automatically handles server restart and provides health checks
-- If server is already running, it will be stopped and restarted for a fresh session
+
+### **start_crystalnexus.py Features:**
+The intelligent startup script provides comprehensive server management:
+- **Automated Health Check**: Detects existing CrystalNexus instances and prevents conflicts
+- **Smart Process Management**: Gracefully stops existing servers and starts fresh instances
+- **Environment-Aware Configuration**: Inherits all settings from main.py (HOST, PORT, DEBUG)
+- **Real-time Startup Monitoring**: Visual progress indicators and server health status
+- **Advanced Error Recovery**: Automatic server restart on failure with detailed error reporting
+- **Signal Handling**: Clean shutdown with Ctrl+C support and proper process cleanup
+- **Cross-platform Compatibility**: Native support for Windows, macOS, and Linux
+- **Background Health Monitoring**: Continuous server health verification during operation
+- **Port Conflict Resolution**: Automatically handles port 8080 conflicts and process cleanup
+- **Debug Mode Support**: Conditional auto-reload functionality in development environments
 
 ### Manual Startup (Alternative)
 
@@ -263,10 +282,24 @@ If you encounter issues with the latest versions, ensure you're using Python 3.8
   - **Trajectory**: Step-by-step optimization progress
 
 ### 5. **Structure Modification**
-- **Element Substitution**: Replace atoms with CHGNet-supported elements
-- **Atom Deletion**: Remove specific atoms from the structure
-- **Real-time Updates**: Formula and properties update immediately
-- **Reset**: Restore original structure anytime
+- **Manual Mode**:
+  - **Element Substitution**: Replace atoms with CHGNet-supported elements (86 available)
+  - **Atom Deletion**: Remove specific atoms from the structure
+  - **Direct Selection**: Choose specific atoms from dropdown menu
+  - **Immediate Updates**: Real-time formula and property calculations
+
+- **Auto Mode (AI-Optimized)**:
+  - **Intelligent Atom Testing**: Systematically evaluates all atoms of selected element type
+  - **CHGNet Energy Optimization**: Machine learning-based energy calculations for each configuration
+  - **Automatic Best Selection**: Chooses the most thermodynamically stable option
+  - **Real-time Progress Display**: Live updates showing current best energy and selected atom
+  - **Cancellable Operations**: Stop long-running optimizations with preserved results
+  - **Smart Algorithm**: Efficient exploration of configuration space for optimal materials properties
+
+- **Universal Features**:
+  - **Real-time Updates**: Instant formula and density recalculation
+  - **Structure Reset**: One-click restoration to original configuration
+  - **Visual Feedback**: 3D structure updates with modification highlights
 
 ### 6. **Data Export**
 - Click "💾 Download Analysis" to generate comprehensive ZIP archive

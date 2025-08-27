@@ -403,7 +403,6 @@
 
         async function analyzeUploadedFile(file) {
             try {
-                console.log('DEBUG: Starting file upload analysis for:', file.name);
                 const formData = new FormData();
                 formData.append('file', file);
                 
@@ -436,7 +435,6 @@
                 }
                 
                 const data = await response.json();
-                console.log('DEBUG: Received CIF analysis data:', data);
                 displayCrystalInfo(data);
             } catch (error) {
                 console.error('Error analyzing uploaded file:', error);
@@ -445,9 +443,7 @@
         }
 
         function displayCrystalInfo(data) {
-            console.log('DEBUG: DisplayCrystalInfo called with data:', data);
             window.currentCrystalData = data;
-            console.log('DEBUG: Set window.currentCrystalData to:', window.currentCrystalData);
             
             const infoContent = document.getElementById('infoContent');
             // Display information in the same order as ZrO2test.py
@@ -1956,9 +1952,6 @@ Crystal system: ${data.crystal_system}`;
                 return;
             }
             
-            console.log('DEBUG: Creating supercell with sizes:', [aSize, bSize, cSize]);
-            console.log('DEBUG: Expected total atoms:', expectedTotalAtoms);
-            console.log('DEBUG: Current crystal data:', window.currentCrystalData);
             
             try {
                 const response = await fetch('/api/create-supercell', {
