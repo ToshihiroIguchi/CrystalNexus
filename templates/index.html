@@ -454,7 +454,7 @@
             infoContent.innerHTML = `
                 <div style="margin-bottom: 15px;">
                     <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Basic Structure Information:</div>
-                    <div><strong>Formula:</strong> ${data.formula}</div>
+                    <div><strong>Formula:</strong> ${data.formula}<button class="copy-btn" id="copy-formula" onclick="copyFormula('copy-formula')" title="Copy: Formula">📋</button></div>
                     <div><strong>Number of atoms:</strong> ${data.num_atoms}</div>
                     <div><strong>Density:</strong> ${data.density.toFixed(4)} g/cm³</div>
                 </div>
@@ -1093,6 +1093,72 @@
             showCopyFeedback(button, result.success);
         }
 
+        // Copy formula function
+        async function copyFormula(buttonId = null) {
+            const formula = getCurrentFormula();
+            if (!formula) {
+                console.warn('No formula available to copy');
+                return;
+            }
+            
+            console.log('Copying formula:', formula);
+            const result = await smartCopyToClipboard(formula);
+            
+            // Find the button that was clicked
+            let button = null;
+            if (buttonId) {
+                button = document.getElementById(buttonId);
+            } else {
+                // Try to find any visible formula copy button
+                const buttonIds = ['copy-formula', 'copy-formula-relaxed', 'copy-formula-supercell'];
+                for (const id of buttonIds) {
+                    const btn = document.getElementById(id);
+                    if (btn && btn.offsetParent !== null) { // Check if button is visible
+                        button = btn;
+                        break;
+                    }
+                }
+            }
+            
+            if (button) {
+                showCopyFeedback(button, result.success);
+            }
+        }
+
+        // Get current formula based on available data
+        function getCurrentFormula() {
+            // Priority 1: Current structure data (after modifications)
+            if (window.currentStructureData?.supercell_info?.formula) {
+                return window.currentStructureData.supercell_info.formula;
+            }
+            
+            // Priority 2: Relaxed structure info
+            if (window.currentStructureInfo?.formula) {
+                return window.currentStructureInfo.formula;
+            }
+            
+            // Priority 3: Original crystal data
+            if (window.currentCrystalData?.formula) {
+                return window.currentCrystalData.formula;
+            }
+            
+            // Fallback: Extract from DOM
+            try {
+                const formulaElement = document.querySelector('div strong:contains("Formula:") + span, div:contains("Formula:")');
+                if (formulaElement) {
+                    const text = formulaElement.textContent || formulaElement.innerText;
+                    const match = text.match(/Formula:\s*(.+?)(?:\s|$)/);
+                    if (match && match[1]) {
+                        return match[1].trim();
+                    }
+                }
+            } catch (e) {
+                console.warn('Failed to extract formula from DOM:', e);
+            }
+            
+            return null;
+        }
+
         // Copy all crystal information function
         async function copyMainCrystalInfo() {
             // Check if we have relaxed structure data (prioritize over original)
@@ -1522,7 +1588,7 @@ Crystal system: ${data.crystal_system}`;
             infoElement.innerHTML = `
                 <div style="margin-bottom: 15px;">
                     <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Relaxed Supercell Structure Information: <a href="/static/user_guide.html#limitations" target="_blank" title="Important: CHGNet may overestimate lattice constants and underestimate density - Click for details" style="color: #e74c3c; text-decoration: none; margin-left: 5px;">⚠️</a></div>
-                    <div><strong>Formula:</strong> ${relaxedStructureInfo.formula}</div>
+                    <div><strong>Formula:</strong> ${relaxedStructureInfo.formula}<button class="copy-btn" id="copy-formula-relaxed" onclick="copyFormula('copy-formula-relaxed')" title="Copy: Formula">📋</button></div>
                     <div><strong>Supercell size:</strong> ${aSize} × ${bSize} × ${cSize}</div>
                     <div><strong>Total atoms:</strong> ${relaxedStructureInfo.num_sites}</div>
                     <div><strong>Density:</strong> ${relaxedStructureInfo.density.toFixed(4)} g/cm³</div>
@@ -2021,7 +2087,7 @@ Crystal system: ${data.crystal_system}`;
             infoElement.innerHTML = `
                 <div style="margin-bottom: 15px;">
                     <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Supercell Structure Information:</div>
-                    <div><strong>Formula:</strong> ${supercell.formula}</div>
+                    <div><strong>Formula:</strong> ${supercell.formula}<button class="copy-btn" id="copy-formula-supercell" onclick="copyFormula('copy-formula-supercell')" title="Copy: Formula">📋</button></div>
                     <div><strong>Supercell size:</strong> ${aSize} × ${bSize} × ${cSize}</div>
                     <div><strong>Total atoms:</strong> ${supercell.num_sites}</div>
                     <div><strong>Density:</strong> ${supercellDensity.toFixed(4)} g/cm³</div>
