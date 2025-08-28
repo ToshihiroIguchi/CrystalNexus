@@ -2764,6 +2764,40 @@ Crystal system: ${data.crystal_system}`;
                 return;
             }
             
+            // Single atom case: skip optimization and execute directly
+            if (targetAtoms.length === 1) {
+                const singleAtom = targetAtoms[0];
+                
+                setExecuteButtonState('processing', '⏳ Executing...');
+                
+                showNotification(
+                    `Only one ${elementType} atom found. Executing direct substitution: ${singleAtom.label} → ${newElement}`,
+                    'info'
+                );
+                
+                try {
+                    await handleSubstitution(singleAtom.label, newElement);
+                    
+                    showNotification(
+                        `✅ Direct substitution completed: ${singleAtom.label} → ${newElement}`,
+                        'success'
+                    );
+                } catch (error) {
+                    console.error('Direct substitution failed:', error);
+                    showNotification('❌ Direct substitution failed', 'error');
+                } finally {
+                    setExecuteButtonState('complete');
+                }
+                
+                return;
+            }
+            
+            // Multiple atoms case: proceed with optimization
+            showNotification(
+                `Found ${targetAtoms.length} ${elementType} atoms. Starting optimization to find the best substitution...`,
+                'info'
+            );
+            
             // Initialize calculation results tracking
             const calculationResults = {
                 successful: [],
@@ -3016,6 +3050,40 @@ Crystal system: ${data.crystal_system}`;
                 showNotification(`No ${elementType} atoms found in the structure`, 'error');
                 return;
             }
+            
+            // Single atom case: skip optimization and execute directly
+            if (targetAtoms.length === 1) {
+                const singleAtom = targetAtoms[0];
+                
+                setExecuteButtonState('processing', '⏳ Executing...');
+                
+                showNotification(
+                    `Only one ${elementType} atom found. Executing direct deletion: ${singleAtom.label}`,
+                    'info'
+                );
+                
+                try {
+                    await handleDeletion(singleAtom.label);
+                    
+                    showNotification(
+                        `✅ Direct deletion completed: ${singleAtom.label} removed`,
+                        'success'
+                    );
+                } catch (error) {
+                    console.error('Direct deletion failed:', error);
+                    showNotification('❌ Direct deletion failed', 'error');
+                } finally {
+                    setExecuteButtonState('complete');
+                }
+                
+                return;
+            }
+            
+            // Multiple atoms case: proceed with optimization
+            showNotification(
+                `Found ${targetAtoms.length} ${elementType} atoms. Starting optimization to find the best deletion...`,
+                'info'
+            );
             
             // Initialize calculation results tracking
             const calculationResults = {
