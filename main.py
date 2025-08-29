@@ -417,18 +417,21 @@ async def apply_atomic_operations(request: dict):
         supercell_size = session_info['supercell_size']
         structure.make_supercell(supercell_size)
         
-        # Apply all operations in order
+        # Apply all operations in order with proper index adjustment
+        deletions_applied = 0  # Track number of deletions for index adjustment
+        
         for operation in operations:
             if operation["action"] == "substitute":
-                site_index = operation["index"]
+                site_index = operation["index"] - deletions_applied
                 new_element = validate_element(operation["to"])
-                if site_index < len(structure.sites):
+                if site_index >= 0 and site_index < len(structure.sites):
                     old_coords = structure[site_index].frac_coords
                     structure[site_index] = Element(new_element), old_coords
             elif operation["action"] == "delete":
-                site_index = operation["index"]
-                if site_index < len(structure.sites):
+                site_index = operation["index"] - deletions_applied
+                if site_index >= 0 and site_index < len(structure.sites):
                     structure.remove_sites([site_index])
+                    deletions_applied += 1
         
         # Update session with modified structure and operations
         session_manager.update_structure(session_id, structure, operations=operations)

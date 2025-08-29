@@ -2779,12 +2779,12 @@ Crystal system: ${data.crystal_system}`;
                     await handleSubstitution(singleAtom.label, newElement);
                     
                     showNotification(
-                        `✅ Direct substitution completed: ${singleAtom.label} → ${newElement}`,
+                        `Direct substitution completed: ${singleAtom.label} → ${newElement}`,
                         'success'
                     );
                 } catch (error) {
                     console.error('Direct substitution failed:', error);
-                    showNotification('❌ Direct substitution failed', 'error');
+                    showNotification('Direct substitution failed', 'error');
                 } finally {
                     setExecuteButtonState('complete');
                 }
@@ -2882,7 +2882,7 @@ Crystal system: ${data.crystal_system}`;
                 console.error('Fatal error in optimal substitution:', error);
                 hideExecuteStatus();
                 setExecuteButtonState('complete');
-                showNotification('❌ Fatal error during optimal substitution', 'error');
+                showNotification('Fatal error during optimal substitution', 'error');
             } finally {
                 hideCurrentBest();
                 currentAbortController = null;
@@ -2919,7 +2919,7 @@ Crystal system: ${data.crystal_system}`;
                 
                 // Show success notification with statistics
                 showNotification(
-                    `✅ Optimal substitution completed: ${bestResult.atom} → ${newElement} (Success rate: ${summary.successRate}%)`, 
+                    `Optimal substitution completed: ${bestResult.atom} → ${newElement} (Success rate: ${summary.successRate}%)`, 
                     'success'
                 );
                 
@@ -2936,7 +2936,7 @@ Crystal system: ${data.crystal_system}`;
                     failed.map(f => `${f.atom}: ${f.finalError}`));
                 
                 showNotification(
-                    `❌ Auto substitution failed: No atoms could be processed successfully (${failed.length} errors)`, 
+                    `Auto substitution failed: No atoms could be processed successfully (${failed.length} errors)`, 
                     'error'
                 );
                 
@@ -3066,12 +3066,12 @@ Crystal system: ${data.crystal_system}`;
                     await handleDeletion(singleAtom.label);
                     
                     showNotification(
-                        `✅ Direct deletion completed: ${singleAtom.label} removed`,
+                        `Direct deletion completed: ${singleAtom.label} removed`,
                         'success'
                     );
                 } catch (error) {
                     console.error('Direct deletion failed:', error);
-                    showNotification('❌ Direct deletion failed', 'error');
+                    showNotification('Direct deletion failed', 'error');
                 } finally {
                     setExecuteButtonState('complete');
                 }
@@ -3169,7 +3169,7 @@ Crystal system: ${data.crystal_system}`;
                 console.error('Fatal error in optimal deletion:', error);
                 hideExecuteStatus();
                 setExecuteButtonState('complete');
-                showNotification('❌ Fatal error during optimal deletion', 'error');
+                showNotification('Fatal error during optimal deletion', 'error');
             } finally {
                 hideCurrentBest();
                 currentAbortController = null;
@@ -3206,7 +3206,7 @@ Crystal system: ${data.crystal_system}`;
                 
                 // Show success notification with statistics
                 showNotification(
-                    `✅ Optimal deletion completed: ${bestResult.atom} removed (Success rate: ${summary.successRate}%)`, 
+                    `Optimal deletion completed: ${bestResult.atom} removed (Success rate: ${summary.successRate}%)`, 
                     'success'
                 );
                 
@@ -3223,7 +3223,7 @@ Crystal system: ${data.crystal_system}`;
                     failed.map(f => `${f.atom}: ${f.finalError}`));
                 
                 showNotification(
-                    `❌ Auto deletion failed: No atoms could be processed successfully (${failed.length} errors)`, 
+                    `Auto deletion failed: No atoms could be processed successfully (${failed.length} errors)`, 
                     'error'
                 );
                 
