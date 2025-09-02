@@ -417,21 +417,21 @@ async def apply_atomic_operations(request: dict):
         supercell_size = session_info['supercell_size']
         structure.make_supercell(supercell_size)
         
-        # Apply all operations in order with proper index adjustment
-        deletions_applied = 0  # Track number of deletions for index adjustment
+        # Apply operations using unified stable index management
+        # Process in descending order by index to avoid index shift issues
+        stable_operations = sorted(operations, key=lambda x: x.get("index", 0), reverse=True)
         
-        for operation in operations:
+        for operation in stable_operations:
             if operation["action"] == "substitute":
-                site_index = operation["index"] - deletions_applied
+                site_index = operation["index"]
                 new_element = validate_element(operation["to"])
                 if site_index >= 0 and site_index < len(structure.sites):
                     old_coords = structure[site_index].frac_coords
                     structure[site_index] = Element(new_element), old_coords
             elif operation["action"] == "delete":
-                site_index = operation["index"] - deletions_applied
+                site_index = operation["index"]
                 if site_index >= 0 and site_index < len(structure.sites):
                     structure.remove_sites([site_index])
-                    deletions_applied += 1
         
         # Update session with modified structure and operations
         session_manager.update_structure(session_id, structure, operations=operations)
@@ -945,9 +945,11 @@ async def generate_modified_structure_cif(request: dict):
         structure.make_supercell(supercell_size)
         logger.info(f"Supercell created: {structure.formula} ({len(structure.sites)} sites)")
         
-        # Apply atomic operations in sequence
+        # Apply atomic operations using unified stable index management
+        # Process in descending order by index to eliminate index adjustment issues
+        stable_operations = sorted(operations, key=lambda x: x.get("index", 0), reverse=True)
         operations_applied = 0
-        for i, operation in enumerate(operations):
+        for i, operation in enumerate(stable_operations):
             try:
                 if operation["action"] == "substitute":
                     site_index = operation["index"]
@@ -978,10 +980,7 @@ async def generate_modified_structure_cif(request: dict):
                         logger.info(f"Operation {i+1}: Deleted {deleted_element} at site {site_index}")
                         operations_applied += 1
                         
-                        # Adjust subsequent indices for deletions
-                        for j in range(i + 1, len(operations)):
-                            if operations[j].get("index", 0) > site_index:
-                                operations[j]["index"] -= 1
+                        # No index adjustment needed with descending order processing
                     else:
                         logger.warning(f"Operation {i+1}: SKIPPED - Invalid site index {site_index}")
                 
@@ -1315,8 +1314,10 @@ async def chgnet_predict_structure(request: dict):
         structure = parser.get_structures(primitive=False)[0]
         structure.make_supercell(supercell_size)
         
-        # Apply operations
-        for operation in operations:
+        # Apply operations using unified stable index management
+        # Process in descending order by index to eliminate index adjustment issues
+        stable_operations = sorted(operations, key=lambda x: x.get("index", 0), reverse=True)
+        for operation in stable_operations:
             if operation["action"] == "substitute":
                 site_index = operation["index"]
                 new_element = validate_element(operation["to"])
@@ -1327,10 +1328,7 @@ async def chgnet_predict_structure(request: dict):
                 site_index = operation["index"]
                 if site_index < len(structure.sites):
                     structure.remove_sites([site_index])
-                    # Adjust subsequent indices
-                    for j, op in enumerate(operations[operations.index(operation)+1:], operations.index(operation)+1):
-                        if op.get("index", 0) > site_index:
-                            op["index"] -= 1
+                    # No index adjustment needed with descending order processing
         
         # Load CHGNet model (using singleton pattern)
         try:

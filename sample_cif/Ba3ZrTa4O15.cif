@@ -1,0 +1,49 @@
+# generated using pymatgen
+data_Ba3ZrTa4O15
+_symmetry_space_group_name_H-M   P4bm
+_cell_length_a   12.82905500
+_cell_length_b   12.82905500
+_cell_length_c   4.06111100
+_cell_angle_alpha   90.00000000
+_cell_angle_beta   90.00000000
+_cell_angle_gamma   90.00000000
+_symmetry_Int_Tables_number   100
+_chemical_formula_structural   Ba3ZrTa4O15
+_chemical_formula_sum   'Ba6 Zr2 Ta8 O30'
+_cell_volume   668.39654145
+_cell_formula_units_Z   2
+loop_
+ _symmetry_equiv_pos_site_id
+ _symmetry_equiv_pos_as_xyz
+  1  'x, y, z'
+  2  '-y, x, z'
+  3  '-x, -y, z'
+  4  'y, -x, z'
+  5  '-x+1/2, y+1/2, z'
+  6  'y+1/2, x+1/2, z'
+  7  'x+1/2, -y+1/2, z'
+  8  '-y+1/2, -x+1/2, z'
+loop_
+ _atom_type_symbol
+ _atom_type_oxidation_number
+  Ba2+  2.0
+  Zr4+  4.0
+  Ta5+  5.0
+  O2-  -2.0
+loop_
+ _atom_site_type_symbol
+ _atom_site_label
+ _atom_site_symmetry_multiplicity
+ _atom_site_fract_x
+ _atom_site_fract_y
+ _atom_site_fract_z
+ _atom_site_occupancy
+  Ba2+  Ba0  4  0.16917600  0.66917600  0.38510500  1
+  Ba2+  Ba1  2  0.00000000  0.00000000  0.38611800  1
+  Zr4+  Zr2  2  0.00000000  0.50000000  0.86728300  1
+  Ta5+  Ta3  8  0.07491200  0.21293500  0.89756300  1
+  O2-  O4  8  0.01055300  0.66493900  0.86764600  1
+  O2-  O5  8  0.06646600  0.86223100  0.87443700  1
+  O2-  O6  8  0.08029500  0.20480300  0.37308100  1
+  O2-  O7  4  0.21620800  0.28379200  0.87386600  1
+  O2-  O8  2  0.00000000  0.50000000  0.36674500  1
