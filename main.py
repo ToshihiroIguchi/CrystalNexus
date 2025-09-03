@@ -175,7 +175,7 @@ ALLOWED_ELEMENTS: Set[str] = get_chgnet_supported_elements()
 # CHGNet Model Manager (Singleton Pattern)
 class CHGNetModelManager:
     """
-    Singleton pattern for CHGNet model management
+    Singleton pattern for CHGNet model management with batch processing support
     Ensures only one model instance is loaded in memory
     Thread-safe with asyncio.Lock
     """
@@ -183,6 +183,7 @@ class CHGNetModelManager:
     _model = None
     _relaxer = None
     _lock = asyncio.Lock()
+    batch_size = 4  # Optimal batch size for CPU processing
     
     def __new__(cls):
         if cls._instance is None:
@@ -228,6 +229,115 @@ class CHGNetModelManager:
                 raise RuntimeError("Windows CHGNet compatibility issue. Try: pip install -r requirements-windows.txt")
             else:
                 raise RuntimeError(f"Failed to load CHGNet model: {load_error}")
+                
+    async def predict_structures_batch(self, structures, **kwargs):
+        """
+        Batch prediction of multiple structures for improved performance
+        
+        Args:
+            structures: List of pymatgen Structure objects
+            **kwargs: Additional arguments for predict_structure
+            
+        Returns:
+            List of prediction results
+        """
+        if not structures:
+            return []
+            
+        model = await self.get_model()
+        results = []
+        
+        # Process in batches to optimize memory usage
+        for i in range(0, len(structures), self.batch_size):
+            batch = structures[i:i + self.batch_size]
+            batch_results = []
+            
+            # CHGNet doesn't support native batch processing yet, so we optimize individual calls
+            for structure in batch:
+                try:
+                    pred = model.predict_structure(structure, **kwargs)
+                    batch_results.append(pred)
+                except Exception as e:
+                    logger.warning(f"Batch prediction failed for structure {len(results) + len(batch_results)}: {e}")
+                    batch_results.append(None)
+            
+            results.extend(batch_results)
+            
+        return results
+    
+    async def predict_single_optimized(self, structure, **kwargs):
+        """
+        Optimized single structure prediction with memory management
+        """
+        model = await self.get_model()
+        
+        # Memory optimization for large structures
+        if len(structure) > 100:
+            # Force garbage collection before large structure prediction
+            import gc
+            gc.collect()
+            
+        try:
+            pred = model.predict_structure(structure, **kwargs)
+            return pred
+        except Exception as e:
+            logger.error(f"Optimized prediction failed: {e}")
+            raise
+            
+    async def predict_auto_mode_batch(self, base_structure, target_atoms, operation_type, **kwargs):
+        """
+        Batch prediction for Auto mode operations (future implementation)
+        
+        Args:
+            base_structure: Base pymatgen Structure
+            target_atoms: List of atom indices to process
+            operation_type: 'delete' or 'substitute'
+            **kwargs: Additional prediction arguments
+            
+        Returns:
+            List of (atom_index, prediction_result) tuples
+        """
+        structures_to_predict = []
+        atom_structure_map = []
+        
+        # Generate modified structures for batch processing
+        for atom_idx in target_atoms:
+            try:
+                if operation_type == 'delete':
+                    modified_structure = self._create_deletion_structure(base_structure, atom_idx)
+                elif operation_type == 'substitute':
+                    # Would need additional parameters for substitution
+                    continue
+                else:
+                    continue
+                    
+                structures_to_predict.append(modified_structure)
+                atom_structure_map.append(atom_idx)
+                
+            except Exception as e:
+                logger.warning(f"Failed to create modified structure for atom {atom_idx}: {e}")
+                continue
+        
+        if not structures_to_predict:
+            return []
+        
+        # Batch prediction
+        batch_results = await self.predict_structures_batch(structures_to_predict, **kwargs)
+        
+        # Combine results with atom indices
+        results = []
+        for i, (atom_idx, pred_result) in enumerate(zip(atom_structure_map, batch_results)):
+            if pred_result is not None:
+                results.append((atom_idx, pred_result))
+                
+        return results
+    
+    def _create_deletion_structure(self, base_structure, atom_index):
+        """Helper method to create structure with deleted atom"""
+        modified_structure = base_structure.copy()
+        if atom_index < len(modified_structure.sites):
+            modified_structure.remove_sites([atom_index])
+        return modified_structure
 
 # Global model manager instance
 chgnet_manager = CHGNetModelManager()
@@ -1290,14 +1400,14 @@ async def chgnet_predict_structure(request: dict):
         except RuntimeError as e:
             raise HTTPException(status_code=503, detail=str(e))
         
-        # Predict structure properties
+        # Predict structure properties using optimized prediction
         try:
-            pred = chgnet.predict_structure(structure,
-                                          return_site_energies=True,
-                                          return_atom_feas=False,
-                                          return_crystal_feas=False)
+            pred = await chgnet_manager.predict_single_optimized(structure,
+                                                               return_site_energies=True,
+                                                               return_atom_feas=False,
+                                                               return_crystal_feas=False)
         except TypeError:
-            pred = chgnet.predict_structure(structure)
+            pred = await chgnet_manager.predict_single_optimized(structure)
         
         # Extract results with number of atoms for energy conversion
         results = safe_get_prediction(pred, num_atoms=len(structure.sites))
@@ -1364,16 +1474,16 @@ async def chgnet_relax_structure(request: dict):
         except RuntimeError as e:
             raise HTTPException(status_code=503, detail=str(e))
         
-        # Predict initial structure
+        # Predict initial structure using optimized prediction
         try:
-            pred_initial = chgnet.predict_structure(structure,
-                                                   return_site_energies=True,
-                                                   return_atom_feas=True,
-                                                   return_crystal_feas=True)
+            pred_initial = await chgnet_manager.predict_single_optimized(structure,
+                                                                       return_site_energies=True,
+                                                                       return_atom_feas=True,
+                                                                       return_crystal_feas=True)
             initial_results = safe_get_prediction(pred_initial, num_atoms=len(structure.sites))
         except TypeError:
             # Fallback if detailed prediction fails
-            pred_initial = chgnet.predict_structure(structure)
+            pred_initial = await chgnet_manager.predict_single_optimized(structure)
             initial_results = safe_get_prediction(pred_initial, num_atoms=len(structure.sites))
         except Exception as e:
             logger.warning(f"Initial prediction failed: {e}")
@@ -1394,16 +1504,16 @@ async def chgnet_relax_structure(request: dict):
         if final_structure is None:
             raise RuntimeError("Relaxation failed: no final structure returned")
         
-        # Predict relaxed structure
+        # Predict relaxed structure using optimized prediction
         try:
-            pred_final = chgnet.predict_structure(final_structure,
-                                                 return_site_energies=True,
-                                                 return_atom_feas=True,
-                                                 return_crystal_feas=True)
+            pred_final = await chgnet_manager.predict_single_optimized(final_structure,
+                                                                     return_site_energies=True,
+                                                                     return_atom_feas=True,
+                                                                     return_crystal_feas=True)
             final_results = safe_get_prediction(pred_final, num_atoms=len(final_structure.sites))
         except TypeError:
             # Fallback if detailed prediction fails
-            pred_final = chgnet.predict_structure(final_structure)
+            pred_final = await chgnet_manager.predict_single_optimized(final_structure)
             final_results = safe_get_prediction(pred_final, num_atoms=len(final_structure.sites))
         except Exception as e:
             logger.warning(f"Final prediction failed: {e}")
