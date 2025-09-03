@@ -1153,6 +1153,17 @@ def calculate_supercell_formula(original_formula: str, scaling_factor: int) -> s
     
     return " ".join(supercell_parts)
 
+def _get_device_info():
+    """Get current device information for CHGNet"""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return f"cuda:{torch.cuda.current_device()}"
+        else:
+            return "cpu"
+    except ImportError:
+        return "cpu"
+
 def evaluate_convergence(trajectory, fmax):
     """
     Evaluate convergence based on CHGNet trajectory final step only.
@@ -1307,8 +1318,8 @@ async def chgnet_predict_structure(request: dict):
             "status": "success",
             "prediction": results,
             "model_info": {
-                "version": getattr(chgnet, 'version', "0.3.0"),
-                "device": "cpu",
+                "version": getattr(chgnet, '__version__', "unknown"),
+                "device": _get_device_info(),
                 "parameters": chgnet.n_params if hasattr(chgnet, 'n_params') else None
             }
         }
@@ -1435,12 +1446,18 @@ async def chgnet_relax_structure(request: dict):
             "energy_change_eV_per_atom": energy_diff_per_atom
         }
         
+        # Calculate structure properties once to avoid redundancy
+        final_formula = str(final_structure.formula)
+        final_volume = float(final_structure.volume)
+        final_density = float(final_structure.density)
+        final_num_sites = len(final_structure.sites)
+        
         # Add structure information
         final_results.update({
-            "formula": str(final_structure.formula),
-            "num_sites": len(final_structure.sites),
-            "volume": float(final_structure.volume),
-            "density": float(final_structure.density)
+            "formula": final_formula,
+            "num_sites": final_num_sites,
+            "volume": final_volume,
+            "density": final_density
         })
         
         logger.info(f"CHGNet relaxation completed: {relaxation_info['steps']} steps, converged: {relaxation_info['converged']}")
@@ -1450,9 +1467,9 @@ async def chgnet_relax_structure(request: dict):
         analyzer = SpacegroupAnalyzer(final_structure)
         
         relaxed_structure_info = {
-            "formula": str(final_structure.formula),
+            "formula": final_formula,
             "num_atoms": len(final_structure),
-            "density": float(final_structure.density),
+            "density": final_density,
             "lattice_parameters": {
                 "a": float(final_structure.lattice.a),
                 "b": float(final_structure.lattice.b),
@@ -1511,8 +1528,8 @@ async def chgnet_relax_structure(request: dict):
             "relaxed_structure_info": relaxed_structure_info,
             "trajectory_data": trajectory_data,
             "model_info": {
-                "version": getattr(chgnet, 'version', "0.3.0"),
-                "device": "cpu"
+                "version": getattr(chgnet, '__version__', "unknown"),
+                "device": _get_device_info()
             }
         }
         
@@ -1642,6 +1659,11 @@ async def generate_relaxed_structure_cif(request: dict):
         
         cif_content = str(cif_writer)
         
+        # Calculate structure properties once for metadata
+        final_formula_str = str(final_structure.formula)
+        final_num_atoms = len(final_structure.sites)
+        final_volume_val = final_structure.volume
+        
         # Add metadata header
         operations_summary = f"{len(operations)} operations applied"
         size_str = "x".join(map(str, supercell_size))
@@ -1651,9 +1673,9 @@ async def generate_relaxed_structure_cif(request: dict):
             f"# Supercell size: {size_str}",
             f"# Operations: {operations_summary}",
             f"# CHGNet relaxation: fmax={fmax}, steps={steps}, converged={converged}",
-            f"# Final formula: {final_structure.formula}",
-            f"# Number of atoms: {len(final_structure.sites)}",
-            f"# Volume: {final_structure.volume:.2f} Ų",
+            f"# Final formula: {final_formula_str}",
+            f"# Number of atoms: {final_num_atoms}",
+            f"# Volume: {final_volume_val:.2f} Ų",
             ""
         ]
         
