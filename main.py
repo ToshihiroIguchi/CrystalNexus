@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import List, Dict, Optional, Set
 
+
 from fastapi import FastAPI, Request, HTTPException, File, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -98,18 +99,15 @@ def _get_elements_from_chgnet() -> Optional[Set[str]]:
         
         # Get element information from model configuration
         if hasattr(model, 'atom_embedding'):
-            # 原子番号の範囲を推定（通常1-94程度）
-            max_atomic_num = 94
-            
             # 実際に使用されている原子番号を確認
             supported_elements = set()
-            for z in range(1, min(max_atomic_num + 1, 95)):  # 1 to 94
+            for z in range(1, MAX_ATOMIC_NUMBER + 1):
                 try:
                     element = Element.from_Z(z)
                     # Exclude noble gases and actinoids (based on CHGNet characteristics)
                     if z not in [2, 10, 18, 36, 54, 86] and z <= 92:  # He, Ne, Ar, Kr, Xe, Rn, exclude U and beyond
                         supported_elements.add(element.symbol)
-                except:
+                except (ValueError, AttributeError):
                     continue
                     
             return supported_elements if supported_elements else None
@@ -137,10 +135,10 @@ def _get_elements_from_periodic_table() -> Optional[Set[str]]:
                 element = Element.from_Z(z)
                 if element.symbol not in excluded_elements:
                     supported_elements.add(element.symbol)
-            except:
+            except (ValueError, AttributeError):
                 continue
                 
-        return supported_elements if len(supported_elements) > 50 else None
+        return supported_elements if len(supported_elements) > MIN_SUPPORTED_ELEMENTS else None
         
     except Exception:
         return None
@@ -169,6 +167,16 @@ def _get_fallback_elements() -> Set[str]:
         'Th', 'U'
     }
 
+# Configuration constants - must be defined before use
+# Memory management settings
+SESSION_CLEANUP_HOURS = int(os.getenv('SESSION_CLEANUP_HOURS', '6'))
+PERIODIC_CLEANUP_INTERVAL = int(os.getenv('PERIODIC_CLEANUP_INTERVAL', '1800'))  # 30 minutes
+CHGNET_BATCH_SIZE = int(os.getenv('CHGNET_BATCH_SIZE', '4'))
+
+# CHGNet model settings
+MAX_ATOMIC_NUMBER = int(os.getenv('MAX_ATOMIC_NUMBER', '94'))
+MIN_SUPPORTED_ELEMENTS = int(os.getenv('MIN_SUPPORTED_ELEMENTS', '50'))
+
 # Initialize once as global variable
 ALLOWED_ELEMENTS: Set[str] = get_chgnet_supported_elements()
 
@@ -183,7 +191,7 @@ class CHGNetModelManager:
     _model = None
     _relaxer = None
     _lock = asyncio.Lock()
-    batch_size = 4  # Optimal batch size for CPU processing
+    batch_size = CHGNET_BATCH_SIZE  # Configurable batch size for CPU processing
     
     def __new__(cls):
         if cls._instance is None:
@@ -276,6 +284,7 @@ class CHGNetModelManager:
             # Force garbage collection before large structure prediction
             import gc
             gc.collect()
+            logger.debug(f"Garbage collection performed for large structure ({len(structure)} atoms)")
             
         try:
             pred = model.predict_structure(structure, **kwargs)
@@ -339,8 +348,100 @@ class CHGNetModelManager:
             modified_structure.remove_sites([atom_index])
         return modified_structure
 
+def validate_atomic_operation(operation, structure_size, operation_index=None):
+    """
+    Validate a single atomic operation
+    Returns: (is_valid, error_message)
+    """
+    try:
+        # Check required fields
+        if "action" not in operation:
+            return False, "missing 'action' field"
+        if "index" not in operation:
+            return False, "missing 'index' field"
+        
+        # Validate index type and range
+        index = operation["index"]
+        if not isinstance(index, int):
+            return False, f"index must be integer, got {type(index).__name__}: {index}"
+        if index < 0:
+            return False, f"index cannot be negative: {index}"
+        if index >= structure_size:
+            return False, f"index {index} out of range (max: {structure_size-1})"
+        
+        # Validate action type
+        action = operation["action"]
+        if action not in ["substitute", "delete"]:
+            return False, f"invalid action '{action}', must be 'substitute' or 'delete'"
+        
+        # Validate substitution target element
+        if action == "substitute":
+            if "to" not in operation:
+                return False, "substitution missing 'to' element"
+            try:
+                validate_element(operation["to"])
+            except ValueError as e:
+                return False, str(e)
+        
+        return True, None
+    except Exception as e:
+        return False, f"unexpected validation error: {str(e)}"
+
+def filter_valid_operations(operations, structure_size, strict_mode=False):
+    """
+    Filter and validate atomic operations
+    
+    Args:
+        operations: List of operations to validate
+        structure_size: Number of sites in structure
+        strict_mode: If True, raise exception on any invalid operation
+    
+    Returns:
+        (valid_operations, invalid_operations_info)
+    """
+    valid_operations = []
+    invalid_operations = []
+    
+    for i, operation in enumerate(operations):
+        is_valid, error_msg = validate_atomic_operation(operation, structure_size, i+1)
+        if is_valid:
+            valid_operations.append(operation)
+        else:
+            invalid_operations.append(f"Operation {i+1}: {error_msg}")
+    
+    if strict_mode and invalid_operations:
+        error_message = f"Invalid atomic operations detected:\n" + "\n".join(f"  - {error}" for error in invalid_operations)
+        raise ValueError(error_message)
+    
+    return valid_operations, invalid_operations
+
 # Global model manager instance
 chgnet_manager = CHGNetModelManager()
+
+# Background task for periodic cleanup
+async def periodic_cleanup_task():
+    """Background task that runs periodic memory cleanup"""
+    while True:
+        try:
+            await asyncio.sleep(PERIODIC_CLEANUP_INTERVAL)  # Configurable cleanup interval
+            logger.info("Starting periodic cleanup...")
+            
+            # Clean up old sessions
+            session_manager.cleanup_old_sessions()
+            
+            # Log session statistics and perform garbage collection
+            log_session_statistics()
+            
+            # Always perform garbage collection during periodic cleanup
+            import gc
+            gc.collect()
+            logger.debug("Periodic garbage collection completed")
+            
+            logger.info("Periodic cleanup completed")
+            
+        except Exception as e:
+            logger.error(f"Error in periodic cleanup task: {e}")
+            # Continue running even if there's an error
 
 # Security functions
 def safe_filename(filename: str) -> str:
@@ -423,6 +524,12 @@ def validate_occupancy(structure) -> None:
         raise ValueError(error_message)
 
 
+def log_session_statistics():
+    """Log session statistics for memory management monitoring"""
+    active_sessions = session_manager.get_session_count()
+    memory_intensive = session_manager.get_memory_intensive_sessions()
+    logger.info(f"Session statistics: {active_sessions} active sessions, {memory_intensive} with large/relaxed structures")
+
 class SessionManager:
     """Session management class - manages structure data and metadata"""
     
@@ -437,13 +544,15 @@ class SessionManager:
             'current_structure': original_structure.copy(),
             'operations': [],
             'supercell_size': [1, 1, 1],
-            'created_at': time.time()
+            'created_at': time.time(),
+            'last_accessed': time.time()
         }
         logger.info(f"Created session {session_id[:8]}... for {filename}")
     
     def get_current_structure(self, session_id: str) -> Optional[Structure]:
         """Get current structure"""
         if session_id in self.sessions:
+            self.sessions[session_id]['last_accessed'] = time.time()  # Track access time
             return self.sessions[session_id]['current_structure']
         return None
     
@@ -451,6 +560,7 @@ class SessionManager:
         """Update structure"""
         if session_id in self.sessions:
             self.sessions[session_id]['current_structure'] = structure
+            self.sessions[session_id]['last_accessed'] = time.time()  # Track access time
             if operations is not None:
                 self.sessions[session_id]['operations'] = operations
             if supercell_size is not None:
@@ -459,10 +569,28 @@ class SessionManager:
     
     def get_session_info(self, session_id: str) -> Optional[Dict]:
         """Get session information"""
+        if session_id in self.sessions:
+            self.sessions[session_id]['last_accessed'] = time.time()  # Track access time
         return self.sessions.get(session_id)
     
-    def cleanup_old_sessions(self, max_age_hours: int = 24) -> None:
-        """Clean up old sessions"""
+    def get_session_count(self) -> int:
+        """Get current number of active sessions"""
+        return len(self.sessions)
+    
+    def get_memory_intensive_sessions(self) -> int:
+        """Count sessions with large structures"""
+        count = 0
+        for session_data in self.sessions.values():
+            if 'relaxed_structure' in session_data:
+                count += 1
+            if 'current_structure' in session_data:
+                structure = session_data['current_structure']
+                if len(structure.sites) > 50:  # Large structure
+                    count += 1
+        return count
+    
+    def cleanup_old_sessions(self, max_age_hours: int = SESSION_CLEANUP_HOURS) -> None:
+        """Clean up old sessions (optimized to 6 hours for better memory management)"""
         cutoff_time = time.time() - (max_age_hours * 3600)
         
         old_sessions = [
@@ -470,25 +598,75 @@ class SessionManager:
             if data.get('created_at', 0) < cutoff_time
         ]
         
+        memory_freed = 0
         for sid in old_sessions:
+            # Estimate memory usage before deletion
+            session_data = self.sessions[sid]
+            if 'current_structure' in session_data:
+                memory_freed += 1  # Rough estimate
+            if 'relaxed_structure' in session_data:
+                memory_freed += 1  # Rough estimate
+            
             del self.sessions[sid]
             logger.info(f"Cleaned up old session {sid[:8]}...")
+        
+        if old_sessions:
+            logger.info(f"Memory cleanup completed: {len(old_sessions)} sessions removed, ~{memory_freed} structures freed")
+        else:
+            logger.debug("No old sessions to cleanup")
+        
+        # Log session statistics is now handled by the global function
+        log_session_statistics()
 
 # Session management instance
 session_manager = SessionManager()
 
-app = FastAPI(title="CrystalNexus")
-templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Configuration constants - must be defined before use in app creation
+TEMPLATE_DIR = os.getenv('CRYSTALNEXUS_TEMPLATE_DIR', 'templates')
+STATIC_DIR = os.getenv('CRYSTALNEXUS_STATIC_DIR', 'static')
+SAMPLE_CIF_DIR_NAME = os.getenv('CRYSTALNEXUS_SAMPLE_CIF_DIR', 'sample_cif')
+APP_NAME = os.getenv('CRYSTALNEXUS_APP_NAME', 'CrystalNexus')
 
-SAMPLE_CIF_DIR = Path("sample_cif")
-
-# Secure default settings
+# Server configuration
 HOST = os.getenv('CRYSTALNEXUS_HOST', '0.0.0.0')
 PORT = int(os.getenv('CRYSTALNEXUS_PORT', '8080'))
 DEBUG = os.getenv('CRYSTALNEXUS_DEBUG', 'False').lower() == 'true'
+
+# File handling limits
 MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', str(50 * 1024 * 1024)))  # 50MB
 MAX_SUPERCELL_DIM = int(os.getenv('MAX_SUPERCELL_DIM', '10'))
+
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan management (startup and shutdown)"""
+    # Startup
+    logger.info("CrystalNexus starting up...")
+    log_session_statistics()
+    # Start the periodic cleanup task
+    cleanup_task = asyncio.create_task(periodic_cleanup_task())
+    logger.info("Periodic cleanup task started")
+    
+    yield
+    
+    # Shutdown
+    logger.info("Application shutting down, performing final cleanup")
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        logger.info("Periodic cleanup task cancelled")
+    session_manager.cleanup_old_sessions(max_age_hours=0)  # Clean all sessions
+    import gc
+    gc.collect()
+    logger.info("Final cleanup completed")
+
+app = FastAPI(title=APP_NAME, lifespan=lifespan)
+templates = Jinja2Templates(directory=TEMPLATE_DIR)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+SAMPLE_CIF_DIR = Path(SAMPLE_CIF_DIR_NAME)
 
 # Apply DEBUG settings
 if DEBUG:
@@ -527,21 +705,31 @@ async def apply_atomic_operations(request: dict):
         supercell_size = session_info['supercell_size']
         structure.make_supercell(supercell_size)
         
-        # Apply operations using unified stable index management
-        # Process in descending order by index to avoid index shift issues
-        stable_operations = sorted(operations, key=lambda x: x.get("index", 0), reverse=True)
+        # Validate all operations using strict mode (fail-fast approach)
+        try:
+            valid_operations, invalid_operations = filter_valid_operations(
+                operations, len(structure.sites), strict_mode=True
+            )
+        except ValueError as e:
+            logger.error(f"Rejecting {len(operations)} operations due to validation errors")
+            raise HTTPException(status_code=400, detail=str(e))
+        
+        # All operations validated - process in descending order by index to avoid index shift issues
+        stable_operations = sorted(valid_operations, key=lambda x: x["index"], reverse=True)
+        logger.info(f"Processing {len(stable_operations)} validated atomic operations")
         
         for operation in stable_operations:
+            site_index = operation["index"]
             if operation["action"] == "substitute":
-                site_index = operation["index"]
-                new_element = validate_element(operation["to"])
-                if site_index >= 0 and site_index < len(structure.sites):
-                    old_coords = structure[site_index].frac_coords
-                    structure[site_index] = Element(new_element), old_coords
+                # Already validated: element and index are valid
+                new_element = operation["to"]
+                old_coords = structure[site_index].frac_coords
+                structure[site_index] = Element(new_element), old_coords
+                logger.debug(f"Substituted site {site_index} with {new_element}")
             elif operation["action"] == "delete":
-                site_index = operation["index"]
-                if site_index >= 0 and site_index < len(structure.sites):
-                    structure.remove_sites([site_index])
+                # Already validated: index is valid
+                structure.remove_sites([site_index])
+                logger.debug(f"Deleted site {site_index}")
         
         # Update session with modified structure and operations
         session_manager.update_structure(session_id, structure, operations=operations)
@@ -723,7 +911,7 @@ async def analyze_cif_file(file_path: Path) -> Dict:
             raise ValueError(f"Invalid CIF file format. {error_msg}")
         
         # Validate structure
-        if len(structure.sites) == 0:
+        if not structure.sites:
             raise ValueError("CIF file contains no atomic sites")
         
         # Validate occupancy
@@ -785,8 +973,8 @@ async def create_supercell(data: dict):
         filename = data.get("filename")
         session_id = data.get("session_id")
         
-        logger.info(f"DEBUG: create_supercell called with crystal_data: {crystal_data}")
-        logger.info(f"DEBUG: filename from crystal_data: {crystal_data.get('filename') if crystal_data else None}")
+        logger.debug(f"create_supercell called with crystal_data type: {type(crystal_data)}")
+        logger.debug(f"filename from crystal_data: {crystal_data.get('filename') if crystal_data else None}")
         
         if not crystal_data:
             raise HTTPException(status_code=400, detail="Crystal data is required")
@@ -826,7 +1014,7 @@ async def create_supercell(data: dict):
                         original_structure = Structure.from_dict(structure_data)
                         logger.info(f"Loaded structure from stored structure_data for: {filename}")
                         # Validate the loaded structure
-                        if len(original_structure.sites) == 0:
+                        if not original_structure.sites:
                             logger.warning(f"Structure has no sites: {filename}")
                             original_structure = None
                     else:
@@ -1055,51 +1243,38 @@ async def generate_modified_structure_cif(request: dict):
         structure.make_supercell(supercell_size)
         logger.info(f"Supercell created: {structure.formula} ({len(structure.sites)} sites)")
         
-        # Apply atomic operations using unified stable index management
-        # Process in descending order by index to eliminate index adjustment issues
-        stable_operations = sorted(operations, key=lambda x: x.get("index", 0), reverse=True)
+        # Apply atomic operations with partial success tolerance (for CIF generation)
+        valid_operations, invalid_operations = filter_valid_operations(
+            operations, len(structure.sites), strict_mode=False
+        )
+        
+        # Log invalid operations but continue with valid ones
+        if invalid_operations:
+            logger.warning(f"Skipping {len(invalid_operations)} invalid operations during CIF generation: {invalid_operations}")
+        
+        # Process valid operations in descending order by index to eliminate index adjustment issues
+        stable_operations = sorted(valid_operations, key=lambda x: x["index"], reverse=True)
         operations_applied = 0
-        for i, operation in enumerate(stable_operations):
-            try:
-                if operation["action"] == "substitute":
-                    site_index = operation["index"]
-                    new_element_raw = operation["to"]
-                    
-                    # Element validation (security measures)
-                    new_element = validate_element(new_element_raw)
-                    
-                    if site_index < len(structure.sites):
-                        old_coords = structure[site_index].frac_coords
-                        old_element = str(structure[site_index].specie)
-                        
-                        # Replace the site with new element
-                        structure[site_index] = Element(new_element), old_coords
-                        
-                        logger.info(f"Operation {i+1}: Substituted {old_element} → {new_element} at site {site_index}")
-                        operations_applied += 1
-                    else:
-                        logger.warning(f"Operation {i+1}: SKIPPED - Invalid site index {site_index}")
-                        
-                elif operation["action"] == "delete":
-                    site_index = operation["index"]
-                    
-                    if site_index < len(structure.sites):
-                        deleted_element = str(structure[site_index].specie)
-                        structure.remove_sites([site_index])
-                        
-                        logger.info(f"Operation {i+1}: Deleted {deleted_element} at site {site_index}")
-                        operations_applied += 1
-                        
-                        # No index adjustment needed with descending order processing
-                    else:
-                        logger.warning(f"Operation {i+1}: SKIPPED - Invalid site index {site_index}")
+        
+        for operation in stable_operations:
+            site_index = operation["index"]
+            if operation["action"] == "substitute":
+                new_element = operation["to"]
+                old_coords = structure[site_index].frac_coords
+                old_element = str(structure[site_index].specie)
                 
-            except ValueError as ve:
-                logger.error(f"Operation {i+1}: Invalid element - {str(ve)}")
-                continue
-            except Exception as op_error:
-                logger.error(f"Operation {i+1}: ERROR - {str(op_error)}")
-                continue
+                # Replace the site with new element
+                structure[site_index] = Element(new_element), old_coords
+                
+                logger.info(f"CIF Generation: Substituted {old_element} → {new_element} at site {site_index}")
+                operations_applied += 1
+                        
+            elif operation["action"] == "delete":
+                deleted_element = str(structure[site_index].specie)
+                structure.remove_sites([site_index])
+                
+                logger.info(f"CIF Generation: Deleted {deleted_element} at site {site_index}")
+                operations_applied += 1
         
         logger.info(f"Applied {operations_applied}/{len(operations)} operations successfully")
         logger.info(f"Final structure: {structure.formula} ({len(structure.sites)} sites)")
@@ -1263,6 +1438,19 @@ def calculate_supercell_formula(original_formula: str, scaling_factor: int) -> s
     
     return " ".join(supercell_parts)
 
+def _get_chgnet_version():
+    """Get CHGNet version dynamically"""
+    try:
+        import chgnet
+        return chgnet.__version__
+    except (ImportError, AttributeError):
+        try:
+            # Alternative version detection
+            import pkg_resources
+            return pkg_resources.get_distribution('chgnet').version
+        except Exception:
+            return "unknown"
+
 def _get_device_info():
     """Get current device information for CHGNet"""
     try:
@@ -1281,7 +1469,7 @@ def evaluate_convergence(trajectory, fmax):
     """
     import numpy as np
     
-    if not trajectory or not hasattr(trajectory, 'forces') or len(trajectory.forces) == 0:
+    if not trajectory or not hasattr(trajectory, 'forces') or not trajectory.forces:
         return False
     
     # Check final step only - simplified approach
@@ -1347,7 +1535,7 @@ def safe_get_prediction(pred, num_atoms=None):
             continue
         try:
             out[k] = v.tolist() if hasattr(v, "tolist") else v
-        except:
+        except (AttributeError, TypeError, ValueError):
             continue
     return out
 
@@ -1378,21 +1566,26 @@ async def chgnet_predict_structure(request: dict):
         structure = parser.get_structures(primitive=False)[0]
         structure.make_supercell(supercell_size)
         
-        # Apply operations using unified stable index management
-        # Process in descending order by index to eliminate index adjustment issues
-        stable_operations = sorted(operations, key=lambda x: x.get("index", 0), reverse=True)
+        # Apply operations for CHGNet prediction (skip invalid operations)
+        valid_operations, invalid_operations = filter_valid_operations(
+            operations, len(structure.sites), strict_mode=False
+        )
+        
+        # Log invalid operations but continue with valid ones
+        if invalid_operations:
+            logger.warning(f"Skipping {len(invalid_operations)} invalid operations for CHGNet prediction: {invalid_operations}")
+        
+        # Process valid operations in descending order by index to eliminate index adjustment issues
+        stable_operations = sorted(valid_operations, key=lambda x: x["index"], reverse=True)
+        
         for operation in stable_operations:
+            site_index = operation["index"]
             if operation["action"] == "substitute":
-                site_index = operation["index"]
-                new_element = validate_element(operation["to"])
-                if site_index < len(structure.sites):
-                    old_coords = structure[site_index].frac_coords
-                    structure[site_index] = Element(new_element), old_coords
+                new_element = operation["to"]
+                old_coords = structure[site_index].frac_coords
+                structure[site_index] = Element(new_element), old_coords
             elif operation["action"] == "delete":
-                site_index = operation["index"]
-                if site_index < len(structure.sites):
-                    structure.remove_sites([site_index])
-                    # No index adjustment needed with descending order processing
+                structure.remove_sites([site_index])
         
         # Load CHGNet model (using singleton pattern)
         try:
@@ -1428,7 +1621,7 @@ async def chgnet_predict_structure(request: dict):
             "status": "success",
             "prediction": results,
             "model_info": {
-                "version": getattr(chgnet, '__version__', "unknown"),
+                "version": _get_chgnet_version(),
                 "device": _get_device_info(),
                 "parameters": chgnet.n_params if hasattr(chgnet, 'n_params') else None
             }
@@ -1638,7 +1831,7 @@ async def chgnet_relax_structure(request: dict):
             "relaxed_structure_info": relaxed_structure_info,
             "trajectory_data": trajectory_data,
             "model_info": {
-                "version": getattr(chgnet, '__version__', "unknown"),
+                "version": _get_chgnet_version(),
                 "device": _get_device_info()
             }
         }
