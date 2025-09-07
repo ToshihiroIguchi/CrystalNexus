@@ -9,6 +9,65 @@
     <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="/static/js/utils.js"></script>
+    <style>
+        .info-icon {
+            font-size: 14px;
+            color: #666;
+            cursor: pointer;
+            margin-left: 8px;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+        .info-icon:hover {
+            opacity: 1;
+        }
+        .chgnet-info-modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.4);
+        }
+        .chgnet-info-content {
+            background-color: #fefefe;
+            margin: 10% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            border-radius: 8px;
+            width: 80%;
+            max-width: 500px;
+            position: relative;
+        }
+        .chgnet-info-close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .chgnet-info-close:hover {
+            color: black;
+        }
+        .chgnet-links {
+            margin-top: 15px;
+        }
+        .chgnet-links a {
+            display: inline-block;
+            margin-right: 15px;
+            padding: 8px 16px;
+            background-color: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .chgnet-links a:hover {
+            background-color: #0056b3;
+        }
+    </style>
 </head>
 <body>
     <div class="header">
@@ -49,7 +108,10 @@
 
         <div class="right-panel">
             <div class="panel-section">
-                <div class="panel-title">CHGNet Calculation</div>
+                <div class="panel-title">
+                    CHGNet Calculation 
+                    <span class="info-icon" onclick="showCHGNetInfo()" title="Click for more information about CHGNet">ℹ️</span>
+                </div>
                 <div id="chgnet-content">
                     <div class="chgnet-controls">
                         <button class="button" id="analyze-btn" disabled>🔬 Analyze Structure</button>
@@ -57,7 +119,7 @@
                         <div class="relax-settings" style="margin-top: 15px;" id="relax-settings">
                             <details style="margin-bottom: 10px;">
                                 <summary style="font-size: 12px; color: #666; cursor: pointer; padding: 5px 0;">
-                                    ⚙️ Advanced Settings (Default: 0.1 eV/Å, 100 steps)
+                                    ⚙️ Advanced Settings
                                 </summary>
                                 <div style="margin-top: 10px; padding: 8px; background-color: #f8f9fa; border-radius: 4px;">
                                     <div class="setting-group">
@@ -654,7 +716,7 @@
                 
                 // Add basic energy information
                 detailsHTML += '<table class="detail-table">';
-                detailsHTML += '<tr><th colspan="2">Energy Details</th></tr>';
+                detailsHTML += '<tr><th>Energy Details</th><th><button class="copy-btn" onclick="copyAllEnergyData()" title="Copy All Energy Data">📋 Copy All</button></th></tr>';
                 detailsHTML += `<tr><td><strong>Energy per atom:</strong></td><td>${energyPerAtom.toFixed(6)} eV/atom</td></tr>`;
                 detailsHTML += `<tr><td><strong>Number of atoms:</strong></td><td>${numAtoms} atoms</td></tr>`;
                 detailsHTML += `<tr><td><strong>Total energy:</strong></td><td>${totalEnergy.toFixed(6)} eV</td></tr>`;
@@ -667,17 +729,17 @@
                     window.currentSiteEnergies = siteEnergies;
                     
                     detailsHTML += '<table class="detail-table">';
-                    detailsHTML += '<tr><th colspan="3">Site Energies</th></tr>';
+                    detailsHTML += '<tr><th colspan="2">Site Energies</th></tr>';
                     
                     siteEnergies.forEach((energy, i) => {
                         // Use current labels to reflect any element substitutions
                         const atomLabel = window.currentLabels && window.currentLabels[i] ? window.currentLabels[i] : `Site ${i+1}`;
-                        detailsHTML += `<tr><td>${atomLabel}:</td><td class="site-energy">${energy.toFixed(6)} eV</td><td><button class="copy-btn" id="copy-site-energy-${i}" onclick="copySiteEnergy(${i})" title="Copy: ${atomLabel} Energy">📋</button></td></tr>`;
+                        detailsHTML += `<tr><td>${atomLabel}:</td><td class="site-energy">${energy.toFixed(6)} eV</td></tr>`;
                     });
                     
                     // Add verification
                     const siteSum = siteEnergies.reduce((sum, e) => sum + e, 0);
-                    detailsHTML += `<tr><td style="padding-top: 10px;"><em>Sum of site energies:</em></td><td style="padding-top: 10px;"><em>${siteSum.toFixed(6)} eV</em></td><td style="padding-top: 10px;"><button class="copy-btn" onclick="smartCopyToClipboard('${siteSum}'); showCopyFeedback(this, true);" title="Copy: Site Energy Total">📋</button></td></tr>`;
+                    detailsHTML += `<tr><td style="padding-top: 10px;"><em>Sum of site energies:</em></td><td style="padding-top: 10px;"><em>${siteSum.toFixed(6)} eV</em></td></tr>`;
                     detailsHTML += '</table>';
                 } else {
                     detailsHTML = '<p>Site energies not available for this calculation.</p>';
@@ -1089,6 +1151,72 @@
             showCopyFeedback(button, result.success);
         }
 
+        // Copy all energy data function
+        async function copyAllEnergyData() {
+            if (!window.energyAnalysisData?.final) {
+                console.warn('No energy data available');
+                return;
+            }
+            
+            let energyText = '=== Energy Details ===\n';
+            const finalData = window.energyAnalysisData.final;
+            
+            energyText += `Energy per atom: ${finalData.energyPerAtom.toFixed(6)} eV/atom\n`;
+            energyText += `Number of atoms: ${finalData.numAtoms} atoms\n`;
+            energyText += `Total energy: ${finalData.totalEnergy.toFixed(6)} eV\n`;
+            
+            // Add site energies if available
+            if (window.currentSiteEnergies && window.currentSiteEnergies.length > 0) {
+                energyText += '\n=== Site Energies ===\n';
+                window.currentSiteEnergies.forEach((energy, i) => {
+                    const atomLabel = window.currentLabels && window.currentLabels[i] ? window.currentLabels[i] : `Site ${i+1}`;
+                    energyText += `${atomLabel}: ${energy.toFixed(6)} eV\n`;
+                });
+                
+                const siteSum = window.currentSiteEnergies.reduce((sum, e) => sum + e, 0);
+                energyText += `Sum of site energies: ${siteSum.toFixed(6)} eV\n`;
+            }
+            
+            console.log('Copying all energy data:', energyText);
+            const result = await smartCopyToClipboard(energyText);
+            
+            // Show feedback on any visible energy copy button
+            const copyButton = document.querySelector('.copy-btn[onclick="copyAllEnergyData()"]');
+            if (copyButton) {
+                showCopyFeedback(copyButton, result.success);
+            }
+        }
+
+        // Copy all magnetic data function
+        async function copyAllMagneticData() {
+            if (!window.currentMagneticData) {
+                console.warn('No magnetic data available');
+                return;
+            }
+            
+            let magneticText = '=== Magnetic Details ===\n';
+            const magneticData = window.currentMagneticData;
+            
+            magneticText += `Total |Magnetic Moment|: ${magneticData.totalMagnetic.toFixed(3)} µB\n`;
+            
+            if (magneticData.siteMagnetic && magneticData.siteMagnetic.length > 0) {
+                magneticText += '\n=== Site Magnetic Moments ===\n';
+                magneticData.siteMagnetic.forEach((mag, i) => {
+                    const atomLabel = window.currentLabels && window.currentLabels[i] ? window.currentLabels[i] : `Site ${i+1}`;
+                    magneticText += `${atomLabel}: ${mag.toFixed(3)} µB\n`;
+                });
+            }
+            
+            console.log('Copying all magnetic data:', magneticText);
+            const result = await smartCopyToClipboard(magneticText);
+            
+            // Show feedback on any visible magnetic copy button
+            const copyButton = document.querySelector('.copy-btn[onclick="copyAllMagneticData()"]');
+            if (copyButton) {
+                showCopyFeedback(copyButton, result.success);
+            }
+        }
+
         // Copy formula function
         async function copyFormula(buttonId = null) {
             const formula = getCurrentFormula();
@@ -1382,11 +1510,12 @@ Crystal system: ${data.crystal_system}`;
                     siteMagnetic: magmoms
                 };
                 
-                let tableHTML = `<tr><td>Total |Magnetic Moment|:</td><td class="magnetic-moment">${totalMag.toFixed(3)} µB</td><td><button class="copy-btn" onclick="smartCopyToClipboard('${totalMag.toFixed(3)}'); showCopyFeedback(this, true);" title="Copy: Total Magnetic Moment">📋</button></td></tr>`;
+                let tableHTML = `<tr><th>Magnetic Details</th><th><button class="copy-btn" onclick="copyAllMagneticData()" title="Copy All Magnetic Data">📋 Copy All</button></th></tr>`;
+                tableHTML += `<tr><td>Total |Magnetic Moment|:</td><td class="magnetic-moment">${totalMag.toFixed(3)} µB</td></tr>`;
                 magmoms.forEach((mag, i) => {
                     // Use current labels to reflect any element substitutions
                     const atomLabel = window.currentLabels && window.currentLabels[i] ? window.currentLabels[i] : `Site ${i+1}`;
-                    tableHTML += `<tr><td>${atomLabel}:</td><td class="magnetic-moment">${mag.toFixed(3)} µB</td><td><button class="copy-btn" id="copy-site-magnetic-${i}" onclick="copySiteMagnetic(${i})" title="Copy: ${atomLabel} Magnetic Moment">📋</button></td></tr>`;
+                    tableHTML += `<tr><td>${atomLabel}:</td><td class="magnetic-moment">${mag.toFixed(3)} µB</td></tr>`;
                 });
                 magneticTable.innerHTML = tableHTML;
                 
@@ -5740,6 +5869,44 @@ Crystal system: ${data.crystal_system}`;
             
             console.log('Generated filename components:', {formula, numAtoms, timestamp, fileName});
             return fileName;
+        }
+    </script>
+
+    <!-- CHGNet Information Modal -->
+    <div id="chgnetInfoModal" class="chgnet-info-modal">
+        <div class="chgnet-info-content">
+            <span class="chgnet-info-close" onclick="closeCHGNetInfo()">&times;</span>
+            <h3>About CHGNet</h3>
+            <p>CHGNet is a machine learning interatomic potential for crystal structure analysis. It can predict:</p>
+            <ul>
+                <li>Energy per atom and total energy</li>
+                <li>Forces on atoms</li>
+                <li>Magnetic moments</li>
+                <li>Crystal structure relaxation</li>
+            </ul>
+            <p>CHGNet is trained on Materials Project data and provides fast, accurate predictions for materials science applications.</p>
+            <div class="chgnet-links">
+                <a href="https://www.nature.com/articles/s42256-023-00716-3" target="_blank">📄 Research Paper</a>
+                <a href="https://github.com/CederGroupHub/chgnet" target="_blank">📦 GitHub Repository</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function showCHGNetInfo() {
+            document.getElementById('chgnetInfoModal').style.display = 'block';
+        }
+
+        function closeCHGNetInfo() {
+            document.getElementById('chgnetInfoModal').style.display = 'none';
+        }
+
+        // Close modal when clicking outside of it
+        window.onclick = function(event) {
+            var modal = document.getElementById('chgnetInfoModal');
+            if (event.target == modal) {
+                closeCHGNetInfo();
+            }
         }
     </script>
 
