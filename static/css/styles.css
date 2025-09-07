@@ -1471,7 +1471,7 @@ body {
     border-radius: 6px;
     margin: 10px 0;
     font-size: 14px;
-    text-align: center;
+    text-align: left;
     animation: fadeIn 0.3s ease;
 }
 
