@@ -162,10 +162,10 @@
                         </div>
 
                         <!-- Magnetic Properties Result Item -->
-                        <div class="result-item" id="magnetic-item" style="display: none;">
+                        <div class="result-item" id="magnetic-item">
                             <div class="result-summary">
                                 <span id="magnetic-summary">🧲 Magnetic: - µB total</span>
-                                <button class="detail-btn" onclick="toggleDetail('magnetic')">Details ▼</button>
+                                <button class="detail-btn" onclick="toggleDetail('magnetic')" id="magnetic-detail-btn" style="display: none;">Details ▼</button>
                             </div>
                             <div class="detail-drawer" id="magnetic-detail" style="display: none;">
                                 <table class="detail-table" id="magnetic-table">
@@ -292,6 +292,110 @@
         window.sessionId = 'session-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
         console.log('Session ID:', window.sessionId);
 
+        // Unified status display system
+        window.displayStatus = {
+            energy: { 
+                calculated: false, 
+                value: null, 
+                status: 'ready',
+                hasData: false 
+            },
+            magnetic: { 
+                calculated: false, 
+                value: null, 
+                status: 'ready',
+                hasData: false 
+            }
+        };
+
+        // Status messages
+        const STATUS_MESSAGES = {
+            ready: 'Ready to calculate',
+            calculating: 'Calculating...',
+            notCalculated: 'Not calculated',
+            error: 'Calculation error'
+        };
+
+        // Update display based on current status
+        function updateStatusDisplay(type, status, value = null, hasData = false) {
+            window.displayStatus[type] = { 
+                calculated: status === 'calculated', 
+                value: value, 
+                status: status,
+                hasData: hasData 
+            };
+            refreshDisplay(type);
+        }
+
+        // Refresh the display for a specific type
+        function refreshDisplay(type) {
+            const statusObj = window.displayStatus[type];
+            const summaryElement = document.getElementById(`${type}-summary`);
+            const detailBtn = document.getElementById(`${type}-detail-btn`);
+            const item = document.getElementById(`${type}-item`);
+            
+            if (!summaryElement) return;
+            
+            const icon = type === 'energy' ? '⚡' : '🧲';
+            const unit = type === 'energy' ? 'eV' : 'µB total';
+            
+            if (statusObj.calculated && statusObj.value !== null) {
+                // Show calculated value with copy button
+                const copyBtnId = `copy-total-${type}`;
+                const copyFunction = type === 'energy' ? 'copyTotalEnergy()' : 'copyTotalMagnetic()';
+                const title = type === 'energy' ? 'Copy: Total Energy' : 'Copy: Total Magnetic Moment';
+                
+                if (type === 'energy') {
+                    const valueClass = statusObj.value < 0 ? 'energy-negative' : 'energy-positive';
+                    summaryElement.innerHTML = `${icon} Energy: <span class="${valueClass}">${statusObj.value.toFixed(2)} eV</span><button class="copy-btn" id="${copyBtnId}" onclick="${copyFunction}" title="${title}">📋</button>`;
+                } else {
+                    summaryElement.innerHTML = `${icon} Magnetic: <span class="magnetic-moment">${statusObj.value.toFixed(3)} µB total</span><button class="copy-btn" id="${copyBtnId}" onclick="${copyFunction}" title="${title}">📋</button>`;
+                }
+                
+                if (detailBtn) detailBtn.style.display = 'inline-block';
+                if (item && type === 'magnetic') item.style.display = 'block';
+            } else {
+                // Show status message
+                let message;
+                if (statusObj.status === 'ready') {
+                    message = STATUS_MESSAGES.ready;
+                } else if (statusObj.status === 'calculating') {
+                    message = STATUS_MESSAGES.calculating;
+                } else if (statusObj.status === 'notCalculated') {
+                    message = STATUS_MESSAGES.notCalculated;
+                } else {
+                    message = STATUS_MESSAGES.error;
+                }
+                
+                summaryElement.textContent = `${icon} ${type === 'energy' ? 'Energy' : 'Magnetic'}: ${message}`;
+                if (detailBtn) detailBtn.style.display = 'none';
+                // Always show magnetic item to display status messages
+                if (item && type === 'magnetic') item.style.display = 'block';
+            }
+        }
+
+        // Initialize displays
+        function initializeDisplays() {
+            // Wait for DOM to be fully loaded before initializing
+            setTimeout(() => {
+                try {
+                    updateStatusDisplay('energy', 'notCalculated');
+                    updateStatusDisplay('magnetic', 'notCalculated');
+                } catch (error) {
+                    console.warn('Display initialization delayed:', error);
+                    // Retry after another short delay
+                    setTimeout(() => {
+                        try {
+                            updateStatusDisplay('energy', 'notCalculated');
+                            updateStatusDisplay('magnetic', 'notCalculated');
+                        } catch (retryError) {
+                            console.error('Failed to initialize displays:', retryError);
+                        }
+                    }, 500);
+                }
+            }, 100);
+        }
+
         // Update session with atomic operations
         async function updateSessionWithOperations() {
             try {
@@ -309,6 +413,10 @@
                 if (response.ok) {
                     const result = await response.json();
                     console.log('✅ Session updated with operations:', result);
+                    
+                    // Update status to ready for calculation when structure changes
+                    updateStatusDisplay('energy', 'ready');
+                    updateStatusDisplay('magnetic', 'ready');
                 } else {
                     console.error('❌ Failed to update session with operations');
                 }
@@ -323,6 +431,9 @@
             loadCHGnetElements();
             setupEventListeners();
             setupCHGNetEventListeners();
+            
+            // Initialize unified display system
+            initializeDisplays();
         });
 
         function setupEventListeners() {
@@ -569,6 +680,10 @@
                 analyzeBtn.textContent = '🔬 Analyze Structure';
                 analyzeBtn.classList.remove('button-processing');
             }
+            
+            // Set status to ready for calculation
+            updateStatusDisplay('energy', 'ready');
+            updateStatusDisplay('magnetic', 'ready');
         }
 
         function setCHGNetButtonState(state, text) {
@@ -705,11 +820,8 @@
                 // Use total_energy_eV from backend if available, otherwise calculate
                 const totalEnergy = finalPred.total_energy_eV !== undefined ? finalPred.total_energy_eV : energyPerAtom * numAtoms;
                 
-                // Summary: Show final energy values with copy buttons
-                energySummary.innerHTML = `⚡ Energy: <span class="${energyPerAtom < 0 ? 'energy-negative' : 'energy-positive'}">${totalEnergy.toFixed(2)} eV</span><button class="copy-btn" id="copy-total-energy" onclick="copyTotalEnergy()" title="Copy: Total Energy">📋</button>`;
-                
-                // Show Details button
-                energyDetailBtn.style.display = 'inline-block';
+                // Update status display system
+                updateStatusDisplay('energy', 'calculated', totalEnergy, true);
                 
                 // Prepare Energy details table
                 let detailsHTML = '';
@@ -775,25 +887,15 @@
                     };
                 }
             } else {
-                energySummary.textContent = '⚡ Energy: Not available';
-                energyDetailBtn.style.display = 'none';
+                updateStatusDisplay('energy', 'error');
                 window.energyAnalysisData = null;
             }
         }
         
         function resetPhysicalProperties() {
-            // Reset energy display
-            const energySummary = document.getElementById('energy-summary');
-            const energyItem = document.getElementById('energy-item');
-            const energyDetailBtn = document.getElementById('energy-detail-btn');
-            
-            if (energySummary) {
-                energySummary.textContent = '⚡ Energy: - eV';
-            }
-            if (energyDetailBtn) {
-                energyDetailBtn.style.display = 'none';
-                energyDetailBtn.innerHTML = 'Details ▼';  // Reset button text
-            }
+            // Reset using unified status display system
+            updateStatusDisplay('energy', 'ready');
+            updateStatusDisplay('magnetic', 'ready');
             
             // Close energy details drawer if open
             const energyDetail = document.getElementById('energy-detail');
@@ -801,28 +903,32 @@
                 energyDetail.style.display = 'none';
             }
             
-            // Reset magnetic display (keep visible with placeholder)
-            const magneticItem = document.getElementById('magnetic-item');
-            const magneticSummary = document.getElementById('magnetic-summary');
-            
-            if (magneticItem) {
-                magneticItem.style.display = 'block';  // Keep visible
-            }
-            if (magneticSummary) {
-                magneticSummary.textContent = '🧲 Magnetic: - µB total';
-            }
-            
-            // Close magnetic details drawer if open
+            // Close magnetic details drawer if open  
             const magneticDetail = document.getElementById('magnetic-detail');
             if (magneticDetail) {
                 magneticDetail.style.display = 'none';
             }
             
-            // Hide magnetic details button for consistency
-            const magneticDetailBtn = document.querySelector('#magnetic-item .detail-btn');
+            // Clear detail tables content
+            const energyDetailsTable = document.getElementById('energy-details-table');
+            if (energyDetailsTable) {
+                energyDetailsTable.innerHTML = '';
+            }
+            
+            const magneticTable = document.getElementById('magnetic-table');
+            if (magneticTable) {
+                magneticTable.innerHTML = '';
+            }
+            
+            // Reset detail buttons text
+            const energyDetailBtn = document.getElementById('energy-detail-btn');
+            if (energyDetailBtn) {
+                energyDetailBtn.innerHTML = 'Details ▼';
+            }
+            
+            const magneticDetailBtn = document.getElementById('magnetic-detail-btn');
             if (magneticDetailBtn) {
-                magneticDetailBtn.style.display = 'none';
-                magneticDetailBtn.innerHTML = 'Details ▼';  // Reset button text
+                magneticDetailBtn.innerHTML = 'Details ▼';
             }
             
             // Hide detailed analysis button
@@ -1501,8 +1607,8 @@ Crystal system: ${data.crystal_system}`;
                 const magmoms = prediction.magmoms_muB;
                 const totalMag = magmoms.reduce((sum, mag) => sum + Math.abs(mag), 0);
                 
-                magneticItem.style.display = 'block';
-                magneticSummary.innerHTML = `🧲 Magnetic: <span class="magnetic-moment">${totalMag.toFixed(3)} µB total</span><button class="copy-btn" id="copy-total-magnetic" onclick="copyTotalMagnetic()" title="Copy: Total Magnetic Moment">📋</button>`;
+                // Update status display system
+                updateStatusDisplay('magnetic', 'calculated', totalMag, true);
                 
                 // Store magnetic data for copy functionality
                 window.currentMagneticData = {
@@ -1519,11 +1625,8 @@ Crystal system: ${data.crystal_system}`;
                 });
                 magneticTable.innerHTML = tableHTML;
                 
-                // Show details button when magnetic data exists
-                const magneticDetailBtn = document.querySelector('#magnetic-item .detail-btn');
-                if (magneticDetailBtn) {
-                    magneticDetailBtn.style.display = 'inline-block';
-                }
+                // Details button is now controlled by unified display system
+                // No need for manual control here
             } else {
                 magneticItem.style.display = 'none';
             }
@@ -1614,6 +1717,10 @@ Crystal system: ${data.crystal_system}`;
                 
                 // Start processing state with animation
                 setCHGNetButtonState('relaxing');
+                
+                // Update display status to calculating
+                updateStatusDisplay('energy', 'calculating');
+                updateStatusDisplay('magnetic', 'calculating');
                 
                 const fmax = parseFloat(document.getElementById('fmax-input').value);
                 const maxSteps = parseInt(document.getElementById('max-steps-input').value);
