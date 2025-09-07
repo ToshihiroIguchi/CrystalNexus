@@ -650,7 +650,7 @@ body {
 }
 
 .button-processing {
-    background: linear-gradient(-45deg, #3498db, #2ecc71, #3498db, #2ecc71);
+    background: linear-gradient(-45deg, #3498db, #5dade2, #2980b9, #3498db);
     background-size: 400% 400%;
     animation: gradientShift 1.5s ease-in-out infinite, pulse 2s ease-in-out infinite;
     color: white;
@@ -691,9 +691,11 @@ body {
 @keyframes pulse {
     0%, 100% { 
         transform: scale(1); 
+        opacity: 1; 
     }
     50% { 
-        transform: scale(1.02); 
+        transform: scale(1.08); 
+        opacity: 0.95; 
     }
 }
 
