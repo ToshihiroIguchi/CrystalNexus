@@ -32,14 +32,19 @@
             background-color: rgba(0,0,0,0.4);
         }
         .chgnet-info-content {
-            background-color: #fefefe;
-            margin: 10% auto;
-            padding: 20px;
-            border: 1px solid #888;
-            border-radius: 8px;
-            width: 80%;
-            max-width: 500px;
+            background-color: #ffffff;
+            margin: 3% auto;
+            padding: 40px;
+            border: 1px solid #d0d0d0;
+            border-radius: 2px;
+            width: 85%;
+            max-width: 900px;
             position: relative;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            font-family: 'Times New Roman', 'Times', serif;
+            line-height: 1.6;
         }
         .chgnet-info-close {
             color: #aaa;
@@ -52,20 +57,84 @@
             color: black;
         }
         .chgnet-links {
-            margin-top: 15px;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #e8e8e8;
+        }
+        .chgnet-links h4 {
+            margin: 0 0 12px 0;
+            color: #2c2c2c;
+            font-size: 16px;
+            font-weight: bold;
+            font-family: 'Times New Roman', 'Times', serif;
         }
         .chgnet-links a {
-            display: inline-block;
-            margin-right: 15px;
-            padding: 8px 16px;
-            background-color: #007bff;
-            color: white;
-            text-decoration: none;
-            border-radius: 4px;
+            display: block;
+            margin: 6px 0;
+            padding: 0;
+            background-color: transparent;
+            color: #2980b9;
+            text-decoration: underline;
+            border-radius: 0px;
             font-size: 14px;
+            font-family: 'Times New Roman', 'Times', serif;
         }
         .chgnet-links a:hover {
-            background-color: #0056b3;
+            background-color: transparent;
+            color: #1c5d8b;
+        }
+        .chgnet-section {
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #e8e8e8;
+        }
+        .chgnet-section:last-child {
+            border-bottom: none;
+        }
+        .chgnet-section h4 {
+            margin: 0 0 14px 0;
+            color: #2c2c2c;
+            font-size: 18px;
+            font-weight: bold;
+            font-family: 'Times New Roman', 'Times', serif;
+        }
+        .chgnet-section h2 {
+            margin: 0 0 30px 0;
+            color: #1a1a1a;
+            font-size: 28px;
+            font-weight: bold;
+            text-align: center;
+            border-bottom: 1px solid #666;
+            padding-bottom: 12px;
+            font-family: 'Times New Roman', 'Times', serif;
+        }
+        .chgnet-section p {
+            margin: 0 0 12px 0;
+            text-align: justify;
+            color: #333;
+        }
+        .citation-box {
+            background: #f9f9f9;
+            padding: 20px;
+            border-radius: 0px;
+            border: 1px solid #ddd;
+            font-family: 'Times New Roman', 'Times', serif;
+            font-size: 14px;
+            line-height: 1.7;
+            margin: 16px 0;
+        }
+        .citation-box p {
+            margin: 0 0 8px 0;
+        }
+        .citation-box p:last-child {
+            margin: 0;
+        }
+        .chgnet-info-content ul {
+            padding-left: 20px;
+        }
+        .chgnet-info-content li {
+            margin: 6px 0;
+            line-height: 1.5;
         }
     </style>
 </head>
@@ -5983,18 +6052,66 @@ Crystal system: ${data.crystal_system}`;
     <div id="chgnetInfoModal" class="chgnet-info-modal">
         <div class="chgnet-info-content">
             <span class="chgnet-info-close" onclick="closeCHGNetInfo()">&times;</span>
-            <h3>About CHGNet</h3>
-            <p>CHGNet is a machine learning interatomic potential for crystal structure analysis. It can predict:</p>
-            <ul>
-                <li>Energy per atom and total energy</li>
-                <li>Forces on atoms</li>
-                <li>Magnetic moments</li>
-                <li>Crystal structure relaxation</li>
-            </ul>
-            <p>CHGNet is trained on Materials Project data and provides fast, accurate predictions for materials science applications.</p>
+            <h2>CHGNet: Charge-informed Graph Neural Network</h2>
+            
+            <div class="chgnet-section">
+                <h4>1. Scientific Foundation</h4>
+                <p>CHGNet (Crystal Hamiltonian Graph Neural Network) is a pretrained universal neural network potential for charge-informed atomistic modeling, developed by Deng et al. (2023). This method represents a significant advancement in machine learning interatomic potentials by incorporating both structural and electronic degrees of freedom through explicit modeling of atomic partial charges and magnetic moments.</p>
+            </div>
+
+            <div class="chgnet-section">
+                <h4>2. Methodology</h4>
+                <p><strong>Graph Neural Network Architecture:</strong> Crystal structures are represented as undirected graphs G = (V, E), with vertices V corresponding to atoms and edges E representing interatomic interactions. The model utilizes a message-passing framework with a distance cutoff radius of 5.0 Å to capture local chemical environments.</p>
+                
+                <p><strong>Multi-task Learning Framework:</strong> CHGNet implements a multi-task learning approach, simultaneously predicting multiple target properties (energy, forces, stress, magnetic moments) through shared representations. The total loss function incorporates task-specific weighting coefficients optimized during training.</p>
+                
+                <p><strong>Universal Potential:</strong> The model covers 89 elements from hydrogen to actinium, trained with approximately 400,000 trainable parameters optimized for computational efficiency while maintaining chemical accuracy.</p>
+            </div>
+
+            <div class="chgnet-section">
+                <h4>3. Training Dataset</h4>
+                <p>The model is trained on 1,580,395 crystal structures from the Materials Project database, encompassing:</p>
+                <ul>
+                    <li>Comprehensive elemental coverage (89 elements: H-Ac)</li>
+                    <li>Diverse crystal systems and space groups with representative sampling</li>
+                    <li>Multiple property targets: energies, forces, stresses, and magnetic moments</li>
+                    <li>Materials spanning metallic, semiconducting, and insulating electronic structures</li>
+                </ul>
+            </div>
+
+            <div class="chgnet-section">
+                <h4>4. Performance Characteristics</h4>
+                
+                <p><strong>Energetic Properties:</strong> Energy predictions achieve mean absolute errors of 29.8 meV/atom relative to DFT calculations, enabling reliable thermodynamic analysis and materials screening applications.</p>
+                
+                <p><strong>Mechanical Properties:</strong> Atomic force predictions demonstrate mean absolute errors of 0.076 eV/Å, suitable for structural relaxation and molecular dynamics simulations with high fidelity.</p>
+                
+                <p><strong>Electronic Properties:</strong> The model provides predictions of site-resolved magnetic moments and partial atomic charges, facilitating electronic structure analysis beyond conventional interatomic potentials.</p>
+                
+                <p><strong>Computational Efficiency:</strong> CHGNet achieves significant acceleration compared to DFT while maintaining near-quantum accuracy, with linear scaling behavior suitable for large supercell calculations.</p>
+            </div>
+
+            <div class="chgnet-section">
+                <h4>5. Applications and Limitations</h4>
+                <p>CHGNet enables rapid screening of materials properties, high-throughput computational materials discovery, and large-scale atomistic simulations previously computationally prohibitive with ab initio methods. The model demonstrates excellent transferability across diverse chemical compositions and crystal structures within the training data domain.</p>
+                
+                <p><strong>Model Limitations:</strong> CHGNet predictions are most reliable within the chemical and structural space of the training data. Recent research has identified systematic errors including energy and force underprediction, tendency to overestimate lattice constants, and underestimate densities due to sampling bias toward near-equilibrium configurations in the training dataset.</p>
+            </div>
+
+            <div class="chgnet-section">
+                <h4>Reference</h4>
+                <div class="citation-box">
+                    <p>Deng, B., Zhong, P., Jun, K. <em>et al.</em> CHGNet as a pretrained universal neural network potential for charge-informed atomistic modelling. <em>Nat. Mach. Intell.</em> <strong>5</strong>, 1031–1041 (2023).</p>
+                    <p>DOI: <a href="https://doi.org/10.1038/s42256-023-00716-3" target="_blank" style="color: #2980b9;">10.1038/s42256-023-00716-3</a></p>
+                </div>
+            </div>
+
             <div class="chgnet-links">
-                <a href="https://www.nature.com/articles/s42256-023-00716-3" target="_blank">📄 Research Paper</a>
-                <a href="https://github.com/CederGroupHub/chgnet" target="_blank">📦 GitHub Repository</a>
+                <h4>External Resources</h4>
+                <a href="https://www.nature.com/articles/s42256-023-00716-3" target="_blank">Nature Machine Intelligence Paper</a>
+                <a href="https://github.com/CederGroupHub/chgnet" target="_blank">GitHub Repository</a>
+                <a href="https://materialsproject.org/" target="_blank">Materials Project Database</a>
+                <a href="https://chgnet.lbl.gov/" target="_blank">Official Documentation</a>
             </div>
         </div>
     </div>
