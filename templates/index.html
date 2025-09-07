@@ -160,9 +160,6 @@
             <a href="/static/user_guide.html" target="_blank" class="help-btn" title="CrystalNexus User Guide - How to use this application">
                 📖 User Guide
             </a>
-            <button class="load-new-cif-btn" id="load-new-cif-btn" onclick="resetAndLoadNewCIF()">
-                🔄 Reset & Load New CIF
-            </button>
         </div>
     </div>
 
@@ -2486,9 +2483,14 @@ Crystal system: ${data.crystal_system}`;
             ).join('');
             
             operationsElement.innerHTML = `
-                <button class="reset-operations-btn" id="reset-operations-btn" disabled title="Reset to supercell state">
-                    🔄 Reset Operations
-                </button>
+                <div style="display: flex; gap: 6px; margin-bottom: 15px;">
+                    <button class="secondary-action" id="reset-operations-btn" disabled title="Reset operations to return to supercell state" style="flex: 1; padding: 6px 10px; font-size: 12px; font-weight: 500;">
+                        🔄 Reset
+                    </button>
+                    <button class="secondary-action" id="load-new-cif-btn" onclick="resetAndLoadNewCIF()" title="Reset everything and load a new CIF file" style="flex: 1; padding: 6px 10px; font-size: 12px; font-weight: 500;">
+                        🆕 New CIF
+                    </button>
+                </div>
                 
                 <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
                     <span style="font-size: 14px; font-weight: bold;">Mode:</span>
