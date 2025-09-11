@@ -1062,6 +1062,10 @@
                             // Continue with existing processing logic
                             window.currentFilename = file.name;
                             displayCrystalInfo(data);
+                            // Reset analysis state for new file
+                            isStructureAnalyzed = false;
+                            currentStructureHash = null;
+                            updateAnalyzeButtonState();
                         } else {
                             showFileLoadError(data.message || 'Failed to process CIF file');
                         }
@@ -1235,6 +1239,10 @@
                             showFileLoadSuccess(file.name);
                             window.currentFilename = file.name;
                             displayCrystalInfo(data);
+                            // Reset analysis state for new file
+                            isStructureAnalyzed = false;
+                            currentStructureHash = null;
+                            updateAnalyzeButtonState();
                         } else {
                             handleFileError({
                                 type: 'SERVER_ERROR',
@@ -1283,15 +1291,86 @@
                     }
                 });
             }
+            
+            // スーパーセル変更の監視
+            const supercellInputs = ['supercell-a', 'supercell-b', 'supercell-c'];
+            supercellInputs.forEach(id => {
+                const input = document.getElementById(id);
+                if (input) {
+                    input.addEventListener('input', markStructureAsChanged);
+                    input.addEventListener('change', markStructureAsChanged);
+                }
+            });
         }
 
+        // === STRUCTURE CHANGE DETECTION === 
+        let currentStructureHash = null;
+        let isStructureAnalyzed = false;
+        
+        function generateStructureHash() {
+            try {
+                const data = {
+                    atoms: window.currentStructureData?.atoms || null,
+                    lattice: window.currentStructureData?.lattice || null,
+                    supercell: {
+                        a: document.getElementById('supercell-a')?.value || '1',
+                        b: document.getElementById('supercell-b')?.value || '1',
+                        c: document.getElementById('supercell-c')?.value || '1'
+                    },
+                    filename: window.currentFilename || null,
+                    // 原子操作の検知のためにフォーミュラも含める
+                    formula: window.currentStructureData?.supercell_info?.formula || null,
+                    // 操作履歴も含める（原子の追加・削除を検知）
+                    operationsHash: window.operationHistory ? JSON.stringify(window.operationHistory) : null
+                };
+                return JSON.stringify(data);
+            } catch (error) {
+                console.error('Error generating structure hash:', error);
+                return null;
+            }
+        }
+        
+        function isStructureChanged() {
+            const newHash = generateStructureHash();
+            return newHash !== currentStructureHash;
+        }
+        
+        function updateAnalyzeButtonState() {
+            const analyzeBtn = document.getElementById('analyze-btn');
+            if (!analyzeBtn) return;
+            
+            if (isStructureAnalyzed && !isStructureChanged()) {
+                // 計算済み + 構造未変更 = グレー表示だが押下可能
+                analyzeBtn.classList.add('button-analyzed');
+                analyzeBtn.classList.remove('button-processing');
+                analyzeBtn.textContent = '🔬 Analyze Structure (Calculated)';
+                analyzeBtn.disabled = false; // 重要: 押下可能
+            } else {
+                // 未計算 or 構造変更 = 通常表示
+                analyzeBtn.classList.remove('button-analyzed');
+                analyzeBtn.classList.remove('button-processing');
+                analyzeBtn.textContent = '🔬 Analyze Structure';
+                analyzeBtn.disabled = false;
+            }
+        }
+        
+        function markStructureAsAnalyzed() {
+            currentStructureHash = generateStructureHash();
+            isStructureAnalyzed = true;
+            updateAnalyzeButtonState();
+        }
+        
+        function markStructureAsChanged() {
+            // 構造が変更された際の処理
+            updateAnalyzeButtonState();
+        }
+        
         function enableCHGNetButtons() {
             const analyzeBtn = document.getElementById('analyze-btn');
             
             if (analyzeBtn) {
                 analyzeBtn.disabled = false;
-                analyzeBtn.textContent = '🔬 Analyze Structure';
-                analyzeBtn.classList.remove('button-processing');
+                updateAnalyzeButtonState(); // 新しい状態管理を使用
             }
             
             // Set status to ready for calculation
@@ -2406,8 +2485,8 @@ Crystal system: ${data.crystal_system}`;
                 // Clear status message after successful analysis
                 clearStatusMessage();
                 
-                // Restore button to normal state
-                setCHGNetButtonState('complete');
+                // Mark structure as analyzed and update button state
+                markStructureAsAnalyzed();
                 
             } catch (error) {
                 console.error('❌ CHGNet analysis failed:', error);
@@ -3225,6 +3304,8 @@ Crystal system: ${data.crystal_system}`;
                         // Re-enable button
                         executeBtn.disabled = false;
                         updateExecuteButton(); // Restore proper text
+                        // 原子操作完了後に構造変更を通知
+                        markStructureAsChanged();
                     }
                 }
             });
@@ -4405,6 +4486,9 @@ Crystal system: ${data.crystal_system}`;
                     showNotification(`Reset complete: ${backendFormula} (Note: Sync issue detected)`, 'warning');
                 }
                 
+                // 構造リセット後に構造変更を通知
+                markStructureAsChanged();
+                
             } catch (error) {
                 console.error('❌ Structure reset failed:', error);
                 showNotification(`Reset failed: ${error.message}. Please refresh the page.`, 'error');
@@ -4418,6 +4502,8 @@ Crystal system: ${data.crystal_system}`;
                     displayStructureOperations(window.currentLabels);
                     updateStructureVisualization();
                     console.log('⚠️ Performed frontend-only fallback reset');
+                    // フォールバックリセット後も構造変更を通知
+                    markStructureAsChanged();
                 } catch (fallbackError) {
                     console.error('❌ Even fallback reset failed:', fallbackError);
                 }
@@ -4975,6 +5061,11 @@ Crystal system: ${data.crystal_system}`;
             window.currentSupercellSize = null;
             window.originalLabels = [];
             window.currentLabels = [];
+            
+            // Reset analysis state
+            isStructureAnalyzed = false;
+            currentStructureHash = null;
+            updateAnalyzeButtonState();
             window.currentAnalysisData = null;
             window.currentStructureData = null;
             window.operationHistory = [];
