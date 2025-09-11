@@ -26,6 +26,151 @@
             --main-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
         }
         
+        /* Drop Zone Styles */
+        .drop-zone {
+            position: relative;
+            min-height: 80px;
+            border: 2px dashed #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            transition: all 0.3s ease;
+            background-color: #fafafa;
+        }
+        
+        .drop-zone.drag-over {
+            border-color: #3498db;
+            background-color: rgba(52, 152, 219, 0.05);
+            transform: scale(1.02);
+            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.2);
+        }
+        
+        .drop-zone.drop-success {
+            animation: drop-success 0.6s ease;
+            border-color: #27ae60;
+        }
+        
+        .drop-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(52, 152, 219, 0.1);
+            border: 2px solid #3498db;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: #2980b9;
+            pointer-events: none;
+        }
+        
+        .drop-instruction {
+            margin: 0 0 10px 0;
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .drop-message {
+            font-size: 16px;
+            color: #2980b9;
+        }
+        
+        @keyframes drop-success {
+            0% { 
+                transform: scale(1.02); 
+                background-color: rgba(52, 152, 219, 0.05); 
+            }
+            50% { 
+                transform: scale(1.05); 
+                background-color: rgba(46, 204, 113, 0.1); 
+            }
+            100% { 
+                transform: scale(1); 
+                background-color: rgba(46, 204, 113, 0.05); 
+            }
+        }
+        
+        /* File Status Styles */
+        .file-status-area {
+            margin-top: 10px;
+        }
+        
+        .file-status {
+            padding: 8px 12px;
+            margin: 8px 0;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+        }
+        
+        .file-status.loading {
+            background-color: #f8f9fa;
+            border: 1px solid #e9ecef;
+            color: #495057;
+        }
+        
+        .file-status.success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        
+        .file-status.error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        
+        .loading-spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #3498db;
+            border-radius: 50%;
+            display: inline-block;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .error-details {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 6px;
+            padding: 12px;
+            margin: 10px 0;
+        }
+        
+        .error-message {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
+        
+        .error-suggestions {
+            font-size: 12px;
+            color: #856404;
+        }
+        
+        .error-suggestions ul {
+            margin: 4px 0 0 20px;
+            padding-left: 0;
+        }
+        
+        .status-icon {
+            font-size: 14px;
+        }
+        
         .chgnet-info-modal {
             display: none;
             position: fixed;
@@ -278,75 +423,99 @@
     <!-- Modal Window -->
     <div id="cifModal" class="modal">
         <div class="modal-content">
-            <div class="cif-modal-header">
+            <div class="cif-modal-header" style="grid-area: header;">
                 Select CIF File
             </div>
             
-            <div class="file-selection">
-                <div class="radio-option selected" data-value="sample">
-                    <input type="radio" name="file-source" value="sample" checked id="radio-sample">
-                    <label for="radio-sample">Use sample CIF file</label>
-                </div>
-                <div class="file-input-section">
-                    <select id="sampleFileSelect">
-                        <option value="">Loading sample files...</option>
-                    </select>
-                </div>
-            </div>
-            
-            <div class="file-selection">
-                <div class="radio-option" data-value="upload">
-                    <input type="radio" name="file-source" value="upload" id="radio-upload">
-                    <label for="radio-upload">Upload your own CIF file</label>
-                </div>
-                <div class="file-input-section">
-                    <input type="file" id="uploadFile" accept=".cif" disabled>
-                </div>
-            </div>
-            
-            <div id="crystalInfo" class="crystal-info hidden">
-                <div class="expand-toggle" id="expandToggle">▼ Details</div>
-                <strong>Crystal Information:</strong>
-                <button class="copy-btn" id="copy-crystal-info" onclick="copyAllCrystalInfo()" title="Copy: All Crystal Information" style="margin-left: 8px;">📋</button>
-                <div id="infoContent"></div>
-            </div>
-            
-            <div id="supercellSection" class="supercell-section hidden">
-                <div class="supercell-title">Supercell Configuration</div>
-                <div class="supercell-inputs">
-                    <div class="supercell-input-group">
-                        <label for="supercell-a">a-direction:</label>
-                        <input type="number" id="supercell-a" value="1" min="1" max="10">
+            <div class="modal-main" style="grid-area: main;">
+                <div class="file-selection">
+                    <div class="radio-option selected" data-value="sample">
+                        <input type="radio" name="file-source" value="sample" checked id="radio-sample">
+                        <label for="radio-sample">Use sample CIF file</label>
                     </div>
-                    <div class="supercell-input-group">
-                        <label for="supercell-b">b-direction:</label>
-                        <input type="number" id="supercell-b" value="1" min="1" max="10">
-                    </div>
-                    <div class="supercell-input-group">
-                        <label for="supercell-c">c-direction:</label>
-                        <input type="number" id="supercell-c" value="1" min="1" max="10">
+                    <div class="file-input-section">
+                        <select id="sampleFileSelect">
+                            <option value="">Loading sample files...</option>
+                        </select>
                     </div>
                 </div>
                 
-                <!-- System Limits Settings -->
-                <div class="system-limits-container" style="margin-top: 15px;">
-                    <div class="system-limits-toggle" style="cursor: pointer; font-size: 12px; color: #666; display: flex; align-items: center; justify-content: space-between; padding: 8px 0;">
-                        <span>⚙️ System Limits</span>
-                        <span id="system-limits-arrow" style="font-size: 10px; transition: transform 0.2s;">▼</span>
+                <div class="file-selection">
+                    <div class="radio-option" data-value="upload">
+                        <input type="radio" name="file-source" value="upload" id="radio-upload">
+                        <label for="radio-upload">Upload your own CIF file</label>
                     </div>
-                    <div id="system-limits-panel" style="display: none; margin-top: 8px; padding: 12px; background-color: #f8f9fa; border-radius: 4px; border-left: 3px solid #3498db;">
-                        <div style="margin-bottom: 10px;">
-                            <label for="modal-max-atoms-limit" style="font-size: 12px; color: #555; display: block; margin-bottom: 5px;">Max total atoms:</label>
-                            <input type="number" id="modal-max-atoms-limit" value="200" min="50" max="2000" step="10" style="width: 80px; font-size: 12px; padding: 4px; border: 1px solid #ddd; border-radius: 3px;">
+                    <div class="file-input-section drop-zone" id="uploadDropZone">
+                        <div class="drop-zone-content">
+                            <p class="drop-instruction">📁 Drop CIF file here or</p>
+                            <div class="custom-file-input-wrapper">
+                                <input type="file" id="uploadFile" accept=".cif" disabled style="display: none;">
+                                <button type="button" id="customFileButton" class="custom-file-button" disabled>
+                                    📂 Select CIF File
+                                </button>
+                            </div>
                         </div>
-                        <div style="font-size: 10px; color: #888;">
+                        <div class="drop-overlay" id="dropOverlay" style="display: none;">
+                            <div class="drop-message">📎 Drop file to upload</div>
+                        </div>
+                        <div id="fileStatusArea" class="file-status-area"></div>
+                    </div>
+                </div>
+                
+                <!-- Settings Section -->
+                <div id="settingsSection" class="settings-section hidden">
+                    <div class="settings-header">
+                        <span>⚙️ Settings</span>
+                        <button class="advanced-settings-btn" id="advancedSettingsBtn">
+                            Advanced ▼
+                        </button>
+                    </div>
+                    
+                    <div id="supercellSection" class="supercell-main">
+                        <div class="supercell-title">Supercell Configuration</div>
+                        <div class="supercell-inputs-inline-labeled">
+                            <div class="supercell-axis-group">
+                                <label>a:</label>
+                                <input type="number" id="supercell-a" value="1" min="1" max="10">
+                            </div>
+                            <div class="supercell-axis-group">
+                                <label>b:</label>
+                                <input type="number" id="supercell-b" value="1" min="1" max="10">
+                            </div>
+                            <div class="supercell-axis-group">
+                                <label>c:</label>
+                                <input type="number" id="supercell-c" value="1" min="1" max="10">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Advanced Settings Panel -->
+                    <div id="advancedSettingsPanel" class="advanced-settings-panel" style="display: none;">
+                        <div class="advanced-setting-item">
+                            <label for="modal-max-atoms-limit">Max total atoms:</label>
+                            <input type="number" id="modal-max-atoms-limit" value="200" min="50" max="2000" step="10">
+                        </div>
+                        <div class="advanced-setting-note">
                             Higher limits may slow down analysis and visualization
                         </div>
                     </div>
                 </div>
+                
             </div>
             
-            <button id="confirmButton" class="button" disabled>Confirm</button>
+            <div class="modal-sidebar" style="grid-area: sidebar;">
+                <div id="crystalInfo" class="crystal-info-sidebar hidden">
+                    <div class="crystal-info-header">
+                        <strong style="font-size: 13px;">Crystal Information</strong>
+                        <button class="copy-btn" id="copy-crystal-info" onclick="copyAllCrystalInfo()" title="Copy: All Crystal Information">📋</button>
+                    </div>
+                    <div id="infoContent" class="crystal-info-content"></div>
+                </div>
+            </div>
+            
+            <div class="modal-confirm" style="grid-area: confirm;">
+                <button id="confirmButton" class="button" disabled>Confirm</button>
+            </div>
         </div>
     </div>
 
@@ -509,6 +678,7 @@
             loadCHGnetElements();
             setupEventListeners();
             setupCHGNetEventListeners();
+            setupDropZoneEventListeners();
             
             // Initialize unified display system
             initializeDisplays();
@@ -534,13 +704,16 @@
             document.querySelectorAll('input[name="file-source"]').forEach(radio => {
                 radio.addEventListener('change', function() {
                     const uploadFile = document.getElementById('uploadFile');
+                    const customFileButton = document.getElementById('customFileButton');
                     const sampleSelect = document.getElementById('sampleFileSelect');
                     
                     if (this.value === 'upload') {
                         uploadFile.disabled = false;
+                        customFileButton.disabled = false;
                         sampleSelect.disabled = true;
                     } else {
                         uploadFile.disabled = true;
+                        customFileButton.disabled = true;
                         sampleSelect.disabled = false;
                     }
                     
@@ -566,6 +739,11 @@
                 }
             });
 
+            // Custom file button click handler
+            document.getElementById('customFileButton').addEventListener('click', function() {
+                document.getElementById('uploadFile').click();
+            });
+
             // Confirm button
             document.getElementById('confirmButton').addEventListener('click', function() {
                 if (window.currentCrystalData) {
@@ -573,19 +751,18 @@
                 }
             });
 
-            // System Limits toggle
-            const systemLimitsToggle = document.querySelector('.system-limits-toggle');
-            const systemLimitsPanel = document.getElementById('system-limits-panel');
-            const systemLimitsArrow = document.getElementById('system-limits-arrow');
+            // Advanced Settings toggle
+            const advancedSettingsBtn = document.getElementById('advancedSettingsBtn');
+            const advancedSettingsPanel = document.getElementById('advancedSettingsPanel');
             
-            if (systemLimitsToggle && systemLimitsPanel && systemLimitsArrow) {
-                systemLimitsToggle.addEventListener('click', function() {
-                    if (systemLimitsPanel.style.display === 'none') {
-                        systemLimitsPanel.style.display = 'block';
-                        systemLimitsArrow.style.transform = 'rotate(180deg)';
+            if (advancedSettingsBtn && advancedSettingsPanel) {
+                advancedSettingsBtn.addEventListener('click', function() {
+                    if (advancedSettingsPanel.style.display === 'none') {
+                        advancedSettingsPanel.style.display = 'block';
+                        this.innerHTML = 'Advanced ▲';
                     } else {
-                        systemLimitsPanel.style.display = 'none';
-                        systemLimitsArrow.style.transform = 'rotate(0deg)';
+                        advancedSettingsPanel.style.display = 'none';
+                        this.innerHTML = 'Advanced ▼';
                     }
                 });
             }
@@ -728,14 +905,372 @@
                 </div>
             `;
             
-            const crystalInfoElement = document.getElementById('crystalInfo');
-            crystalInfoElement.classList.remove('hidden');
-            crystalInfoElement.classList.add('summary'); // Start in collapsed state
-            document.getElementById('supercellSection').classList.remove('hidden');
+            // Show crystal info only if valid data exists
+            showCrystalInfoConditionally(data);
+            document.getElementById('settingsSection').classList.remove('hidden');
             document.getElementById('confirmButton').disabled = false;
             
             // Setup expand/collapse functionality
             setupCrystalInfoToggle();
+        }
+        
+        function showCrystalInfoConditionally(data) {
+            const crystalInfoElement = document.getElementById('crystalInfo');
+            
+            if (data && hasValidCrystalData(data)) {
+                crystalInfoElement.classList.remove('hidden');
+                crystalInfoElement.classList.add('summary'); // Start in collapsed state
+                crystalInfoElement.style.display = 'block';
+            } else {
+                hideCrystalInfoCompletely();
+            }
+        }
+        
+        function hasValidCrystalData(data) {
+            return data && (data.formula || data.space_group || data.lattice_parameters || 
+                   data.crystal_system || data.volume || data.density);
+        }
+        
+        function hideCrystalInfoCompletely() {
+            const crystalInfoElement = document.getElementById('crystalInfo');
+            crystalInfoElement.classList.add('hidden');
+            crystalInfoElement.style.display = 'none';
+        }
+        
+        function showCrystalInfoElement() {
+            const crystalInfoElement = document.getElementById('crystalInfo');
+            crystalInfoElement.classList.remove('hidden');
+            crystalInfoElement.style.display = 'block';
+        }
+        
+        // Drag and Drop functionality
+        function setupDropZoneEventListeners() {
+            const dropZone = document.getElementById('uploadDropZone');
+            const fileInput = document.getElementById('uploadFile');
+            const dropOverlay = document.getElementById('dropOverlay');
+            
+            if (!dropZone || !fileInput || !dropOverlay) return;
+            
+            // Prevent default drag behaviors
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, preventDefaults, false);
+                document.body.addEventListener(eventName, preventDefaults, false);
+            });
+            
+            // Highlight drop zone when item is dragged over it
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropZone.addEventListener(eventName, handleDragEnter, false);
+            });
+            
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, handleDragLeave, false);
+            });
+            
+            // Handle dropped files
+            dropZone.addEventListener('drop', handleFileDrop, false);
+        }
+        
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        
+        function handleDragEnter(e) {
+            const dropZone = document.getElementById('uploadDropZone');
+            const dropOverlay = document.getElementById('dropOverlay');
+            const uploadRadio = document.getElementById('radio-upload');
+            
+            if (uploadRadio.checked) {
+                dropZone.classList.add('drag-over');
+                dropOverlay.style.display = 'flex';
+            }
+        }
+        
+        function handleDragLeave(e) {
+            const dropZone = document.getElementById('uploadDropZone');
+            const dropOverlay = document.getElementById('dropOverlay');
+            
+            // Check if we're leaving the drop zone area completely
+            if (!dropZone.contains(e.relatedTarget)) {
+                dropZone.classList.remove('drag-over');
+                dropOverlay.style.display = 'none';
+            }
+        }
+        
+        function handleFileDrop(e) {
+            const dropZone = document.getElementById('uploadDropZone');
+            const dropOverlay = document.getElementById('dropOverlay');
+            const fileInput = document.getElementById('uploadFile');
+            const uploadRadio = document.getElementById('radio-upload');
+            
+            dropZone.classList.remove('drag-over');
+            dropOverlay.style.display = 'none';
+            
+            const files = e.dataTransfer.files;
+            
+            if (files.length > 0) {
+                const file = files[0];
+                
+                // Auto-select upload radio button
+                uploadRadio.checked = true;
+                fileInput.disabled = false;
+                
+                // Update file input
+                const dataTransfer = new DataTransfer();
+                dataTransfer.items.add(file);
+                fileInput.files = dataTransfer.files;
+                
+                // Show drop success animation
+                dropZone.classList.add('drop-success');
+                setTimeout(() => {
+                    dropZone.classList.remove('drop-success');
+                }, 600);
+                
+                // Process the file
+                handleFileSelection(file);
+                
+                // Show file status
+                showFileLoadingStatus();
+            }
+        }
+        
+        function handleFileSelection(file) {
+            if (file) {
+                processCIFFileEnhanced(file);
+            } else {
+                showFileLoadError('No file selected');
+            }
+        }
+        
+        function processCIFFile(file) {
+            const reader = new FileReader();
+            
+            reader.onload = function(e) {
+                try {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    
+                    // Process the CIF file through existing upload logic
+                    fetch('/api/upload-cif', {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            showFileLoadSuccess(file.name);
+                            // Continue with existing processing logic
+                            window.currentFilename = file.name;
+                            displayCrystalInfo(data);
+                        } else {
+                            showFileLoadError(data.message || 'Failed to process CIF file');
+                        }
+                    })
+                    .catch(error => {
+                        showFileLoadError('Network error: ' + error.message);
+                    });
+                } catch (error) {
+                    showFileLoadError('Error reading file: ' + error.message);
+                }
+            };
+            
+            reader.onerror = function() {
+                showFileLoadError('Error reading file');
+            };
+            
+            reader.readAsText(file);
+        }
+        
+        // Visual Feedback Functions
+        function showFileLoadingStatus() {
+            const statusArea = document.getElementById('fileStatusArea');
+            const statusHTML = `
+                <div class="file-status loading">
+                    <div class="loading-spinner"></div>
+                    <span>Reading CIF file...</span>
+                </div>
+            `;
+            statusArea.innerHTML = statusHTML;
+        }
+        
+        function showFileLoadSuccess(filename) {
+            const statusArea = document.getElementById('fileStatusArea');
+            const statusHTML = `
+                <div class="file-status success">
+                    <span class="status-icon">✅</span>
+                    <span>Successfully loaded: ${filename}</span>
+                </div>
+            `;
+            statusArea.innerHTML = statusHTML;
+            
+            // Auto-clear success message after 3 seconds
+            setTimeout(() => {
+                clearFileStatus();
+            }, 3000);
+        }
+        
+        function showFileLoadError(message) {
+            const statusArea = document.getElementById('fileStatusArea');
+            const statusHTML = `
+                <div class="file-status error">
+                    <span class="status-icon">❌</span>
+                    <span>Error: ${message}</span>
+                </div>
+            `;
+            statusArea.innerHTML = statusHTML;
+        }
+        
+        function clearFileStatus() {
+            const statusArea = document.getElementById('fileStatusArea');
+            if (statusArea) {
+                statusArea.innerHTML = '';
+            }
+        }
+        
+        // Enhanced Error Handling
+        function handleFileError(error, context = {}) {
+            let errorMessage = 'Unknown error occurred';
+            let suggestions = [];
+            
+            switch(error.type) {
+                case 'FILE_TOO_LARGE':
+                    errorMessage = `File is too large (${error.size}MB). Maximum size is 50MB.`;
+                    suggestions = ['Try a smaller CIF file', 'Compress the file if possible'];
+                    break;
+                    
+                case 'FILE_READ_ERROR':
+                    errorMessage = 'Could not read the file. The file may be corrupted.';
+                    suggestions = ['Check if the file is accessible', 'Try uploading again'];
+                    break;
+                    
+                case 'NETWORK_ERROR':
+                    errorMessage = 'Network error occurred during upload.';
+                    suggestions = ['Check your internet connection', 'Try again in a moment'];
+                    break;
+                    
+                case 'SERVER_ERROR':
+                    errorMessage = 'Server error occurred while processing the file.';
+                    suggestions = ['Try again later', 'Contact system administrator if problem persists'];
+                    break;
+                    
+                case 'INVALID_FORMAT':
+                    errorMessage = 'Invalid CIF file format.';
+                    suggestions = ['Ensure the file is a valid CIF format', 'Check file contents in text editor'];
+                    break;
+                    
+                default:
+                    errorMessage = error.message || 'An unexpected error occurred';
+                    suggestions = ['Try uploading the file again'];
+            }
+            
+            showDetailedErrorMessage(errorMessage, suggestions);
+        }
+        
+        function showDetailedErrorMessage(message, suggestions) {
+            const statusArea = document.getElementById('fileStatusArea');
+            const suggestionsHTML = suggestions.map(s => `<li>${s}</li>`).join('');
+            
+            const errorHTML = `
+                <div class="error-details">
+                    <div class="error-message">
+                        <span class="status-icon">⚠️</span>
+                        ${message}
+                    </div>
+                    <div class="error-suggestions">
+                        <strong>Try these solutions:</strong>
+                        <ul>${suggestionsHTML}</ul>
+                    </div>
+                </div>
+            `;
+            
+            statusArea.innerHTML = errorHTML;
+        }
+        
+        // Enhanced file processing with better error handling
+        function processCIFFileEnhanced(file) {
+            // Basic file validation
+            if (file.size > 50 * 1024 * 1024) {
+                handleFileError({
+                    type: 'FILE_TOO_LARGE',
+                    size: (file.size / 1024 / 1024).toFixed(1)
+                });
+                return;
+            }
+            
+            if (file.size === 0) {
+                handleFileError({
+                    type: 'FILE_READ_ERROR',
+                    message: 'File appears to be empty'
+                });
+                return;
+            }
+            
+            if (!file.name.toLowerCase().endsWith('.cif')) {
+                handleFileError({
+                    type: 'INVALID_FORMAT',
+                    message: 'File must have .cif extension'
+                });
+                return;
+            }
+            
+            const reader = new FileReader();
+            
+            reader.onload = function(e) {
+                try {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    
+                    fetch('/api/upload-cif', {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`Server error: ${response.status}`);
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        if (data.success) {
+                            showFileLoadSuccess(file.name);
+                            window.currentFilename = file.name;
+                            displayCrystalInfo(data);
+                        } else {
+                            handleFileError({
+                                type: 'SERVER_ERROR',
+                                message: data.message || 'Failed to process CIF file'
+                            });
+                        }
+                    })
+                    .catch(error => {
+                        if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+                            handleFileError({
+                                type: 'NETWORK_ERROR',
+                                message: 'Cannot connect to server'
+                            });
+                        } else {
+                            handleFileError({
+                                type: 'SERVER_ERROR',
+                                message: error.message
+                            });
+                        }
+                    });
+                } catch (error) {
+                    handleFileError({
+                        type: 'FILE_READ_ERROR',
+                        message: error.message
+                    });
+                }
+            };
+            
+            reader.onerror = function() {
+                handleFileError({
+                    type: 'FILE_READ_ERROR',
+                    message: 'Failed to read file'
+                });
+            };
+            
+            reader.readAsText(file);
         }
 
         function setupCHGNetEventListeners() {
@@ -2235,7 +2770,7 @@ Crystal system: ${data.crystal_system}`;
             crystalInfoElement.classList.add('hidden');
             crystalInfoElement.classList.remove('detailed');
             crystalInfoElement.classList.add('summary');
-            document.getElementById('supercellSection').classList.add('hidden');
+            document.getElementById('settingsSection').classList.add('hidden');
             document.getElementById('confirmButton').disabled = true;
         }
         
@@ -4420,6 +4955,9 @@ Crystal system: ${data.crystal_system}`;
             
             // Clear all current data and reset application state
             resetApplicationState();
+            
+            // Initialize crystal info state when modal opens
+            hideCrystalInfoCompletely();
             
             // Show the CIF selection modal
             const modal = document.getElementById('cifModal');
