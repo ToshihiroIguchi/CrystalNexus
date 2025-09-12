@@ -831,13 +831,23 @@
 
         async function analyzeUploadedFile(file) {
             try {
+                // Show loading status for drag & drop
+                showFileLoadingStatus();
+                
                 const formData = new FormData();
                 formData.append('file', file);
                 
+                // Add timeout to prevent infinite loading
+                const timeoutController = new AbortController();
+                const timeoutId = setTimeout(() => timeoutController.abort(), 30000); // 30 second timeout
+                
                 const response = await fetch('/api/analyze-cif-upload', {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    signal: timeoutController.signal
                 });
+                
+                clearTimeout(timeoutId);
                 
                 if (!response.ok) {
                     // Try to get detailed error message from response
@@ -863,10 +873,30 @@
                 }
                 
                 const data = await response.json();
+                
+                // Show success status
+                showFileLoadSuccess(file.name);
+                
                 displayCrystalInfo(data);
+                
+                // Reset analysis state for new file (intelligent button system)
+                if (typeof isStructureAnalyzed !== 'undefined') {
+                    isStructureAnalyzed = false;
+                    currentStructureHash = null;
+                    updateAnalyzeButtonState();
+                }
             } catch (error) {
                 console.error('Error analyzing uploaded file:', error);
-                alert(`Error analyzing CIF file: ${error.message}`);
+                
+                let errorMessage = error.message;
+                if (error.name === 'AbortError') {
+                    errorMessage = 'File analysis timeout. Please try with a smaller file or check your connection.';
+                } else if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+                    errorMessage = 'Cannot connect to server. Please check if the server is running.';
+                }
+                
+                // Show error status instead of alert
+                showFileLoadError(errorMessage);
             }
         }
 
@@ -1028,15 +1058,13 @@
                 
                 // Process the file
                 handleFileSelection(file);
-                
-                // Show file status
-                showFileLoadingStatus();
             }
         }
         
         function handleFileSelection(file) {
             if (file) {
-                processCIFFileEnhanced(file);
+                // Use existing upload file processing instead of enhanced version
+                analyzeUploadedFile(file);
             } else {
                 showFileLoadError('No file selected');
             }
@@ -1190,7 +1218,7 @@
             statusArea.innerHTML = errorHTML;
         }
         
-        // Enhanced file processing with better error handling
+        // Enhanced file processing with client-side handling
         function processCIFFileEnhanced(file) {
             // Basic file validation
             if (file.size > 50 * 1024 * 1024) {
@@ -1221,12 +1249,27 @@
             
             reader.onload = function(e) {
                 try {
-                    const formData = new FormData();
-                    formData.append('file', file);
+                    const cifContent = e.target.result;
                     
-                    fetch('/api/upload-cif', {
+                    // Basic CIF content validation
+                    if (!cifContent.includes('data_') || cifContent.trim().length < 50) {
+                        handleFileError({
+                            type: 'INVALID_FORMAT',
+                            message: 'Invalid CIF format - missing data block'
+                        });
+                        return;
+                    }
+                    
+                    // Use existing sample processing endpoint with CIF content
+                    fetch('/api/analyze-cif-sample', {
                         method: 'POST',
-                        body: formData
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            filename: file.name,
+                            cif_content: cifContent
+                        })
                     })
                     .then(response => {
                         if (!response.ok) {
