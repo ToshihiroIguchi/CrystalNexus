@@ -404,15 +404,17 @@
                             ⚠️ Structure modified - Analysis required
                         </div>
 
-                        <!-- Detailed Analysis Button -->
-                        <button class="detail-analysis-btn" id="detailAnalysisBtn" onclick="openAnalysisModal()" style="display: none;">
-                            📊 Detailed Analysis
-                        </button>
-                        
-                        <!-- Download Analysis Button -->
-                        <button class="detail-analysis-btn" id="downloadAnalysisBtn" onclick="downloadAnalysisData()" style="display: none;">
-                            💾 Download Analysis
-                        </button>
+                        <!-- Analysis Actions -->
+                        <div id="analysisActions" style="display: none;">
+                            <div style="display: flex; gap: 6px; margin-bottom: 15px;">
+                                <button class="secondary-action" id="detailAnalysisBtn" onclick="openAnalysisModal()" style="flex: 1; padding: 6px 10px; font-size: 12px; font-weight: 500; background: #3498db !important; border: none !important;">
+                                    📊 Details
+                                </button>
+                                <button class="secondary-action" id="downloadAnalysisBtn" onclick="downloadAnalysisData()" style="flex: 1; padding: 6px 10px; font-size: 12px; font-weight: 500; background: #3498db !important; border: none !important;">
+                                    💾 Export
+                                </button>
+                            </div>
+                        </div>
                         
                     </div>
                 </div>
@@ -1562,9 +1564,8 @@
                 console.log('Data being stored:', data);
                 window.currentAnalysisData = data;
                 console.log('currentAnalysisData set to:', window.currentAnalysisData);
-                document.getElementById('detailAnalysisBtn').style.display = 'block';
-                document.getElementById('downloadAnalysisBtn').style.display = 'block';
-                console.log('Detail analysis button displayed');
+                document.getElementById('analysisActions').style.display = 'flex';
+                console.log('Analysis actions displayed');
             } else {
                 console.log('Not a relaxation, skipping analysis data storage');
             }
@@ -1698,10 +1699,9 @@
             }
             
             // Hide detailed analysis button
-            const detailAnalysisBtn = document.getElementById('detailAnalysisBtn');
-            if (detailAnalysisBtn) {
-                detailAnalysisBtn.style.display = 'none';
-                document.getElementById('downloadAnalysisBtn').style.display = 'none';
+            const analysisActions = document.getElementById('analysisActions');
+            if (analysisActions) {
+                analysisActions.style.display = 'none';
             }
             
             // Reset calculation time display

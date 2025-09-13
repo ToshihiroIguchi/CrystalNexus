@@ -868,6 +868,11 @@ body {
     position: relative;
 }
 
+/* Override border for analysis actions to achieve visual separation */
+.analysis-actions .detail-analysis-btn {
+    border: none !important;
+}
+
 .special-action:hover:not(:disabled), .detail-analysis-btn:hover:not(:disabled) {
     background: #2980b9 !important;
     border-color: #2980b9 !important;
@@ -1731,6 +1736,28 @@ body {
 .detail-analysis-btn:hover {
     transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
+}
+
+/* Analysis Actions Layout - matching Reset & New CIF button spacing */
+.analysis-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 10px;
+    justify-content: flex-start;
+}
+
+.analysis-actions .detail-analysis-btn {
+    flex: 1;
+    margin-top: 0;
+    padding: 8px 12px;
+}
+
+/* Responsive layout for analysis actions */
+@media (max-width: 480px) {
+    .analysis-actions {
+        flex-direction: column;
+        gap: 6px;
+    }
 }
 
 .status-message {
