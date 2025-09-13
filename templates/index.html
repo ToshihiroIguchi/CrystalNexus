@@ -6184,24 +6184,24 @@ Crystal system: ${data.crystal_system}`;
                                window.currentStructureInfo?.formula ||
                                'N/A';
                 
-                // Try multiple possible paths for energy
+                // Try multiple possible paths for energy (preserve full precision)
                 let energy = 'N/A';
                 if (data.final_prediction?.total_energy_eV !== undefined) {
-                    energy = data.final_prediction.total_energy_eV.toFixed(3);
+                    energy = data.final_prediction.total_energy_eV.toString();
                 } else if (window.energyAnalysisData?.final?.totalEnergy !== undefined) {
-                    energy = window.energyAnalysisData.final.totalEnergy.toFixed(3);
+                    energy = window.energyAnalysisData.final.totalEnergy.toString();
                 } else if (data.final_prediction?.energy_eV_per_atom !== undefined) {
                     const numAtoms = data.structure_info?.num_atoms || data.final_prediction.forces_eV_per_A?.length || 1;
-                    energy = (data.final_prediction.energy_eV_per_atom * numAtoms).toFixed(3);
+                    energy = (data.final_prediction.energy_eV_per_atom * numAtoms).toString();
                 }
                 
-                // Try multiple possible paths for magnetic moment
+                // Try multiple possible paths for magnetic moment (preserve full precision)
                 let magnetic = 'N/A';
                 if (data.final_prediction?.magmoms !== undefined && Array.isArray(data.final_prediction.magmoms)) {
                     const totalMag = data.final_prediction.magmoms.reduce((sum, mag) => sum + Math.abs(mag), 0);
-                    magnetic = totalMag.toFixed(2);
+                    magnetic = totalMag.toString();
                 } else if (window.currentMagneticData?.totalMagnetic !== undefined) {
-                    magnetic = window.currentMagneticData.totalMagnetic.toFixed(2);
+                    magnetic = window.currentMagneticData.totalMagnetic.toString();
                 }
                 
                 console.log('Extracted values:', {formula, energy, magnetic});
