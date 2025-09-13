@@ -445,7 +445,7 @@ async def periodic_cleanup_task():
 
 # Security functions
 def safe_filename(filename: str) -> str:
-    """Secure filename (path traversal protection)"""
+    """Secure filename (path traversal protection) - legacy function for backward compatibility"""
     if not filename:
         raise ValueError("Filename cannot be empty")
     
@@ -461,6 +461,30 @@ def safe_filename(filename: str) -> str:
         raise ValueError("Only CIF files are allowed")
     
     return safe_name
+
+def safe_path(filepath: str) -> str:
+    """Secure path validation for subdirectories (supports folder structure)"""
+    if not filepath:
+        raise ValueError("Filepath cannot be empty")
+    
+    # Path traversal attack prevention
+    if '..' in filepath or filepath.startswith('/') or filepath.startswith('\\'):
+        raise ValueError("Invalid path: path traversal attempt detected")
+    
+    # Normalize path separators
+    normalized_path = filepath.replace('\\', '/')
+    
+    # Check each path component
+    path_parts = normalized_path.split('/')
+    for part in path_parts:
+        if not part or part in ['.', '..']:
+            raise ValueError("Invalid path component")
+    
+    # Final file must be CIF format
+    if not path_parts[-1].lower().endswith('.cif'):
+        raise ValueError("Only CIF files are allowed")
+    
+    return normalized_path
 
 def validate_supercell_size(supercell_size: List[int]) -> List[int]:
     """Validate supercell size"""
@@ -750,10 +774,42 @@ async def apply_atomic_operations(request: dict):
 @app.get("/api/sample-cif-files")
 async def get_sample_cif_files():
     try:
-        cif_files = [f.name for f in SAMPLE_CIF_DIR.glob("*.cif")]
-        return {"files": cif_files}
+        def scan_directory_recursive(base_path: Path, current_path: Path = None):
+            """Recursively scan directory to generate hierarchical structure"""
+            if current_path is None:
+                current_path = base_path
+            
+            structure = {"files": [], "subdirs": {}}
+            
+            # Get CIF files in current directory
+            for cif_file in current_path.glob("*.cif"):
+                relative_path = cif_file.relative_to(base_path)
+                structure["files"].append({
+                    "name": cif_file.name,
+                    "path": str(relative_path).replace("\\", "/"),  # Windows compatibility
+                    "display_name": cif_file.stem  # Without extension
+                })
+            
+            # Recursively scan subdirectories
+            for subdir in current_path.iterdir():
+                if subdir.is_dir() and not subdir.name.startswith('.'):
+                    subdir_structure = scan_directory_recursive(base_path, subdir)
+                    if subdir_structure["files"] or subdir_structure["subdirs"]:
+                        structure["subdirs"][subdir.name] = subdir_structure
+            
+            return structure
+        
+        # Dynamically scan sample_cif directory
+        directory_structure = scan_directory_recursive(SAMPLE_CIF_DIR)
+        
+        return {
+            "structure": directory_structure,
+            "scan_time": time.time(),
+            "base_path": str(SAMPLE_CIF_DIR)
+        }
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading sample CIF files: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error scanning sample CIF files: {str(e)}")
 
 @app.post("/api/analyze-cif-sample")
 async def analyze_sample_cif(data: dict):
@@ -762,15 +818,21 @@ async def analyze_sample_cif(data: dict):
         if not filename:
             raise HTTPException(status_code=400, detail="Filename is required")
         
-        # Secure filename validation
-        safe_name = safe_filename(filename)
-        file_path = SAMPLE_CIF_DIR / safe_name
+        # Secure path validation (supports subdirectories)
+        safe_path_str = safe_path(filename)
+        file_path = SAMPLE_CIF_DIR / safe_path_str
+        
+        # Additional security check: ensure path is within sample_cif directory
+        resolved_path = file_path.resolve()
+        base_path = SAMPLE_CIF_DIR.resolve()
+        if not str(resolved_path).startswith(str(base_path)):
+            raise ValueError("Path outside sample directory")
         
         if not file_path.exists():
             raise HTTPException(status_code=404, detail="CIF file not found")
         
         result = await analyze_cif_file(file_path)
-        result["filename"] = safe_name
+        result["filename"] = safe_path_str
         
         # Store the original structure for consistency with uploaded files
         try:

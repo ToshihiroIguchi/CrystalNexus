@@ -776,16 +776,47 @@
                 const select = document.getElementById('sampleFileSelect');
                 select.innerHTML = '<option value="">Select a sample file...</option>';
                 
-                data.files.forEach(file => {
-                    const option = document.createElement('option');
-                    option.value = file;
-                    option.textContent = file;
-                    select.appendChild(option);
-                });
+                // Generate options from hierarchical structure
+                generateOptionsFromStructure(select, data.structure, '');
+                
             } catch (error) {
                 console.error('Error loading sample files:', error);
                 document.getElementById('sampleFileSelect').innerHTML = '<option value="">Error loading files</option>';
             }
+        }
+
+        function generateOptionsFromStructure(selectElement, structure, pathPrefix) {
+            // Add files at current level
+            structure.files.forEach(file => {
+                const option = document.createElement('option');
+                option.value = file.path;
+                option.textContent = file.display_name;
+                selectElement.appendChild(option);
+            });
+            
+            // Process subdirectories
+            Object.keys(structure.subdirs).forEach(subdirName => {
+                const subdirStructure = structure.subdirs[subdirName];
+                
+                // Only create optgroup if subdirectory has files or subdirectories
+                if (subdirStructure.files.length > 0 || 
+                    Object.keys(subdirStructure.subdirs).length > 0) {
+                    
+                    const optgroup = document.createElement('optgroup');
+                    optgroup.label = formatCategoryName(subdirName);
+                    
+                    // Recursively process subdirectory
+                    generateOptionsFromStructure(optgroup, subdirStructure, 
+                        pathPrefix + subdirName + '/');
+                    
+                    selectElement.appendChild(optgroup);
+                }
+            });
+        }
+
+        function formatCategoryName(dirName) {
+            // Return directory name as-is to match actual folder structure
+            return dirName;
         }
 
         async function analyzeSampleFile(filename) {
