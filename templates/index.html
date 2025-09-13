@@ -413,6 +413,9 @@
                                 <button class="secondary-action" id="downloadAnalysisBtn" onclick="downloadAnalysisData()" style="flex: 1; padding: 6px 10px; font-size: 12px; font-weight: 500; background: #3498db !important; border: none !important;">
                                     💾 Export
                                 </button>
+                                <button class="secondary-action" id="copySpreadsheetBtn" onclick="copyToSpreadsheet()" style="flex: 1; padding: 6px 10px; font-size: 12px; font-weight: 500; background: #27ae60 !important; border: none !important;">
+                                    📋 Copy
+                                </button>
                             </div>
                         </div>
                         
@@ -6159,6 +6162,73 @@ Crystal system: ${data.crystal_system}`;
             } catch (error) {
                 console.error('Error downloading CIF:', error);
                 alert('Failed to download CIF file. Please try again.');
+            }
+        }
+
+        // Copy analysis data to clipboard in tab-separated format for spreadsheets
+        async function copyToSpreadsheet() {
+            try {
+                if (!window.currentAnalysisData) {
+                    showNotification('No analysis data available to copy', 'warning');
+                    return;
+                }
+
+                const data = window.currentAnalysisData;
+                
+                // Extract key values for spreadsheet
+                console.log('Raw data structure:', data);
+                
+                // Try multiple possible paths for formula
+                const formula = data.relaxed_structure_info?.formula || 
+                               data.structure_info?.formula || 
+                               window.currentStructureInfo?.formula ||
+                               'N/A';
+                
+                // Try multiple possible paths for energy
+                let energy = 'N/A';
+                if (data.final_prediction?.total_energy_eV !== undefined) {
+                    energy = data.final_prediction.total_energy_eV.toFixed(3);
+                } else if (window.energyAnalysisData?.final?.totalEnergy !== undefined) {
+                    energy = window.energyAnalysisData.final.totalEnergy.toFixed(3);
+                } else if (data.final_prediction?.energy_eV_per_atom !== undefined) {
+                    const numAtoms = data.structure_info?.num_atoms || data.final_prediction.forces_eV_per_A?.length || 1;
+                    energy = (data.final_prediction.energy_eV_per_atom * numAtoms).toFixed(3);
+                }
+                
+                // Try multiple possible paths for magnetic moment
+                let magnetic = 'N/A';
+                if (data.final_prediction?.magmoms !== undefined && Array.isArray(data.final_prediction.magmoms)) {
+                    const totalMag = data.final_prediction.magmoms.reduce((sum, mag) => sum + Math.abs(mag), 0);
+                    magnetic = totalMag.toFixed(2);
+                } else if (window.currentMagneticData?.totalMagnetic !== undefined) {
+                    magnetic = window.currentMagneticData.totalMagnetic.toFixed(2);
+                }
+                
+                console.log('Extracted values:', {formula, energy, magnetic});
+                
+                // Generate tab-separated values
+                const tabSeparatedData = `${formula}\t${energy}\t${magnetic}`;
+                
+                // Copy to clipboard
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(tabSeparatedData);
+                    showNotification('Data copied to clipboard for Excel/Sheets', 'success');
+                } else {
+                    // Fallback for older browsers
+                    const textArea = document.createElement('textarea');
+                    textArea.value = tabSeparatedData;
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textArea);
+                    showNotification('Data copied to clipboard', 'success');
+                }
+                
+                console.log('Copied to clipboard:', tabSeparatedData);
+                
+            } catch (error) {
+                console.error('Error copying to clipboard:', error);
+                showNotification('Failed to copy data to clipboard', 'error');
             }
         }
 
