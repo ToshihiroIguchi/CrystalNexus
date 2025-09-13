@@ -4608,8 +4608,8 @@ Crystal system: ${data.crystal_system}`;
             
             // Create 3Dmol viewer container optimized for professional crystal analysis
             container.innerHTML = `
-                <div style="position: relative; width: 100%; height: 100%; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; background: white; min-height: 650px;">
-                    <div id="3dmol-viewer" style="width: 100%; height: 100%; position: relative; background: white;"></div>
+                <div style="position: relative; width: 100%; height: 650px; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; background: white;">
+                    <div id="3dmol-viewer" style="width: 100%; height: 650px; position: relative; background: white;"></div>
                     
                     <!-- 3D control buttons -->
                     <div class="viewer-controls" style="position: absolute; top: 10px; right: 10px; display: flex; gap: 5px; z-index: 10;">
@@ -4642,21 +4642,24 @@ Crystal system: ${data.crystal_system}`;
                 return;
             }
             
-            // Create 3Dmol viewer with proper aspect ratio settings
-            const config = { 
-                backgroundColor: 'white',
-                orthographic: false,  // Use perspective projection for better depth perception
-                antialias: true,  // Smooth edges
-                preserveAspectRatio: true,  // Maintain proper proportions
-                disableInternalControls: false  // Allow rotation/zoom
-            };
-            window.viewer3D = $3Dmol.createViewer(element, config);
-            
-            console.log('✅ 3Dmol.js viewer initialized');
-            console.log(`✅ Available methods: ${Object.getOwnPropertyNames(window.viewer3D).filter(m => typeof window.viewer3D[m] === 'function').slice(0, 10).join(', ')}`);
-            
-            // Load supercell visualization
-            loadSupercellVisualization();
+            // Wait for DOM layout to complete before creating viewer
+            setTimeout(() => {
+                // Create 3Dmol viewer with proper aspect ratio settings
+                const config = {
+                    backgroundColor: 'white',
+                    orthographic: false,  // Use perspective projection for better depth perception
+                    antialias: true,  // Smooth edges
+                    preserveAspectRatio: true,  // Maintain proper proportions
+                    disableInternalControls: false  // Allow rotation/zoom
+                };
+                window.viewer3D = $3Dmol.createViewer(element, config);
+
+                console.log('✅ 3Dmol.js viewer initialized with delay');
+                console.log(`✅ Available methods: ${Object.getOwnPropertyNames(window.viewer3D).filter(m => typeof window.viewer3D[m] === 'function').slice(0, 10).join(', ')}`);
+
+                // Load supercell visualization after viewer is ready
+                loadSupercellVisualization();
+            }, 100);
         }
 
         // 3Dmol.js API compatibility layer for different versions
