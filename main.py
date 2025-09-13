@@ -1618,7 +1618,7 @@ async def chgnet_predict_structure(request: dict):
         
         # Get the modified structure
         from pymatgen.io.cif import CifParser
-        cif_path = SAMPLE_CIF_DIR / safe_filename(filename)
+        cif_path = SAMPLE_CIF_DIR / safe_path(filename)
         
         if not cif_path.exists():
             raise HTTPException(status_code=404, detail=f"CIF file not found: {filename}")
