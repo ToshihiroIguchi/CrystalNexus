@@ -938,6 +938,11 @@
 
         function displayCrystalInfo(data) {
             window.currentCrystalData = data;
+
+            // For sample files, ensure we store the full path for API calls
+            if (data.filename && data.filename.includes('/')) {
+                window.currentFullPath = data.filename; // Store full path from sample files
+            }
             
             const infoContent = document.getElementById('infoContent');
             // Display information in the same order as ZrO2test.py
@@ -1124,7 +1129,9 @@
                         if (data.success) {
                             showFileLoadSuccess(file.name);
                             // Continue with existing processing logic
-                            window.currentFilename = file.name;
+                            // Store both full filename and base name for different API uses
+                            window.currentFilename = file.name; // For uploaded files, this is just basename
+                            window.currentFullPath = file.name; // Same as filename for uploads
                             displayCrystalInfo(data);
                             // Reset analysis state for new file
                             isStructureAnalyzed = false;
@@ -1316,7 +1323,9 @@
                     .then(data => {
                         if (data.success) {
                             showFileLoadSuccess(file.name);
-                            window.currentFilename = file.name;
+                            // Store both full filename and base name for different API uses
+                            window.currentFilename = file.name; // For uploaded files, this is just basename
+                            window.currentFullPath = file.name; // Same as filename for uploads
                             displayCrystalInfo(data);
                             // Reset analysis state for new file
                             isStructureAnalyzed = false;
@@ -2988,7 +2997,8 @@ Crystal system: ${data.crystal_system}`;
                 window.currentStructureData = JSON.parse(JSON.stringify(window.originalSupercellData));
                 
                 // Store filename and supercell size for 3D visualization
-                window.currentFilename = window.currentCrystalData.filename;
+                // Use currentFullPath to preserve complete path for API calls
+                window.currentFilename = window.currentFullPath;
                 window.currentSupercellSize = [parseInt(aSize), parseInt(bSize), parseInt(cSize)];
                 
                 // Initialize empty operations history
@@ -5135,6 +5145,7 @@ Crystal system: ${data.crystal_system}`;
         function resetApplicationState() {
             // Clear global variables
             window.currentFilename = null;
+            window.currentFullPath = null;
             window.currentSupercellSize = null;
             window.originalLabels = [];
             window.currentLabels = [];

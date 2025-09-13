@@ -839,7 +839,7 @@ async def analyze_sample_cif(data: dict):
             from pymatgen.core import Structure
             structure = Structure.from_file(str(file_path))
             result["structure_data"] = structure.as_dict()
-            logger.info(f"Successfully stored structure data for sample file: {safe_name}")
+            logger.info(f"Successfully stored structure data for sample file: {safe_path_str}")
         except Exception as struct_error:
             logger.warning(f"Failed to store structure data for sample file: {struct_error}")
             # Sample files can still work without structure_data since file is available
