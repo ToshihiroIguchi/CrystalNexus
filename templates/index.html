@@ -1854,8 +1854,14 @@
                 try {
                     console.log(`   Destruction attempt ${attempt + 1}/3`);
                     
-                    // Clear all content
-                    window.viewer3D.clear();
+                    // Clear all content safely
+                    const viewerElement = document.getElementById('3dmol-viewer');
+                    if (viewerElement && viewerElement.offsetWidth > 0 && viewerElement.offsetHeight > 0) {
+                        window.viewer3D.clear();
+                    } else {
+                        console.warn('⚠️ Skipping viewer clear - element has zero dimensions');
+                        break; // Skip remaining attempts
+                    }
                     
                     // Additional cleanup attempts
                     try { window.viewer3D.removeAllModels(); } catch (e) {}
@@ -2739,8 +2745,14 @@ Crystal system: ${data.crystal_system}`;
                 // Check current state before clearing with compatibility layer
                 const modelsBeforeClear = getViewerModelCount(window.viewer3D);
                 console.log(`  │   ├─ Models before clear: ${modelsBeforeClear}`);
-                
-                window.viewer3D.clear();
+
+                // Clear viewer safely
+                const viewerElement = document.getElementById('3dmol-viewer');
+                if (viewerElement && viewerElement.offsetWidth > 0 && viewerElement.offsetHeight > 0) {
+                    window.viewer3D.clear();
+                } else {
+                    console.warn('⚠️ Skipping viewer clear - element has zero dimensions');
+                }
                 const clearDuration = performance.now() - clearStart;
                 
                 const modelsAfterClear = getViewerModelCount(window.viewer3D);
@@ -2905,7 +2917,13 @@ Crystal system: ${data.crystal_system}`;
                 // Clear 3D display to avoid showing incorrect structure
                 if (window.viewer3D) {
                     console.warn('🧹 CLEANING UP 3D VIEWER');
-                    window.viewer3D.clear();
+                    // Clear viewer safely
+                    const viewerElement = document.getElementById('3dmol-viewer');
+                    if (viewerElement && viewerElement.offsetWidth > 0 && viewerElement.offsetHeight > 0) {
+                        window.viewer3D.clear();
+                    } else {
+                        console.warn('⚠️ Skipping viewer clear - element has zero dimensions');
+                    }
                     
                     // Show clear error message in 3D viewer
                     const container = document.getElementById('3dmol-viewer');
@@ -4769,7 +4787,14 @@ Crystal system: ${data.crystal_system}`;
                 
                 // Display structure using fastapiBT.py approach
                 console.log('🗑️ Clearing existing models');
-                window.viewer3D.clear();
+                // Clear viewer safely
+                const viewerElement = document.getElementById('3dmol-viewer');
+                if (viewerElement && viewerElement.offsetWidth > 0 && viewerElement.offsetHeight > 0) {
+                    window.viewer3D.clear();
+                } else {
+                    console.warn('⚠️ Skipping viewer clear - element has zero dimensions');
+                    return;
+                }
                 
                 console.log('➕ Adding supercell CIF model');
                 window.viewer3D.addModel(cifData, 'cif');
@@ -4871,7 +4896,14 @@ Crystal system: ${data.crystal_system}`;
                 
                 // Update 3D viewer with modified structure
                 console.log('🗑️ Clearing existing models');
-                window.viewer3D.clear();
+                // Clear viewer safely
+                const viewerElement = document.getElementById('3dmol-viewer');
+                if (viewerElement && viewerElement.offsetWidth > 0 && viewerElement.offsetHeight > 0) {
+                    window.viewer3D.clear();
+                } else {
+                    console.warn('⚠️ Skipping viewer clear - element has zero dimensions');
+                    return;
+                }
                 
                 console.log('➕ Adding modified structure CIF model');
                 window.viewer3D.addModel(cifData, 'cif');
@@ -4912,7 +4944,13 @@ Crystal system: ${data.crystal_system}`;
                 
                 // Clear 3D display to avoid showing incorrect structure
                 if (window.viewer3D) {
-                    window.viewer3D.clear();
+                    // Clear viewer safely
+                    const viewerElement = document.getElementById('3dmol-viewer');
+                    if (viewerElement && viewerElement.offsetWidth > 0 && viewerElement.offsetHeight > 0) {
+                        window.viewer3D.clear();
+                    } else {
+                        console.warn('⚠️ Skipping viewer clear - element has zero dimensions');
+                    }
                     
                     // Show clear error message in 3D viewer
                     const container = document.getElementById('3dmol-viewer');
@@ -5128,16 +5166,18 @@ Crystal system: ${data.crystal_system}`;
                     return;
                 }
             }
-            
-            // Clear all current data and reset application state
-            resetApplicationState();
-            
-            // Initialize crystal info state when modal opens
-            hideCrystalInfoCompletely();
-            
-            // Show the CIF selection modal
+
+            // First show the modal, then safely reset state
             const modal = document.getElementById('cifModal');
             modal.style.display = 'block';
+
+            // Initialize crystal info state when modal opens
+            hideCrystalInfoCompletely();
+
+            // Delay the state reset to avoid WebGL issues during modal display
+            setTimeout(() => {
+                resetApplicationState();
+            }, 100);
         }
         
         function openCifSelectionModal() {
@@ -5161,18 +5201,31 @@ Crystal system: ${data.crystal_system}`;
             window.currentStructureData = null;
             window.operationHistory = [];
             
-            // Clear 3D viewer
+            // Clear 3D viewer safely
             if (window.viewer3D) {
-                window.viewer3D.clear();
-                window.viewer3D.render();
+                try {
+                    // Check if viewer has valid dimensions before clearing
+                    const viewerElement = document.getElementById('3dmol-viewer');
+                    if (viewerElement && viewerElement.offsetWidth > 0 && viewerElement.offsetHeight > 0) {
+                        window.viewer3D.clear();
+                        window.viewer3D.render();
+                    } else {
+                        console.warn('⚠️ Skipping viewer clear - element has zero dimensions');
+                    }
+                } catch (error) {
+                    console.warn('⚠️ Error during viewer clear:', error);
+                }
             }
-            
-            // Reset viewer container to initial state
+
+            // Reset viewer container to initial state and re-initialize viewer
             const viewerContainer = document.querySelector('.viewer-container');
             if (viewerContainer) {
                 viewerContainer.innerHTML = 'Load a CIF file to view the crystal structure';
                 viewerContainer.style.color = '#666';
                 viewerContainer.style.fontSize = '18px';
+
+                // Clear viewer reference to force re-initialization
+                window.viewer3D = null;
             }
             
             // Clear analysis data and reset UI elements
