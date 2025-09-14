@@ -125,7 +125,8 @@
 
         .all-samples-section {
             border-top: 1px solid #eee;
-            padding-top: 10px;
+            padding-top: 15px;
+            margin-top: 15px;
         }
 
         .all-samples-section select {
@@ -565,17 +566,15 @@
                     <div class="quick-samples-section">
                         <div class="samples-header">
                             <span style="color: #666; font-size: 14px;">Quick samples:</span>
-                            <button type="button" id="showAllSamplesBtn" class="show-all-btn">
-                                View all samples
-                            </button>
                         </div>
                         <div class="quick-samples-grid" id="quickSamples">
                             <!-- Will be populated by JavaScript -->
                         </div>
                     </div>
 
-                    <!-- All samples dropdown (initially hidden) -->
-                    <div class="all-samples-section" id="allSamplesSection" style="display: none;">
+                    <!-- All samples dropdown (always visible) -->
+                    <div class="all-samples-section" id="allSamplesSection">
+                        <div style="color: #666; font-size: 14px; margin-bottom: 8px;">All samples:</div>
                         <select id="sampleFileSelect">
                             <option value="">Loading sample files...</option>
                         </select>
@@ -1174,11 +1173,6 @@
             // Initialize quick samples
             loadQuickSamples();
 
-            // Setup show all samples button
-            const showAllBtn = document.getElementById('showAllSamplesBtn');
-            if (showAllBtn) {
-                showAllBtn.addEventListener('click', toggleAllSamplesSection);
-            }
 
             // Setup main drop zone click to trigger file browse
             const mainDropZone = document.getElementById('uploadDropZone');
@@ -1355,18 +1349,6 @@
             });
         }
 
-        function toggleAllSamplesSection() {
-            const allSamplesSection = document.getElementById('allSamplesSection');
-            const showAllBtn = document.getElementById('showAllSamplesBtn');
-
-            if (allSamplesSection.style.display === 'none') {
-                allSamplesSection.style.display = 'block';
-                showAllBtn.textContent = 'Hide all samples';
-            } else {
-                allSamplesSection.style.display = 'none';
-                showAllBtn.textContent = 'View all samples';
-            }
-        }
 
         async function analyzeSampleFile(filename) {
             try {
@@ -4962,8 +4944,11 @@ Crystal system: ${data.crystal_system}`;
 
                 // Use unified CHGNet prediction (returns result directly or throws error)
                 const result = await window.unifiedClient.predictCHGNet(tempOperations);
-                
+
                 if (result.status === 'success' && result.prediction?.energy_eV_per_atom) {
+                    // Update currentLabels after successful deletion
+                    await updateCurrentLabelsAfterOperation();
+                    console.log(`🔄 CURRENT_LABELS: Updated after deleting ${atomLabel}`);
                     return result.prediction.energy_eV_per_atom;
                 } else {
                     throw new Error('Energy calculation failed: Invalid response format');
@@ -4971,6 +4956,25 @@ Crystal system: ${data.crystal_system}`;
                 
             } catch (error) {
                 throw error;
+            }
+        }
+
+        async function updateCurrentLabelsAfterOperation() {
+            try {
+                console.log(`🔄 SYNC: Updating currentLabels after operation`);
+
+                // Get the latest atom structure from unified API
+                const response = await window.unifiedClient.getNumberedAtoms();
+
+                if (response && response.atoms) {
+                    // Update currentLabels with new atom IDs
+                    window.currentLabels = response.atoms.map(atom => atom.atom_id);
+                    console.log(`✅ SYNC: Updated currentLabels with ${window.currentLabels.length} atoms:`, window.currentLabels);
+                } else {
+                    console.warn(`⚠️ SYNC: Failed to get updated atom structure`);
+                }
+            } catch (error) {
+                console.error('Error updating currentLabels:', error);
             }
         }
 
