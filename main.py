@@ -660,7 +660,8 @@ class UnifiedStructureManager:
             'source_type': None,        # 'sample' or 'upload'
             'original_filename': None,  # Original filename
             'operations': [],           # Applied operations
-            'supercell_size': [1, 1, 1] # Current supercell size
+            'supercell_size': [1, 1, 1], # Current supercell size
+            'atom_identifiers': {}      # Atom identification mapping
         }
 
         # Minimal file storage
@@ -742,6 +743,66 @@ class UnifiedStructureManager:
     def get_chgnet_result(self) -> Dict:
         """Get CHGNet relaxation metadata"""
         return self._structure_cache.get('chgnet_result', {})
+
+    def _generate_atom_identifiers(self, structure) -> Dict:
+        """Generate Element Type Counter System identifiers for atoms"""
+        element_counters = {}
+        site_to_id = {}
+        id_to_site = {}
+
+        for i, site in enumerate(structure.sites):
+            # Use element symbol instead of species (removes oxidation state)
+            element = str(site.specie.element)
+
+            # Count occurrences of each element
+            count = element_counters.get(element, 0) + 1
+            element_counters[element] = count
+
+            # Create atom identifier
+            atom_id = f"{element}_{count}"
+
+            # Create bidirectional mapping
+            site_to_id[i] = atom_id
+            id_to_site[atom_id] = i
+
+        return {
+            'site_to_id': site_to_id,
+            'id_to_site': id_to_site,
+            'element_counters': element_counters
+        }
+
+    def get_atom_identifiers(self) -> Dict:
+        """Get current atom identifiers for the active structure"""
+        current_structure = self._get_current_structure()
+        if not current_structure:
+            return {'site_to_id': {}, 'id_to_site': {}, 'element_counters': {}}
+
+        # Generate fresh identifiers for current structure
+        return self._generate_atom_identifiers(current_structure)
+
+    def get_numbered_atom_list(self) -> List[Dict]:
+        """Get list of atoms with numbering for frontend display"""
+        current_structure = self._get_current_structure()
+        if not current_structure:
+            return []
+
+        identifiers = self._generate_atom_identifiers(current_structure)
+        atoms = []
+
+        for i, site in enumerate(current_structure.sites):
+            atom_id = identifiers['site_to_id'][i]
+            element = str(site.specie.element)
+
+            atoms.append({
+                'site_index': i,
+                'atom_id': atom_id,
+                'element': element,
+                'display_name': atom_id,
+                'fractional_coords': site.frac_coords.tolist(),
+                'cartesian_coords': site.coords.tolist()
+            })
+
+        return atoms
 
     def get_structure_info(self) -> Dict:
         """Get structure information"""
@@ -2618,12 +2679,17 @@ async def apply_atomic_operations_unified(request: dict):
         session_id = request.get("session_id")
         operations = request.get("operations", [])
 
+        logger.info(f"🎯 APPLY_OPERATIONS: Session {session_id}, {len(operations)} operations")
+        logger.info(f"🎯 APPLY_OPERATIONS: Operations: {operations}")
+
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required")
 
         # Get unified structure manager
         manager = unified_session_manager.get_manager(session_id)
         structure_info = manager.get_structure_info()
+
+        logger.info(f"🎯 APPLY_OPERATIONS: Structure info: {structure_info}")
 
         if not structure_info['filename']:
             raise HTTPException(status_code=404, detail=f"No structure found for session {session_id}")
@@ -2633,6 +2699,9 @@ async def apply_atomic_operations_unified(request: dict):
         if not structure:
             raise HTTPException(status_code=404, detail="No structure available in session")
 
+        logger.info(f"🎯 APPLY_OPERATIONS: Original structure has {len(structure.sites)} sites")
+        logger.info(f"🎯 APPLY_OPERATIONS: Formula: {structure.formula}")
+
         # Apply operations to create modified structure
         modified_structure = structure.copy()
 
@@ -2640,17 +2709,48 @@ async def apply_atomic_operations_unified(request: dict):
         delete_operations = [op for op in operations if op.get("action") == "delete"]
         substitute_operations = [op for op in operations if op.get("action") == "substitute"]
 
+        logger.info(f"🎯 APPLY_OPERATIONS: Delete ops: {delete_operations}")
+        logger.info(f"🎯 APPLY_OPERATIONS: Substitute ops: {substitute_operations}")
+
         # Sort deletions by index in reverse order
         delete_operations.sort(key=lambda x: x.get("index", 0), reverse=True)
 
         # Apply operations
-        for op in delete_operations:
-            if "index" in op and 0 <= op["index"] < len(modified_structure.sites):
-                modified_structure.remove_sites([op["index"]])
+        for i, op in enumerate(delete_operations):
+            index = op.get("index", -1)
+            target_element = op.get("target_element", "unknown")
 
-        for op in substitute_operations:
+            logger.info(f"🎯 APPLY_OPERATIONS: Delete op {i+1}/{len(delete_operations)}: index={index}, target_element={target_element}")
+            logger.info(f"🎯 APPLY_OPERATIONS: Structure size before delete: {len(modified_structure.sites)}")
+
+            if "index" in op and 0 <= op["index"] < len(modified_structure.sites):
+                actual_element = str(modified_structure.sites[op["index"]].specie.element)
+                logger.info(f"🎯 APPLY_OPERATIONS: Site {op['index']} contains element: {actual_element}")
+                logger.info(f"🎯 APPLY_OPERATIONS: Requested to delete: {target_element}")
+
+                if target_element != "unknown" and actual_element != target_element:
+                    logger.warning(f"🎯 APPLY_OPERATIONS: Element mismatch! Site {op['index']} is {actual_element}, not {target_element}")
+
+                modified_structure.remove_sites([op["index"]])
+                logger.info(f"🎯 APPLY_OPERATIONS: Deleted site {op['index']}, structure now has {len(modified_structure.sites)} sites")
+            else:
+                logger.warning(f"🎯 APPLY_OPERATIONS: Invalid delete index {index} (structure size: {len(modified_structure.sites)})")
+
+        for i, op in enumerate(substitute_operations):
+            index = op.get("index", -1)
+            element = op.get("element", "unknown")
+
+            logger.info(f"🎯 APPLY_OPERATIONS: Substitute op {i+1}/{len(substitute_operations)}: index={index}, element={element}")
+
             if "index" in op and "element" in op and 0 <= op["index"] < len(modified_structure.sites):
+                actual_element = str(modified_structure.sites[op["index"]].specie.element)
+                logger.info(f"🎯 APPLY_OPERATIONS: Substituting site {op['index']} ({actual_element}) with {element}")
                 modified_structure.replace(op["index"], op["element"])
+            else:
+                logger.warning(f"🎯 APPLY_OPERATIONS: Invalid substitute index {index} (structure size: {len(modified_structure.sites)})")
+
+        logger.info(f"🎯 APPLY_OPERATIONS: Final structure has {len(modified_structure.sites)} sites")
+        logger.info(f"🎯 APPLY_OPERATIONS: Final formula: {modified_structure.formula}")
 
         # Update manager with modified structure
         manager.update_supercell(modified_structure, operations)
@@ -2665,6 +2765,86 @@ async def apply_atomic_operations_unified(request: dict):
     except Exception as e:
         logger.error(f"Unified operations application failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/atoms/list-unified")
+async def get_numbered_atoms_unified(request: dict):
+    """
+    Get numbered atom list for unified session workspace
+    Returns atoms with Element Type Counter System identifiers
+    """
+    try:
+        session_id = request.get("session_id")
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
+
+        manager = unified_session_manager.get_manager(session_id)
+        if not manager:
+            raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+        atoms = manager.get_numbered_atom_list()
+        return {
+            "success": True,
+            "atoms": atoms,
+            "total_atoms": len(atoms)
+        }
+
+    except Exception as e:
+        logger.error(f"Get numbered atoms failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/atoms/elements-unified")
+async def get_unique_elements_unified(request: dict):
+    """
+    Get unique elements in current structure for unified session workspace
+    """
+    try:
+        session_id = request.get("session_id")
+        logger.info(f"🔍 GET_UNIQUE_ELEMENTS: Request for session {session_id}")
+
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
+
+        manager = unified_session_manager.get_manager(session_id)
+        if not manager:
+            logger.warning(f"🔍 GET_UNIQUE_ELEMENTS: Session not found: {session_id}")
+            raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+        current_structure = manager.get_current_structure()
+        if not current_structure:
+            logger.warning(f"🔍 GET_UNIQUE_ELEMENTS: No current structure in session {session_id}")
+            return {"success": True, "elements": []}
+
+        logger.info(f"🔍 GET_UNIQUE_ELEMENTS: Structure has {len(current_structure.sites)} sites")
+        logger.info(f"🔍 GET_UNIQUE_ELEMENTS: Structure formula: {current_structure.formula}")
+
+        # Get unique elements (not species/ions)
+        elements = []
+        seen_elements = set()
+        species_details = []
+
+        for i, site in enumerate(current_structure.sites):
+            element = str(site.specie.element)
+            species = str(site.specie)
+            species_details.append(f"Site {i}: {species} ({element})")
+
+            if element not in seen_elements:
+                elements.append(element)
+                seen_elements.add(element)
+
+        logger.info(f"🔍 GET_UNIQUE_ELEMENTS: Species details: {species_details[:10]}...")  # Show first 10
+        logger.info(f"🔍 GET_UNIQUE_ELEMENTS: Found unique elements: {elements}")
+
+        return {
+            "success": True,
+            "elements": elements
+        }
+
+    except Exception as e:
+        logger.error(f"Get unique elements failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # =============================================================================
 # LEGACY API ENDPOINTS (kept for backward compatibility)

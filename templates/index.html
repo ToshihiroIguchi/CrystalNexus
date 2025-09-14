@@ -834,6 +834,50 @@
                 }
             }
 
+            // Get numbered atom list
+            async getNumberedAtoms() {
+                try {
+                    const response = await fetch('/api/atoms/list-unified', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            session_id: this.sessionId
+                        })
+                    });
+
+                    if (!response.ok) {
+                        throw new Error('Failed to get numbered atoms');
+                    }
+
+                    return await response.json();
+                } catch (error) {
+                    console.error('❌ Failed to get numbered atoms:', error);
+                    throw error;
+                }
+            }
+
+            // Get unique elements
+            async getUniqueElements() {
+                try {
+                    const response = await fetch('/api/atoms/elements-unified', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            session_id: this.sessionId
+                        })
+                    });
+
+                    if (!response.ok) {
+                        throw new Error('Failed to get unique elements');
+                    }
+
+                    return await response.json();
+                } catch (error) {
+                    console.error('❌ Failed to get unique elements:', error);
+                    throw error;
+                }
+            }
+
             // Get structure info
             getStructureInfo() {
                 return this.cache.sourceInfo;
@@ -3567,20 +3611,20 @@ Crystal system: ${data.crystal_system}`;
                 // Initialize current working labels
                 window.currentLabels = [...labelData.labels];
                 
-                displayStructureOperations(window.currentLabels);
+                await displayStructureOperations(window.currentLabels);
                 
             } catch (error) {
                 console.error('Error loading element labels:', error);
                 window.originalLabels = [];
                 window.currentLabels = [];
-                displayStructureOperations([]);
+                await displayStructureOperations([]);
             }
         }
 
-        function displayStructureOperations(labels) {
+        async function displayStructureOperations(labels) {
             const operationsElement = document.getElementById('structure-operations-content');
             operationsElement.classList.remove('mock-text');
-            
+
             if (labels.length === 0) {
                 operationsElement.innerHTML = '<div style="color: #e74c3c;">No element labels available</div>';
                 return;
@@ -3616,7 +3660,6 @@ Crystal system: ${data.crystal_system}`;
                     <label for="element-dropdown">Select Atom to Modify:</label>
                     <select id="element-dropdown">
                         <option value="">Choose an atom...</option>
-                        ${labels.map(label => `<option value="${label}">${label}</option>`).join('')}
                     </select>
                 </div>
                 
@@ -3667,8 +3710,9 @@ Crystal system: ${data.crystal_system}`;
             // Extract unique elements from current structure labels
             const uniqueElements = extractUniqueElements(labels);
             
-            // Populate element type dropdown with unique elements from current structure
-            populateElementTypeDropdown(uniqueElements);
+            // Populate dropdowns with unified API data
+            await populateElementTypeDropdown();
+            await populateAtomDropdown();
             
             // Add event listeners
             setupOperationListeners();
@@ -3687,20 +3731,52 @@ Crystal system: ${data.crystal_system}`;
             return Array.from(uniqueElements).sort();
         }
 
-        function populateElementTypeDropdown(uniqueElements) {
+        async function populateElementTypeDropdown() {
             const elementTypeDropdown = document.getElementById('element-type-dropdown');
-            if (!elementTypeDropdown || !uniqueElements) return;
-            
-            // Clear existing options except the first one
-            elementTypeDropdown.innerHTML = '<option value="">Choose element type...</option>';
-            
-            // Add unique elements from current structure
-            uniqueElements.forEach(element => {
-                const option = document.createElement('option');
-                option.value = element;
+            if (!elementTypeDropdown) return;
+
+            try {
+                // Get unique elements from unified API
+                const response = await window.unifiedClient.getUniqueElements();
+                const uniqueElements = response.elements;
+
+                // Clear existing options except the first one
+                elementTypeDropdown.innerHTML = '<option value="">Choose element type...</option>';
+
+                // Add unique elements from current structure (element names, not ions)
+                uniqueElements.forEach(element => {
+                    const option = document.createElement('option');
+                    option.value = element;
                 option.textContent = element;
                 elementTypeDropdown.appendChild(option);
             });
+            } catch (error) {
+                console.error('Error populating element type dropdown:', error);
+            }
+        }
+
+        async function populateAtomDropdown() {
+            const atomDropdown = document.getElementById('element-dropdown');
+            if (!atomDropdown) return;
+
+            try {
+                // Get numbered atoms from unified API
+                const response = await window.unifiedClient.getNumberedAtoms();
+                const numberedAtoms = response.atoms;
+
+                // Clear existing options except the first one
+                atomDropdown.innerHTML = '<option value="">Choose an atom...</option>';
+
+                // Add numbered atoms (e.g., Fe_1, Fe_2, O_1, etc.)
+                numberedAtoms.forEach(atom => {
+                    const option = document.createElement('option');
+                    option.value = atom.site_index; // Use site index as value for backend operations
+                    option.textContent = atom.atom_id; // Display readable atom ID (e.g., "Fe_1")
+                    atomDropdown.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error populating atom dropdown:', error);
+            }
         }
 
         function setupOperationListeners() {
@@ -4186,7 +4262,7 @@ Crystal system: ${data.crystal_system}`;
                 return;
             }
             
-            const targetAtoms = findAtomsOfType(elementType);
+            const targetAtoms = await findAtomsOfType(elementType);
             
             if (targetAtoms.length === 0) {
                 showNotification(`No ${elementType} atoms found in the structure`, 'error');
@@ -4473,7 +4549,7 @@ Crystal system: ${data.crystal_system}`;
                 return;
             }
             
-            const targetAtoms = findAtomsOfType(elementType);
+            const targetAtoms = await findAtomsOfType(elementType);
             
             if (targetAtoms.length === 0) {
                 showNotification(`No ${elementType} atoms found in the structure`, 'error');
@@ -4663,18 +4739,56 @@ Crystal system: ${data.crystal_system}`;
             setExecuteButtonState('complete');
         }
         
-        function findAtomsOfType(elementType) {
+        async function findAtomsOfType(elementType) {
+            console.log(`🔍 FIND_ATOMS: Looking for atoms of type: ${elementType}`);
+
             const atoms = [];
-            window.currentLabels.forEach((label, index) => {
-                const element = label.replace(/\d+$/, ''); // Remove numbers to get element symbol
-                if (element === elementType) {
-                    atoms.push({
-                        label: label,
-                        index: index,
-                        element: element
+
+            // Use unified API to get current numbered atoms
+            try {
+                const response = await window.unifiedClient.getNumberedAtoms();
+                console.log(`🔍 FIND_ATOMS: Unified API response:`, response);
+
+                if (response && response.atoms) {
+                    response.atoms.forEach(atom => {
+                        // Extract element from atom_id (e.g., "Fe_1" -> "Fe")
+                        const element = atom.atom_id.split('_')[0];
+                        console.log(`🔍 FIND_ATOMS: Checking atom ${atom.atom_id}: element=${element}, target=${elementType}`);
+
+                        if (element === elementType) {
+                            atoms.push({
+                                label: atom.atom_id,  // Use numbered ID like "Fe_1"
+                                index: atom.site_index,  // Use site index for backend operations
+                                element: element,
+                                atom_id: atom.atom_id
+                            });
+                            console.log(`🔍 FIND_ATOMS: ✓ Added atom: ${atom.atom_id} (site ${atom.site_index})`);
+                        }
                     });
                 }
-            });
+            } catch (error) {
+                console.error(`🔍 FIND_ATOMS: Failed to get numbered atoms from unified API:`, error);
+
+                // Fallback to old method if unified API fails
+                console.log(`🔍 FIND_ATOMS: Falling back to window.currentLabels`);
+                if (window.currentLabels) {
+                    window.currentLabels.forEach((label, index) => {
+                        const element = label.replace(/\d+$/, ''); // Remove numbers to get element symbol
+                        console.log(`🔍 FIND_ATOMS: Fallback checking ${label}: element=${element}, target=${elementType}`);
+
+                        if (element === elementType) {
+                            atoms.push({
+                                label: label,
+                                index: index,
+                                element: element
+                            });
+                            console.log(`🔍 FIND_ATOMS: ✓ Fallback added atom: ${label} (index ${index})`);
+                        }
+                    });
+                }
+            }
+
+            console.log(`🔍 FIND_ATOMS: Found ${atoms.length} atoms of type ${elementType}:`, atoms);
             return atoms;
         }
         
@@ -4806,11 +4920,41 @@ Crystal system: ${data.crystal_system}`;
         
         async function performDeletionCalculation(atomLabel, signal) {
             try {
-                const atomIndex = window.currentLabels.indexOf(atomLabel);
-                if (atomIndex === -1) {
-                    throw new Error(`Atom ${atomLabel} not found`);
+                console.log(`💡 PERFORM_DELETE: Looking for atomLabel: ${atomLabel}`);
+
+                let atomIndex = -1;
+
+                // First try to find the atom using unified API (new system)
+                if (atomLabel.includes('_')) {  // New numbered format like "O_1"
+                    try {
+                        const response = await window.unifiedClient.getNumberedAtoms();
+                        console.log(`💡 PERFORM_DELETE: Unified API response for index lookup:`, response);
+
+                        if (response && response.atoms) {
+                            const targetAtom = response.atoms.find(atom => atom.atom_id === atomLabel);
+                            if (targetAtom) {
+                                atomIndex = targetAtom.site_index;
+                                console.log(`💡 PERFORM_DELETE: Found ${atomLabel} at site index ${atomIndex} via unified API`);
+                            }
+                        }
+                    } catch (error) {
+                        console.warn(`💡 PERFORM_DELETE: Unified API lookup failed:`, error);
+                    }
                 }
-                
+
+                // Fallback to old system if unified API fails
+                if (atomIndex === -1) {
+                    atomIndex = window.currentLabels.indexOf(atomLabel);
+                    console.log(`💡 PERFORM_DELETE: Fallback lookup in currentLabels: index ${atomIndex} for ${atomLabel}`);
+                    console.log(`💡 PERFORM_DELETE: Available currentLabels:`, window.currentLabels?.slice(0, 10));
+                }
+
+                if (atomIndex === -1) {
+                    throw new Error(`Atom ${atomLabel} not found in both unified API and currentLabels`);
+                }
+
+                console.log(`💡 PERFORM_DELETE: Using atom index ${atomIndex} for ${atomLabel}`);
+
                 const tempOperations = [...window.atomicOperations, {
                     action: "delete",
                     index: atomIndex
@@ -4897,7 +5041,7 @@ Crystal system: ${data.crystal_system}`;
                 // Update displays
                 supercellData = window.currentStructureData; // For compatibility with existing display functions
                 displaySupercellInfo();
-                displayStructureOperations(window.currentLabels);
+                await displayStructureOperations(window.currentLabels);
                 
                 // Update 3D visualization
                 updateStructureVisualization();
@@ -4935,7 +5079,7 @@ Crystal system: ${data.crystal_system}`;
                     window.currentStructureData = JSON.parse(JSON.stringify(window.originalSupercellData));
                     window.currentLabels = [...window.originalLabels];
                     displaySupercellInfo();
-                    displayStructureOperations(window.currentLabels);
+                    await displayStructureOperations(window.currentLabels);
                     updateStructureVisualization();
                     console.log('⚠️ Performed frontend-only fallback reset');
                     // フォールバックリセット後も構造変更を通知
@@ -5468,11 +5612,24 @@ Crystal system: ${data.crystal_system}`;
         // Analysis Modal Functions
         window.currentAnalysisData = null;
 
-        function openAnalysisModal() {
+        async function openAnalysisModal() {
             console.log('=== openAnalysisModal called ===');
             const modal = document.getElementById('analysisModal');
             modal.style.display = 'block';
-            
+
+            // Cache numbered atoms data for consistent labeling
+            try {
+                console.log('🔄 Caching numbered atoms data...');
+                const response = await window.unifiedClient.getNumberedAtoms();
+                if (response && response.atoms) {
+                    window.numberedAtoms = response.atoms;
+                    console.log('✅ Cached', response.atoms.length, 'numbered atoms for Detailed Analysis');
+                }
+            } catch (error) {
+                console.warn('⚠️ Could not cache numbered atoms data:', error);
+                window.numberedAtoms = null;
+            }
+
             console.log('currentAnalysisData:', currentAnalysisData);
             if (currentAnalysisData) {
                 console.log('Populating modal with data...');
@@ -5480,11 +5637,11 @@ Crystal system: ${data.crystal_system}`;
             } else {
                 console.warn('No currentAnalysisData available!');
             }
-            
+
             // Set default active tab to energy (Relaxation)
             console.log('Switching to energy tab...');
             switchTab('energy');
-            
+
             // Add escape key listener
             document.addEventListener('keydown', handleModalKeydown);
             console.log('=== openAnalysisModal completed ===');
@@ -5918,7 +6075,24 @@ Crystal system: ${data.crystal_system}`;
             
             // Populate table rows
             for (let i = 0; i < numAtoms; i++) {
-                const atomLabel = window.currentLabels && window.currentLabels[i] ? window.currentLabels[i] : `Atom ${i+1}`;
+                // Get atom label using unified API
+                let atomLabel = `Atom ${i+1}`;
+                try {
+                    if (window.unifiedClient && window.numberedAtoms) {
+                        // Use cached numbered atoms if available
+                        const atom = window.numberedAtoms.find(a => a.site_index === i);
+                        if (atom) {
+                            atomLabel = atom.atom_id;  // Use numbered format like "Fe_1", "O_1"
+                        }
+                    }
+                } catch (error) {
+                    console.warn('Could not get numbered atom label for index', i, error);
+                }
+
+                // Fallback: try window.currentLabels if unified API fails
+                if (atomLabel === `Atom ${i+1}` && window.currentLabels && window.currentLabels[i]) {
+                    atomLabel = window.currentLabels[i];
+                }
                 
                 // Site Energy
                 const siteEnergy = siteEnergies[i] !== undefined ? siteEnergies[i].toFixed(6) : '-';
@@ -7195,8 +7369,24 @@ Crystal system: ${data.crystal_system}`;
             
             // Populate CSV rows (same logic as display)
             for (let i = 0; i < numAtoms; i++) {
-                // Atom label (same as display logic)
-                const atomLabel = window.currentLabels && window.currentLabels[i] ? window.currentLabels[i] : `Atom ${i+1}`;
+                // Get atom label using unified API (same logic as display)
+                let atomLabel = `Atom ${i+1}`;
+                try {
+                    if (window.unifiedClient && window.numberedAtoms) {
+                        // Use cached numbered atoms if available
+                        const atom = window.numberedAtoms.find(a => a.site_index === i);
+                        if (atom) {
+                            atomLabel = atom.atom_id;  // Use numbered format like "Fe_1", "O_1"
+                        }
+                    }
+                } catch (error) {
+                    console.warn('Could not get numbered atom label for CSV export, index', i, error);
+                }
+
+                // Fallback: try window.currentLabels if unified API fails
+                if (atomLabel === `Atom ${i+1}` && window.currentLabels && window.currentLabels[i]) {
+                    atomLabel = window.currentLabels[i];
+                }
                 
                 // Site Energy (same precision as display)
                 const siteEnergy = siteEnergies[i] !== undefined ? siteEnergies[i].toFixed(6) : '-';
