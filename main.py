@@ -659,7 +659,8 @@ class UnifiedStructureManager:
             'current_supercell': None,  # Current supercell structure
             'source_type': None,        # 'sample' or 'upload'
             'original_filename': None,  # Original filename
-            'operations': []            # Applied operations
+            'operations': [],           # Applied operations
+            'supercell_size': [1, 1, 1] # Current supercell size
         }
 
         # Minimal file storage
@@ -681,11 +682,13 @@ class UnifiedStructureManager:
         if self._file_paths['working'].exists():
             self._file_paths['working'].unlink()
 
-    def update_supercell(self, supercell_structure: Structure, operations: List = None) -> None:
+    def update_supercell(self, supercell_structure: Structure, operations: List = None, supercell_size: List = None) -> None:
         """Update the current supercell structure"""
         self._structure_cache['current_supercell'] = supercell_structure
         if operations is not None:
             self._structure_cache['operations'] = operations
+        if supercell_size is not None:
+            self._structure_cache['supercell_size'] = supercell_size
 
         # Clear working file to force regeneration with new structure
         if self._file_paths['working'].exists():
@@ -719,10 +722,26 @@ class UnifiedStructureManager:
         """Get the original filename"""
         return self._structure_cache.get('original_filename')
 
+    @property
+    def supercell_size(self) -> List[int]:
+        """Get current supercell size"""
+        return self._structure_cache.get('supercell_size', [1, 1, 1])
+
     def save_relaxed_structure(self, relaxed_structure, chgnet_result: Dict):
         """Save relaxed structure and CHGNet metadata"""
         self._structure_cache['relaxed_structure'] = relaxed_structure
         self._structure_cache['chgnet_result'] = chgnet_result
+
+    def get_relaxed_structure(self):
+        """Get relaxed structure if available, otherwise return current structure"""
+        relaxed = self._structure_cache.get('relaxed_structure')
+        if relaxed is not None:
+            return relaxed
+        return self._get_current_structure()
+
+    def get_chgnet_result(self) -> Dict:
+        """Get CHGNet relaxation metadata"""
+        return self._structure_cache.get('chgnet_result', {})
 
     def get_structure_info(self) -> Dict:
         """Get structure information"""
@@ -846,6 +865,8 @@ templates = Jinja2Templates(directory=TEMPLATE_DIR)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 SAMPLE_CIF_DIR = Path(SAMPLE_CIF_DIR_NAME)
+# Mount sample_cif directory for direct CIF file access
+app.mount("/sample_cif", StaticFiles(directory=SAMPLE_CIF_DIR_NAME), name="sample_cif")
 
 # Apply DEBUG settings
 if DEBUG:
@@ -2142,33 +2163,33 @@ async def generate_relaxed_structure_cif(request: dict):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required")
         
-        # Get session info to access the latest relaxed structure
-        session_info = session_manager.get_session_info(session_id)
-        if not session_info:
+        # Get manager from unified session workspace
+        manager = unified_session_manager.get_manager(session_id)
+        if not manager:
             raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
-        
-        filename = session_info.get('filename', 'unknown')
+
+        filename = manager.filename or 'unknown'
         logger.info(f"Generating relaxed structure CIF for {filename}")
-        
-        # Check if relaxed structure exists in session
-        relaxed_structure = session_info.get('relaxed_structure')
+
+        # Get relaxed structure (fallback to current structure if not relaxed)
+        relaxed_structure = manager.get_relaxed_structure()
         if relaxed_structure is None:
-            # Fall back to current structure if no relaxed structure available
-            relaxed_structure = session_manager.get_current_structure(session_id)
-            if relaxed_structure is None:
-                raise HTTPException(status_code=404, detail="No structure data available in session")
-            logger.info("Using current structure (relaxed structure not found in session)")
-        else:
+            raise HTTPException(status_code=404, detail="No structure data available in session")
+
+        has_relaxed = manager._structure_cache.get('relaxed_structure') is not None
+        if has_relaxed:
             logger.info("Using relaxed structure from session")
-        
+        else:
+            logger.info("Using current structure (relaxed structure not found in session)")
+
         final_structure = relaxed_structure
-        
+
         # Get operations and supercell info from session
-        operations = session_info.get('operations', [])
-        supercell_size = session_info.get('supercell_size', [1, 1, 1])
-        
+        operations = manager._structure_cache.get('operations', [])
+        supercell_size = manager.supercell_size or [1, 1, 1]
+
         # Get CHGNet relaxation info from session
-        chgnet_result = session_info.get('chgnet_result', {})
+        chgnet_result = manager.get_chgnet_result()
         fmax = chgnet_result.get('fmax', 'N/A')
         converged = chgnet_result.get('converged', 'N/A')
         steps = chgnet_result.get('steps', 'N/A')
@@ -2420,8 +2441,8 @@ async def create_supercell_unified(request: dict):
         structure = original_structure.copy()
         structure.make_supercell(supercell_size)
 
-        # Update manager with supercell
-        manager.update_supercell(structure)
+        # Update manager with supercell and size
+        manager.update_supercell(structure, operations=None, supercell_size=supercell_size)
 
         structure_data = {
             'original_data': {

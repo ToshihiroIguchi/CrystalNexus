@@ -688,7 +688,7 @@
                 // Prepare structure data for API
                 let structureData = data;
 
-                // For upload files, include CIF content
+                // Include CIF content for both upload and sample files
                 if (sourceType === 'upload') {
                     if (!fileContent && data.cif_content) {
                         // Use CIF content from the data if available
@@ -699,6 +699,14 @@
                     } else {
                         // Try to extract CIF content from existing data
                         structureData = { ...data, cif_content: data.cif_content || '' };
+                    }
+                } else if (sourceType === 'sample') {
+                    // For sample files, ensure CIF content is available
+                    if (data.cif_content) {
+                        structureData = { ...data, cif_content: data.cif_content };
+                    } else {
+                        // Sample files should already have CIF content from backend
+                        structureData = { ...data };
                     }
                 }
 
@@ -733,14 +741,46 @@
             // Unified supercell creation
             async createSupercell(supercellSize) {
                 console.log(`🔄 Creating unified supercell - Size: ${supercellSize}`);
+                console.log(`📋 Source info:`, this.cache.sourceInfo);
+                console.log(`📋 Original data has CIF content:`, !!this.cache.originalData.cif_content);
 
                 try {
+                    // Prepare crystal data - for sample files, fetch CIF if not available
+                    let crystalData = this.cache.originalData;
+
+                    if (this.cache.sourceInfo.type === 'sample' && !crystalData.cif_content) {
+                        console.log('🔄 Fetching CIF content for sample file');
+                        console.log(`📡 Attempting to fetch: /sample_cif/${this.cache.sourceInfo.id}`);
+
+                        // Get CIF content directly from sample_cif directory
+                        const cifResponse = await fetch(`/sample_cif/${this.cache.sourceInfo.id}`);
+                        console.log(`📡 CIF fetch response:`, cifResponse.status, cifResponse.statusText);
+
+                        if (cifResponse.ok) {
+                            const cifContent = await cifResponse.text();
+                            console.log(`✅ CIF content fetched, length: ${cifContent.length}`);
+                            crystalData = { ...crystalData, cif_content: cifContent };
+                        } else {
+                            console.error(`❌ Failed to fetch sample CIF: /sample_cif/${this.cache.sourceInfo.id}`);
+                            console.error(`📋 Response details:`, {
+                                status: cifResponse.status,
+                                statusText: cifResponse.statusText,
+                                url: cifResponse.url
+                            });
+                        }
+                    }
+
+                    console.log(`📋 Final crystal data has CIF content:`, !!crystalData.cif_content);
+                    if (crystalData.cif_content) {
+                        console.log(`📋 CIF content preview:`, crystalData.cif_content.substring(0, 200));
+                    }
+
                     const response = await fetch('/api/supercell/create-unified', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             session_id: this.sessionId,
-                            crystal_data: this.cache.originalData,
+                            crystal_data: crystalData,
                             supercell_size: supercellSize
                         })
                     });
