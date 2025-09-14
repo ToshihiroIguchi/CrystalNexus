@@ -26,7 +26,117 @@
             --main-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
         }
         
-        /* Drop Zone Styles */
+        /* Unified File Selection Styles */
+        .unified-file-section {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .main-drop-zone {
+            position: relative;
+            min-height: 120px;
+            border: 2px dashed #e0e0e0;
+            border-radius: 12px;
+            padding: 30px 20px;
+            text-align: center;
+            transition: all 0.3s ease;
+            background: linear-gradient(135deg, #fafafa 0%, #f5f5f5 100%);
+            cursor: pointer;
+        }
+
+        .main-drop-zone:hover {
+            border-color: #3498db;
+            background: linear-gradient(135deg, rgba(52, 152, 219, 0.05) 0%, rgba(52, 152, 219, 0.02) 100%);
+        }
+
+        .main-drop-zone.drag-over {
+            border-color: #3498db;
+            background: rgba(52, 152, 219, 0.08);
+            transform: scale(1.02);
+            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
+        }
+
+        .main-drop-zone.drop-success {
+            animation: drop-success 0.6s ease;
+            border-color: #27ae60;
+        }
+
+        .drop-icon {
+            font-size: 32px;
+            margin-bottom: 5px;
+            opacity: 0.8;
+        }
+
+        .quick-samples-section {
+            border-top: 1px solid #eee;
+            padding-top: 15px;
+        }
+
+        .samples-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .show-all-btn {
+            background: none;
+            border: none;
+            color: #3498db;
+            font-size: 12px;
+            cursor: pointer;
+            text-decoration: underline;
+            padding: 0;
+        }
+
+        .show-all-btn:hover {
+            color: #2980b9;
+        }
+
+        .quick-samples-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .quick-sample-btn {
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-align: center;
+            color: #2c3e50;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .quick-sample-btn:hover {
+            background: #3498db;
+            color: white;
+            border-color: #3498db;
+            transform: translateY(-1px);
+        }
+
+        .all-samples-section {
+            border-top: 1px solid #eee;
+            padding-top: 10px;
+        }
+
+        .all-samples-section select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            background: white;
+        }
+
+        /* Legacy drop zone styles for compatibility */
         .drop-zone {
             position: relative;
             min-height: 80px;
@@ -37,14 +147,14 @@
             transition: all 0.3s ease;
             background-color: #fafafa;
         }
-        
+
         .drop-zone.drag-over {
             border-color: #3498db;
             background-color: rgba(52, 152, 219, 0.05);
             transform: scale(1.02);
             box-shadow: 0 4px 12px rgba(52, 152, 219, 0.2);
         }
-        
+
         .drop-zone.drop-success {
             animation: drop-success 0.6s ease;
             border-color: #27ae60;
@@ -433,30 +543,16 @@
             </div>
             
             <div class="modal-main" style="grid-area: main;">
-                <div class="file-selection">
-                    <div class="radio-option selected" data-value="sample">
-                        <input type="radio" name="file-source" value="sample" checked id="radio-sample">
-                        <label for="radio-sample">Use sample CIF file</label>
-                    </div>
-                    <div class="file-input-section">
-                        <select id="sampleFileSelect">
-                            <option value="">Loading sample files...</option>
-                        </select>
-                    </div>
-                </div>
-                
-                <div class="file-selection">
-                    <div class="radio-option" data-value="upload">
-                        <input type="radio" name="file-source" value="upload" id="radio-upload">
-                        <label for="radio-upload">Upload your own CIF file</label>
-                    </div>
-                    <div class="file-input-section drop-zone" id="uploadDropZone">
+                <!-- Unified Drop Zone with Quick Access -->
+                <div class="unified-file-section">
+                    <div class="main-drop-zone" id="uploadDropZone">
                         <div class="drop-zone-content">
-                            <p class="drop-instruction">📁 Drop CIF file here or</p>
+                            <div class="drop-icon">📁</div>
+                            <h3 style="margin: 10px 0 5px 0; color: #2c3e50;">Drop CIF file here or browse</h3>
                             <div class="custom-file-input-wrapper">
-                                <input type="file" id="uploadFile" accept=".cif" disabled style="display: none;">
-                                <button type="button" id="customFileButton" class="custom-file-button" disabled>
-                                    📂 Select CIF File
+                                <input type="file" id="uploadFile" accept=".cif" style="display: none;">
+                                <button type="button" id="customFileButton" class="custom-file-button">
+                                    📂 Browse Files
                                 </button>
                             </div>
                         </div>
@@ -464,6 +560,25 @@
                             <div class="drop-message">📎 Drop file to upload</div>
                         </div>
                         <div id="fileStatusArea" class="file-status-area"></div>
+                    </div>
+
+                    <div class="quick-samples-section">
+                        <div class="samples-header">
+                            <span style="color: #666; font-size: 14px;">Quick samples:</span>
+                            <button type="button" id="showAllSamplesBtn" class="show-all-btn">
+                                View all samples
+                            </button>
+                        </div>
+                        <div class="quick-samples-grid" id="quickSamples">
+                            <!-- Will be populated by JavaScript -->
+                        </div>
+                    </div>
+
+                    <!-- All samples dropdown (initially hidden) -->
+                    <div class="all-samples-section" id="allSamplesSection" style="display: none;">
+                        <select id="sampleFileSelect">
+                            <option value="">Loading sample files...</option>
+                        </select>
                     </div>
                 </div>
                 
@@ -543,6 +658,150 @@
         // Generate session ID
         window.sessionId = 'session-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
         console.log('Session ID:', window.sessionId);
+
+        // =============================================================================
+        // UNIFIED STRUCTURE CLIENT - Handles both sample and uploaded files
+        // =============================================================================
+
+        class UnifiedStructureClient {
+            constructor(sessionId) {
+                this.sessionId = sessionId;
+                this.cache = {
+                    originalData: null,
+                    currentSupercell: null,
+                    sourceInfo: null
+                };
+            }
+
+            // Unified structure setting (replaces processAnalyzedCIF)
+            async setStructure(data, sourceType, identifier, fileContent = null) {
+                console.log(`🔄 Setting unified structure - Type: ${sourceType}, ID: ${identifier}`);
+
+                this.cache.originalData = data;
+                this.cache.sourceInfo = { type: sourceType, id: identifier };
+
+                // Set global variables for backward compatibility
+                window.currentCrystalData = data;
+                window.currentFullPath = identifier;
+                window.currentFilename = identifier;
+
+                // Prepare structure data for API
+                let structureData = data;
+
+                // For upload files, include CIF content
+                if (sourceType === 'upload') {
+                    if (!fileContent && data.cif_content) {
+                        // Use CIF content from the data if available
+                        structureData = { ...data, cif_content: data.cif_content };
+                    } else if (fileContent) {
+                        // Use provided file content
+                        structureData = { ...data, cif_content: fileContent };
+                    } else {
+                        // Try to extract CIF content from existing data
+                        structureData = { ...data, cif_content: data.cif_content || '' };
+                    }
+                }
+
+                // Call unified backend API
+                try {
+                    const response = await fetch('/api/structure/set', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            session_id: this.sessionId,
+                            structure_data: structureData,
+                            source_type: sourceType,
+                            identifier: identifier
+                        })
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.detail || 'Failed to set structure');
+                    }
+
+                    const result = await response.json();
+                    console.log('✅ Unified structure set successfully:', result);
+                    return result;
+
+                } catch (error) {
+                    console.error('❌ Failed to set unified structure:', error);
+                    throw error;
+                }
+            }
+
+            // Unified supercell creation
+            async createSupercell(supercellSize) {
+                console.log(`🔄 Creating unified supercell - Size: ${supercellSize}`);
+
+                try {
+                    const response = await fetch('/api/supercell/create-unified', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            session_id: this.sessionId,
+                            crystal_data: this.cache.originalData,
+                            supercell_size: supercellSize
+                        })
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.detail || 'Failed to create supercell');
+                    }
+
+                    const result = await response.json();
+
+                    // Update global data structures for compatibility
+                    window.originalSupercellData = JSON.parse(JSON.stringify(result));
+                    window.currentStructureData = JSON.parse(JSON.stringify(result));
+
+                    console.log('✅ Unified supercell created successfully');
+                    return result;
+
+                } catch (error) {
+                    console.error('❌ Failed to create unified supercell:', error);
+                    throw error;
+                }
+            }
+
+            // Unified CHGNet prediction
+            async predictCHGNet(operations) {
+                console.log(`🔄 CHGNet prediction via unified API - Operations: ${operations.length}`);
+
+                try {
+                    const response = await fetch('/api/chgnet-predict-unified', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            session_id: this.sessionId,
+                            operations: operations
+                        })
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.detail || 'CHGNet prediction failed');
+                    }
+
+                    const result = await response.json();
+                    console.log('✅ Unified CHGNet prediction successful');
+                    return result;
+
+                } catch (error) {
+                    console.error('❌ Unified CHGNet prediction failed:', error);
+                    throw error;
+                }
+            }
+
+            // Get structure info
+            getStructureInfo() {
+                return this.cache.sourceInfo;
+            }
+        }
+
+        // Create global unified client instance
+        window.unifiedClient = new UnifiedStructureClient(window.sessionId);
 
         // Unified status display system
         window.displayStatus = {
@@ -651,7 +910,7 @@
         // Update session with atomic operations
         async function updateSessionWithOperations() {
             try {
-                const response = await fetch('/api/apply-atomic-operations', {
+                const response = await fetch('/api/operations/apply-unified', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -683,46 +942,26 @@
             loadCHGnetElements();
             setupEventListeners();
             setupCHGNetEventListeners();
-            setupDropZoneEventListeners();
+            setupMainDropZone();
             
             // Initialize unified display system
             initializeDisplays();
         });
 
         function setupEventListeners() {
-            // Radio option visual feedback
+            // Setup unified file selection UI
+            setupUnifiedFileSelection();
+
+            // Legacy radio option support (if any remain)
             document.querySelectorAll('.radio-option').forEach(option => {
                 option.addEventListener('click', function() {
                     const radio = this.querySelector('input[type="radio"]');
-                    radio.checked = true;
-                    
-                    // Update visual state
-                    document.querySelectorAll('.radio-option').forEach(opt => opt.classList.remove('selected'));
-                    this.classList.add('selected');
-                    
-                    // Trigger change event
-                    radio.dispatchEvent(new Event('change'));
-                });
-            });
-
-            // File source radio buttons
-            document.querySelectorAll('input[name="file-source"]').forEach(radio => {
-                radio.addEventListener('change', function() {
-                    const uploadFile = document.getElementById('uploadFile');
-                    const customFileButton = document.getElementById('customFileButton');
-                    const sampleSelect = document.getElementById('sampleFileSelect');
-                    
-                    if (this.value === 'upload') {
-                        uploadFile.disabled = false;
-                        customFileButton.disabled = false;
-                        sampleSelect.disabled = true;
-                    } else {
-                        uploadFile.disabled = true;
-                        customFileButton.disabled = true;
-                        sampleSelect.disabled = false;
+                    if (radio) {
+                        radio.checked = true;
+                        document.querySelectorAll('.radio-option').forEach(opt => opt.classList.remove('selected'));
+                        this.classList.add('selected');
+                        radio.dispatchEvent(new Event('change'));
                     }
-                    
-                    resetAnalysis();
                 });
             });
 
@@ -735,19 +974,7 @@
                 }
             });
 
-            // File upload
-            document.getElementById('uploadFile').addEventListener('change', function() {
-                if (this.files.length > 0) {
-                    analyzeUploadedFile(this.files[0]);
-                } else {
-                    resetAnalysis();
-                }
-            });
-
-            // Custom file button click handler
-            document.getElementById('customFileButton').addEventListener('click', function() {
-                document.getElementById('uploadFile').click();
-            });
+            // File upload and custom button are now handled in setupUnifiedFileSelection()
 
             // Confirm button
             document.getElementById('confirmButton').addEventListener('click', function() {
@@ -824,6 +1051,239 @@
             return dirName;
         }
 
+        // ===== Unified CIF Processing Functions =====
+
+        async function processAnalyzedCIF(data, source, identifier) {
+            try {
+                console.log(`🔄 UNIFIED: Processing CIF via unified client - Source: ${source}, ID: ${identifier}`);
+
+                // Use unified client to set structure
+                await window.unifiedClient.setStructure(data, source, identifier);
+
+                // Show success status based on source
+                if (source === 'upload') {
+                    showFileLoadSuccess(identifier); // identifier is file.name for uploads
+                } // For sample files, no specific success status needed
+
+                // Common processing: display crystal info and prepare UI
+                displayCrystalInfo(data);
+
+                // Reset analysis state for new file
+                if (typeof isStructureAnalyzed !== 'undefined') {
+                    isStructureAnalyzed = false;
+                    currentStructureHash = null;
+                    updateAnalyzeButtonState();
+                }
+
+                console.log(`✅ UNIFIED: CIF processing completed for ${source}: ${identifier}`);
+                console.log('📋 Modal displayed - waiting for user to click Confirm button');
+
+            } catch (error) {
+                console.error(`❌ UNIFIED: Error in processAnalyzedCIF for ${source}:`, error);
+                throw error; // Re-throw to be handled by calling function
+            }
+        }
+
+        // ===== Unified File Selection UI Functions =====
+
+        function setupUnifiedFileSelection() {
+            // Initialize quick samples
+            loadQuickSamples();
+
+            // Setup show all samples button
+            const showAllBtn = document.getElementById('showAllSamplesBtn');
+            if (showAllBtn) {
+                showAllBtn.addEventListener('click', toggleAllSamplesSection);
+            }
+
+            // Setup main drop zone click to trigger file browse
+            const mainDropZone = document.getElementById('uploadDropZone');
+            if (mainDropZone) {
+                mainDropZone.addEventListener('click', (e) => {
+                    if (e.target === mainDropZone || e.target.closest('.drop-zone-content')) {
+                        document.getElementById('uploadFile').click();
+                    }
+                });
+            }
+
+            // Setup custom file button
+            const customFileButton = document.getElementById('customFileButton');
+            if (customFileButton) {
+                customFileButton.addEventListener('click', function() {
+                    document.getElementById('uploadFile').click();
+                });
+            }
+
+            // File input is always enabled now
+            const uploadFile = document.getElementById('uploadFile');
+            if (uploadFile) {
+                uploadFile.disabled = false;
+                // Ensure file upload handler is attached
+                uploadFile.addEventListener('change', function() {
+                    if (this.files.length > 0) {
+                        analyzeUploadedFile(this.files[0]);
+                    }
+                });
+            }
+            if (customFileButton) customFileButton.disabled = false;
+
+            // Setup drag and drop for the main drop zone
+            setupMainDropZone();
+        }
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        function setupMainDropZone() {
+            const dropZone = document.getElementById('uploadDropZone');
+            const dropOverlay = document.getElementById('dropOverlay');
+
+            if (!dropZone || !dropOverlay) return;
+
+            // Prevent default drag behaviors
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, preventDefaults, false);
+                document.body.addEventListener(eventName, preventDefaults, false);
+            });
+
+            // Highlight drop zone when item is dragged over it
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropZone.addEventListener(eventName, handleMainDragEnter, false);
+            });
+
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, handleMainDragLeave, false);
+            });
+
+            // Handle dropped files
+            dropZone.addEventListener('drop', handleMainFileDrop, false);
+        }
+
+        function handleMainDragEnter(e) {
+            const dropOverlay = document.getElementById('dropOverlay');
+            const dropZone = document.getElementById('uploadDropZone');
+            if (dropOverlay) dropOverlay.style.display = 'flex';
+            // Apply to the main drop zone with the new class
+            if (dropZone) dropZone.classList.add('drag-over');
+        }
+
+        function handleMainDragLeave(e) {
+            const dropOverlay = document.getElementById('dropOverlay');
+            const dropZone = document.getElementById('uploadDropZone');
+            if (dropOverlay) dropOverlay.style.display = 'none';
+            if (dropZone) dropZone.classList.remove('drag-over');
+        }
+
+        function handleMainFileDrop(e) {
+            const dropOverlay = document.getElementById('dropOverlay');
+            const dropZone = document.getElementById('uploadDropZone');
+            if (dropOverlay) dropOverlay.style.display = 'none';
+            if (dropZone) {
+                dropZone.classList.remove('drag-over');
+                dropZone.classList.add('drop-success');
+                setTimeout(() => dropZone.classList.remove('drop-success'), 600);
+            }
+
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                analyzeUploadedFile(files[0]);
+            }
+        }
+
+        async function loadQuickSamples() {
+            try {
+                const response = await fetch('/api/sample-cif-files');
+                const data = await response.json();
+
+                // Extract popular samples for quick access
+                const quickSamplesList = getQuickSamplesList(data.structure);
+                renderQuickSamples(quickSamplesList);
+
+            } catch (error) {
+                console.error('Error loading quick samples:', error);
+                const quickSamplesGrid = document.getElementById('quickSamples');
+                if (quickSamplesGrid) {
+                    quickSamplesGrid.innerHTML = '<div style="color: #999; font-size: 12px;">Error loading samples</div>';
+                }
+            }
+        }
+
+        function getQuickSamplesList(structure) {
+            const popularSamples = [
+                'BaTiO3(cubic).cif',
+                'SrTiO3.cif',
+                'Si.cif',
+                'GaAs.cif',
+                'CaZrO3.cif',
+                'ZrO2.cif'
+            ];
+
+            const foundSamples = [];
+
+            // Search through structure to find popular samples
+            function searchStructure(struct, pathPrefix = '') {
+                struct.files.forEach(file => {
+                    const filename = file.display_name;
+                    if (popularSamples.includes(filename)) {
+                        foundSamples.push({
+                            path: file.path,
+                            name: filename.replace('.cif', ''),
+                            displayName: file.display_name
+                        });
+                    }
+                });
+
+                Object.keys(struct.subdirs).forEach(subdirName => {
+                    searchStructure(struct.subdirs[subdirName], pathPrefix + subdirName + '/');
+                });
+            }
+
+            searchStructure(structure);
+
+            // Return first 6 samples, or all if less than 6
+            return foundSamples.slice(0, 6);
+        }
+
+        function renderQuickSamples(samples) {
+            const quickSamplesGrid = document.getElementById('quickSamples');
+            if (!quickSamplesGrid) return;
+
+            if (samples.length === 0) {
+                quickSamplesGrid.innerHTML = '<div style="color: #999; font-size: 12px;">No quick samples available</div>';
+                return;
+            }
+
+            quickSamplesGrid.innerHTML = samples.map(sample =>
+                `<button class="quick-sample-btn" data-path="${sample.path}" title="${sample.displayName}">
+                    ${sample.name}
+                </button>`
+            ).join('');
+
+            // Add click handlers
+            quickSamplesGrid.querySelectorAll('.quick-sample-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const path = btn.dataset.path;
+                    analyzeSampleFile(path);
+                });
+            });
+        }
+
+        function toggleAllSamplesSection() {
+            const allSamplesSection = document.getElementById('allSamplesSection');
+            const showAllBtn = document.getElementById('showAllSamplesBtn');
+
+            if (allSamplesSection.style.display === 'none') {
+                allSamplesSection.style.display = 'block';
+                showAllBtn.textContent = 'Hide all samples';
+            } else {
+                allSamplesSection.style.display = 'none';
+                showAllBtn.textContent = 'View all samples';
+            }
+        }
+
         async function analyzeSampleFile(filename) {
             try {
                 const response = await fetch('/api/analyze-cif-sample', {
@@ -858,7 +1318,7 @@
                 }
                 
                 const data = await response.json();
-                displayCrystalInfo(data);
+                await processAnalyzedCIF(data, 'sample', filename);
             } catch (error) {
                 console.error('Error analyzing sample file:', error);
                 alert(`Error analyzing CIF file: ${error.message}`);
@@ -909,18 +1369,9 @@
                 }
                 
                 const data = await response.json();
-                
-                // Show success status
-                showFileLoadSuccess(file.name);
-                
-                displayCrystalInfo(data);
-                
-                // Reset analysis state for new file (intelligent button system)
-                if (typeof isStructureAnalyzed !== 'undefined') {
-                    isStructureAnalyzed = false;
-                    currentStructureHash = null;
-                    updateAnalyzeButtonState();
-                }
+
+                // Use unified processing function
+                await processAnalyzedCIF(data, 'upload', file.name);
             } catch (error) {
                 console.error('Error analyzing uploaded file:', error);
                 
@@ -939,10 +1390,7 @@
         function displayCrystalInfo(data) {
             window.currentCrystalData = data;
 
-            // For sample files, ensure we store the full path for API calls
-            if (data.filename && data.filename.includes('/')) {
-                window.currentFullPath = data.filename; // Store full path from sample files
-            }
+            // Filename handling is now done in processAnalyzedCIF()
             
             const infoContent = document.getElementById('infoContent');
             // Display information in the same order as ZrO2test.py
@@ -1014,102 +1462,6 @@
             crystalInfoElement.style.display = 'block';
         }
         
-        // Drag and Drop functionality
-        function setupDropZoneEventListeners() {
-            const dropZone = document.getElementById('uploadDropZone');
-            const fileInput = document.getElementById('uploadFile');
-            const dropOverlay = document.getElementById('dropOverlay');
-            
-            if (!dropZone || !fileInput || !dropOverlay) return;
-            
-            // Prevent default drag behaviors
-            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-                dropZone.addEventListener(eventName, preventDefaults, false);
-                document.body.addEventListener(eventName, preventDefaults, false);
-            });
-            
-            // Highlight drop zone when item is dragged over it
-            ['dragenter', 'dragover'].forEach(eventName => {
-                dropZone.addEventListener(eventName, handleDragEnter, false);
-            });
-            
-            ['dragleave', 'drop'].forEach(eventName => {
-                dropZone.addEventListener(eventName, handleDragLeave, false);
-            });
-            
-            // Handle dropped files
-            dropZone.addEventListener('drop', handleFileDrop, false);
-        }
-        
-        function preventDefaults(e) {
-            e.preventDefault();
-            e.stopPropagation();
-        }
-        
-        function handleDragEnter(e) {
-            const dropZone = document.getElementById('uploadDropZone');
-            const dropOverlay = document.getElementById('dropOverlay');
-            const uploadRadio = document.getElementById('radio-upload');
-            
-            if (uploadRadio.checked) {
-                dropZone.classList.add('drag-over');
-                dropOverlay.style.display = 'flex';
-            }
-        }
-        
-        function handleDragLeave(e) {
-            const dropZone = document.getElementById('uploadDropZone');
-            const dropOverlay = document.getElementById('dropOverlay');
-            
-            // Check if we're leaving the drop zone area completely
-            if (!dropZone.contains(e.relatedTarget)) {
-                dropZone.classList.remove('drag-over');
-                dropOverlay.style.display = 'none';
-            }
-        }
-        
-        function handleFileDrop(e) {
-            const dropZone = document.getElementById('uploadDropZone');
-            const dropOverlay = document.getElementById('dropOverlay');
-            const fileInput = document.getElementById('uploadFile');
-            const uploadRadio = document.getElementById('radio-upload');
-            
-            dropZone.classList.remove('drag-over');
-            dropOverlay.style.display = 'none';
-            
-            const files = e.dataTransfer.files;
-            
-            if (files.length > 0) {
-                const file = files[0];
-                
-                // Auto-select upload radio button
-                uploadRadio.checked = true;
-                fileInput.disabled = false;
-                
-                // Update file input
-                const dataTransfer = new DataTransfer();
-                dataTransfer.items.add(file);
-                fileInput.files = dataTransfer.files;
-                
-                // Show drop success animation
-                dropZone.classList.add('drop-success');
-                setTimeout(() => {
-                    dropZone.classList.remove('drop-success');
-                }, 600);
-                
-                // Process the file
-                handleFileSelection(file);
-            }
-        }
-        
-        function handleFileSelection(file) {
-            if (file) {
-                // Use existing upload file processing instead of enhanced version
-                analyzeUploadedFile(file);
-            } else {
-                showFileLoadError('No file selected');
-            }
-        }
         
         function processCIFFile(file) {
             const reader = new FileReader();
@@ -2986,26 +3338,23 @@ Crystal system: ${data.crystal_system}`;
             
             
             try {
-                const response = await fetch('/api/create-supercell', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        crystal_data: window.currentCrystalData,
-                        supercell_size: [parseInt(aSize), parseInt(bSize), parseInt(cSize)],
-                        session_id: window.sessionId
-                    })
-                });
-                
-                const result = await response.json();
+                console.log('🔄 UNIFIED: Creating supercell via unified client');
+
+                // Use unified client to create supercell
+                const result = await window.unifiedClient.createSupercell([parseInt(aSize), parseInt(bSize), parseInt(cSize)]);
                 
                 // Store supercell data
                 supercellData = result;
                 
                 // Store immutable original data (never changes)
                 window.originalSupercellData = JSON.parse(JSON.stringify(result));
-                
+
+                // Ensure filename is properly stored in original_data for CHGNet API calls
+                if (!window.originalSupercellData.original_data) {
+                    window.originalSupercellData.original_data = {};
+                }
+                window.originalSupercellData.original_data.filename = window.currentFullPath || window.currentFilename;
+
                 // Set initial density for supercell if not provided
                 if (!window.originalSupercellData.supercell_info.density) {
                     window.originalSupercellData.supercell_info.density = window.currentCrystalData.density;
@@ -3090,12 +3439,12 @@ Crystal system: ${data.crystal_system}`;
             
             const original = supercellData.original_data;
             const supercell = supercellData.supercell_info;
-            
+
             // Calculate supercell lattice parameters (scaled by supercell dimensions)
             const aSize = supercell.size[0];
             const bSize = supercell.size[1];
             const cSize = supercell.size[2];
-            
+
             const supercellLattice = {
                 a: original.lattice_parameters.a * aSize,
                 b: original.lattice_parameters.b * bSize,
@@ -3158,9 +3507,9 @@ Crystal system: ${data.crystal_system}`;
 
         async function loadElementLabels() {
             if (!supercellData) return;
-            
+
             try {
-                const response = await fetch('/api/get-element-labels', {
+                const response = await fetch('/api/element-labels/unified', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -4391,38 +4740,9 @@ Crystal system: ${data.crystal_system}`;
                     from: atomLabel.replace(/\d+$/, ''),
                     to: newElement
                 }];
-                
-                const response = await fetch('/api/chgnet-predict', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        filename: window.currentStructureData?.original_data?.filename || 'structure.cif',
-                        operations: tempOperations,
-                        supercell_size: window.currentStructureData?.supercell_info?.size || [1, 1, 1]
-                    }),
-                    signal: signal
-                });
-                
-                if (!response.ok) {
-                    let errorMessage = 'Error occurred during atom substitution prediction.';
-                    try {
-                        const errorData = await response.json();
-                        if (errorData.detail) {
-                            errorMessage = errorData.detail;
-                        }
-                    } catch (e) {
-                        if (response.status === 400) {
-                            errorMessage = 'Invalid structure data or operation.';
-                        } else if (response.status === 500) {
-                            errorMessage = 'Server error occurred. Please try again later.';
-                        }
-                    }
-                    throw new Error(errorMessage);
-                }
-                
-                const result = await response.json();
+
+                // Use unified CHGNet prediction (returns result directly or throws error)
+                const result = await window.unifiedClient.predictCHGNet(tempOperations);
                 
                 if (result.status === 'success' && result.prediction?.energy_eV_per_atom) {
                     return result.prediction.energy_eV_per_atom;
@@ -4455,38 +4775,9 @@ Crystal system: ${data.crystal_system}`;
                     action: "delete",
                     index: atomIndex
                 }];
-                
-                const response = await fetch('/api/chgnet-predict', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        filename: window.currentStructureData?.original_data?.filename || 'structure.cif',
-                        operations: tempOperations,
-                        supercell_size: window.currentStructureData?.supercell_info?.size || [1, 1, 1]
-                    }),
-                    signal: signal
-                });
-                
-                if (!response.ok) {
-                    let errorMessage = 'Error occurred during atom deletion prediction.';
-                    try {
-                        const errorData = await response.json();
-                        if (errorData.detail) {
-                            errorMessage = errorData.detail;
-                        }
-                    } catch (e) {
-                        if (response.status === 400) {
-                            errorMessage = 'Invalid structure data or operation.';
-                        } else if (response.status === 500) {
-                            errorMessage = 'Server error occurred. Please try again later.';
-                        }
-                    }
-                    throw new Error(errorMessage);
-                }
-                
-                const result = await response.json();
+
+                // Use unified CHGNet prediction (returns result directly or throws error)
+                const result = await window.unifiedClient.predictCHGNet(tempOperations);
                 
                 if (result.status === 'success' && result.prediction?.energy_eV_per_atom) {
                     return result.prediction.energy_eV_per_atom;
@@ -4753,13 +5044,15 @@ Crystal system: ${data.crystal_system}`;
                     session_id: window.sessionId
                 };
                 
-                console.log('📡 Requesting supercell CIF from direct API...');
-                const response = await fetch('/api/generate-supercell-cif-direct', {
+                console.log('📡 Requesting supercell CIF from unified API...');
+                const response = await fetch('/api/supercell/cif-unified', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify(requestData)
+                    body: JSON.stringify({
+                        session_id: window.sessionId
+                    })
                 });
                 
                 console.log(`📡 Response status: ${response.status} ${response.statusText}`);
@@ -4782,7 +5075,8 @@ Crystal system: ${data.crystal_system}`;
                     throw new Error(errorMessage);
                 }
                 
-                const cifData = await response.text();
+                const responseData = await response.json();
+                const cifData = responseData.cif_content;
                 console.log(`📄 Generated supercell CIF data: ${cifData.length} characters`);
                 
                 // Display structure using fastapiBT.py approach
@@ -4864,11 +5158,14 @@ Crystal system: ${data.crystal_system}`;
                     operations: window.atomicOperations
                 };
                 
-                console.log('📡 Requesting structure with operations from API...');
-                const response = await fetch('/api/generate-modified-structure-cif', {
+                console.log('📡 Requesting structure with operations from unified API...');
+                const response = await fetch('/api/structure/modified-cif-unified', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(requestData)
+                    body: JSON.stringify({
+                        session_id: window.sessionId,
+                        operations: window.atomicOperations
+                    })
                 });
                 
                 console.log(`📡 Response status: ${response.status} ${response.statusText}`);
@@ -4891,7 +5188,8 @@ Crystal system: ${data.crystal_system}`;
                     throw new Error(errorMessage);
                 }
                 
-                const cifData = await response.text();
+                const responseData = await response.json();
+                const cifData = responseData.cif_content;
                 console.log(`📄 Generated modified CIF data: ${cifData.length} characters`);
                 
                 // Update 3D viewer with modified structure

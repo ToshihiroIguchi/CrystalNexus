@@ -642,8 +642,163 @@ class SessionManager:
         # Log session statistics is now handled by the global function
         log_session_statistics()
 
-# Session management instance
-session_manager = SessionManager()
+class UnifiedStructureManager:
+    """
+    Unified structure management for session-based workspace
+    Handles both sample and uploaded files with single code path
+    """
+
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        self.workspace_dir = Path("sessions") / session_id
+        self.workspace_dir.mkdir(parents=True, exist_ok=True)
+
+        # Memory-first management
+        self._structure_cache = {
+            'original': None,           # Original pymatgen Structure
+            'current_supercell': None,  # Current supercell structure
+            'source_type': None,        # 'sample' or 'upload'
+            'original_filename': None,  # Original filename
+            'operations': []            # Applied operations
+        }
+
+        # Minimal file storage
+        self._file_paths = {
+            'working': self.workspace_dir / "current.cif"
+        }
+
+    def set_structure(self, structure: Structure, source_type: str, filename: str) -> None:
+        """Unified entry point for both sample and uploaded files"""
+        self._structure_cache['original'] = structure
+        self._structure_cache['current_supercell'] = structure  # Initially same as original
+        self._structure_cache['source_type'] = source_type
+        self._structure_cache['original_filename'] = filename
+        self._structure_cache['operations'] = []
+
+        logger.info(f"Structure set for session {self.session_id[:8]} - Type: {source_type}, File: {filename}")
+
+        # Clear any existing working file to force regeneration
+        if self._file_paths['working'].exists():
+            self._file_paths['working'].unlink()
+
+    def update_supercell(self, supercell_structure: Structure, operations: List = None) -> None:
+        """Update the current supercell structure"""
+        self._structure_cache['current_supercell'] = supercell_structure
+        if operations is not None:
+            self._structure_cache['operations'] = operations
+
+        # Clear working file to force regeneration with new structure
+        if self._file_paths['working'].exists():
+            self._file_paths['working'].unlink()
+
+    def get_working_file_path(self) -> Path:
+        """Get working file path for API calls (lazy generation)"""
+        if not self._file_paths['working'].exists():
+            self._generate_working_file()
+        return self._file_paths['working']
+
+    def _generate_working_file(self) -> None:
+        """Generate working CIF file from current structure"""
+        current_structure = self._get_current_structure()
+        if current_structure:
+            current_structure.to(filename=str(self._file_paths['working']), fmt="cif")
+            logger.debug(f"Generated working file for session {self.session_id[:8]}")
+        else:
+            raise ValueError(f"No structure available for session {self.session_id}")
+
+    def _get_current_structure(self) -> Optional[Structure]:
+        """Get current structure (supercell if available, otherwise original)"""
+        return self._structure_cache['current_supercell'] or self._structure_cache['original']
+
+    def get_current_structure(self) -> Optional[Structure]:
+        """Public accessor for current structure (supercell if available, otherwise original)"""
+        return self._get_current_structure()
+
+    @property
+    def filename(self) -> Optional[str]:
+        """Get the original filename"""
+        return self._structure_cache.get('original_filename')
+
+    def save_relaxed_structure(self, relaxed_structure, chgnet_result: Dict):
+        """Save relaxed structure and CHGNet metadata"""
+        self._structure_cache['relaxed_structure'] = relaxed_structure
+        self._structure_cache['chgnet_result'] = chgnet_result
+
+    def get_structure_info(self) -> Dict:
+        """Get structure information"""
+        return {
+            'source_type': self._structure_cache['source_type'],
+            'filename': self._structure_cache['original_filename'],
+            'has_supercell': self._structure_cache['current_supercell'] is not None,
+            'operations_count': len(self._structure_cache['operations'])
+        }
+
+    def get_cif_string(self) -> str:
+        """Get current structure as CIF string (no file needed)"""
+        current_structure = self._get_current_structure()
+        if current_structure:
+            return current_structure.to(fmt="cif")
+        else:
+            raise ValueError(f"No structure available for session {self.session_id}")
+
+    def cleanup(self) -> None:
+        """Clean up session workspace"""
+        try:
+            if self.workspace_dir.exists():
+                import shutil
+                shutil.rmtree(self.workspace_dir)
+                logger.debug(f"Cleaned up workspace for session {self.session_id[:8]}")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup session {self.session_id[:8]}: {e}")
+
+class UnifiedSessionManager:
+    """
+    Global manager for unified structure managers
+    """
+
+    def __init__(self):
+        self._managers: Dict[str, UnifiedStructureManager] = {}
+        self._legacy_sessions = session_manager  # Keep reference to legacy manager
+
+    def get_manager(self, session_id: str) -> UnifiedStructureManager:
+        """Get or create unified structure manager for session"""
+        if session_id not in self._managers:
+            self._managers[session_id] = UnifiedStructureManager(session_id)
+        return self._managers[session_id]
+
+    def cleanup_session(self, session_id: str) -> None:
+        """Clean up specific session"""
+        if session_id in self._managers:
+            self._managers[session_id].cleanup()
+            del self._managers[session_id]
+
+    def cleanup_old_sessions(self, max_age_hours: int = 6) -> None:
+        """Clean up old unified sessions"""
+        import time
+        cutoff_time = time.time() - (max_age_hours * 3600)
+
+        old_sessions = []
+        for session_id, manager in list(self._managers.items()):
+            # Check if workspace directory is old based on creation time
+            if manager.workspace_dir.exists():
+                workspace_ctime = manager.workspace_dir.stat().st_ctime
+                if workspace_ctime < cutoff_time:
+                    old_sessions.append(session_id)
+
+        for session_id in old_sessions:
+            self.cleanup_session(session_id)
+            logger.info(f"Cleaned up old unified session {session_id[:8]}...")
+
+        if old_sessions:
+            logger.info(f"Unified session cleanup: {len(old_sessions)} sessions removed")
+
+    def get_session_count(self) -> int:
+        """Get number of active unified sessions"""
+        return len(self._managers)
+
+# Session management instances
+session_manager = SessionManager()  # Legacy manager
+unified_session_manager = UnifiedSessionManager()  # New unified manager
 
 # Configuration constants - must be defined before use in app creation
 TEMPLATE_DIR = os.getenv('CRYSTALNEXUS_TEMPLATE_DIR', 'templates')
@@ -892,6 +1047,7 @@ async def analyze_uploaded_cif(file: UploadFile = File(...)):
             result = await analyze_cif_file(temp_path)
             safe_name = safe_filename(file.filename)
             result["filename"] = safe_name
+            result["cif_content"] = contents_str  # Add CIF content for unified API
             
             # Store the original structure for later use in createSupercell
             # Parse the structure and add it to the result
@@ -1711,13 +1867,16 @@ async def chgnet_relax_structure(request: dict):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required")
         
-        # Get the current structure from session (already has supercell + operations applied)
-        structure = session_manager.get_current_structure(session_id)
+        # Get the current structure from unified session manager
+        manager = unified_session_manager.get_manager(session_id)
+        if not manager:
+            raise HTTPException(status_code=404, detail=f"No structure found for session {session_id}")
+
+        structure = manager.get_current_structure()
         if structure is None:
             raise HTTPException(status_code=404, detail=f"No structure found for session {session_id}")
-        
-        session_info = session_manager.get_session_info(session_id)
-        filename = session_info.get('filename', 'unknown') if session_info else 'unknown'
+
+        filename = manager.filename
         
         logger.info(f"CHGNet relaxation for session {session_id[:8]}... ({filename}) with fmax={fmax}, max_steps={max_steps}")
         logger.info(f"Structure: {structure.composition} ({len(structure)} sites)")
@@ -1877,12 +2036,12 @@ async def chgnet_relax_structure(request: dict):
                     trajectory_data["force_magnitudes"].append(force_mags)
         
         # Save relaxed structure and CHGNet result metadata to session for later use
-        session_info['relaxed_structure'] = final_structure
-        session_info['chgnet_result'] = {
+        chgnet_metadata = {
             'fmax': fmax,
             'converged': relaxation_info.get('converged', False),
             'steps': relaxation_info.get('steps', 0)
         }
+        manager.save_relaxed_structure(final_structure, chgnet_metadata)
         logger.info(f"Saved relaxed structure to session {session_id[:8]}...")
         
         return {
@@ -2063,6 +2222,432 @@ async def generate_relaxed_structure_cif(request: dict):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=error_msg)
+
+# =============================================================================
+# UNIFIED WORKSPACE API ENDPOINTS
+# =============================================================================
+
+@app.post("/api/structure/set")
+async def set_structure_unified(request: dict):
+    """
+    Unified endpoint to set structure for both sample and uploaded files
+    """
+    try:
+        session_id = request.get("session_id")
+        structure_data = request.get("structure_data")
+        source_type = request.get("source_type")  # 'sample' or 'upload'
+        identifier = request.get("identifier")  # filename or path
+
+        if not all([session_id, structure_data, source_type, identifier]):
+            raise HTTPException(
+                status_code=400,
+                detail="Missing required fields: session_id, structure_data, source_type, identifier"
+            )
+
+        # Get or create unified structure manager
+        manager = unified_session_manager.get_manager(session_id)
+
+        # Convert structure data to pymatgen Structure
+        if isinstance(structure_data, dict):
+            # If it's already parsed crystal data
+            from pymatgen.io.cif import CifParser
+
+            if source_type == 'sample':
+                # For sample files, load from sample directory
+                cif_path = SAMPLE_CIF_DIR / safe_path(identifier)
+                if not cif_path.exists():
+                    raise HTTPException(status_code=404, detail=f"Sample file not found: {identifier}")
+                parser = CifParser(str(cif_path))
+                structures = parser.get_structures(primitive=False)
+                if not structures:
+                    raise HTTPException(status_code=400, detail=f"Invalid CIF file with no structures: {identifier}")
+                structure = structures[0]
+            else:
+                # For uploaded files, reconstruct from CIF content
+                if 'cif_content' in structure_data:
+                    from io import StringIO
+                    parser = CifParser(StringIO(structure_data['cif_content']))
+                    structures = parser.get_structures(primitive=False)
+                    if not structures:
+                        raise HTTPException(status_code=400, detail="Invalid CIF file with no structures!")
+                    structure = structures[0]
+                else:
+                    raise HTTPException(status_code=400, detail="CIF content required for uploaded files")
+        else:
+            # Direct structure object (fallback)
+            structure = structure_data
+
+        # Set structure in unified manager
+        manager.set_structure(structure, source_type, identifier)
+
+        logger.info(f"Structure set via unified API - Session: {session_id[:8]}, Type: {source_type}, ID: {identifier}")
+
+        return {
+            "success": True,
+            "message": f"Structure set successfully for {source_type} file: {identifier}",
+            "session_id": session_id,
+            "structure_info": manager.get_structure_info()
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to set structure: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/chgnet-predict-unified")
+async def chgnet_predict_unified(request: dict):
+    """
+    Unified CHGNet prediction endpoint - uses session workspace instead of filename
+    """
+    try:
+        session_id = request.get("session_id")
+        operations = request.get("operations", [])
+
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
+
+        # Get unified structure manager
+        manager = unified_session_manager.get_manager(session_id)
+        structure_info = manager.get_structure_info()
+
+        if not structure_info['filename']:
+            raise HTTPException(status_code=404, detail=f"No structure found for session {session_id}")
+
+        logger.info(f"Unified CHGNet prediction - Session: {session_id[:8]}, Operations: {len(operations)}")
+
+        # Get working file path (lazy generation)
+        working_file_path = manager.get_working_file_path()
+
+        if not working_file_path.exists():
+            raise HTTPException(status_code=500, detail="Failed to generate working file")
+
+        # Use existing CHGNet prediction logic with unified file
+        from pymatgen.io.cif import CifParser
+        parser = CifParser(str(working_file_path))
+        structures = parser.get_structures(primitive=False)
+        if not structures:
+            raise HTTPException(status_code=400, detail="Invalid CIF file with no structures!")
+        structure = structures[0]
+
+        # Apply operations for CHGNet prediction
+        valid_operations, invalid_operations = filter_valid_operations(
+            operations, len(structure.sites), strict_mode=False
+        )
+
+        if invalid_operations:
+            logger.warning(f"Skipping invalid operations: {invalid_operations}")
+
+        # Apply valid operations
+        for op in valid_operations:
+            if not isinstance(op, dict) or "type" not in op:
+                logger.warning(f"Skipping invalid operation format: {op}")
+                continue
+
+            if op["type"] == "delete" and "site_index" in op and op["site_index"] < len(structure.sites):
+                structure.remove_sites([op["site_index"]])
+            elif op["type"] == "substitute" and "site_index" in op and "new_element" in op and op["site_index"] < len(structure.sites):
+                structure.replace(op["site_index"], op["new_element"])
+
+        if not CHGNET_AVAILABLE:
+            raise HTTPException(status_code=503, detail="CHGNet is not available")
+
+        # Load CHGNet model
+        try:
+            chgnet = await chgnet_manager.get_model()
+        except RuntimeError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+
+        # Predict structure properties
+        try:
+            prediction = await chgnet_manager.predict_single_optimized(
+                structure,
+                return_site_energies=True,
+                return_atom_feas=True,
+                return_crystal_feas=True
+            )
+            result = safe_get_prediction(prediction, num_atoms=len(structure.sites))
+        except TypeError:
+            # Fallback if detailed prediction fails
+            prediction = await chgnet_manager.predict_single_optimized(structure)
+            result = safe_get_prediction(prediction, num_atoms=len(structure.sites))
+
+        return {
+            "success": True,
+            "status": "success",
+            "prediction": result,
+            "operations_applied": len(valid_operations),
+            "operations_skipped": len(invalid_operations),
+            "structure_info": structure_info
+        }
+
+    except Exception as e:
+        logger.error(f"Unified CHGNet prediction failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/supercell/create-unified")
+async def create_supercell_unified(request: dict):
+    """
+    Unified supercell creation endpoint
+    """
+    try:
+        session_id = request.get("session_id")
+        crystal_data = request.get("crystal_data")
+        supercell_size = request.get("supercell_size", [1, 1, 1])
+
+        if not all([session_id, crystal_data, supercell_size]):
+            raise HTTPException(
+                status_code=400,
+                detail="Missing required fields: session_id, crystal_data, supercell_size"
+            )
+
+        # Get unified structure manager
+        manager = unified_session_manager.get_manager(session_id)
+
+        # Create supercell from crystal data
+        cif_content = crystal_data.get('cif_content', '')
+        if not cif_content:
+            raise HTTPException(status_code=400, detail="CIF content is required")
+
+        # Parse structure and create supercell
+        from pymatgen.io.cif import CifParser
+        from io import StringIO
+
+        parser = CifParser(StringIO(cif_content))
+        structures = parser.get_structures(primitive=False)
+        if not structures:
+            raise HTTPException(status_code=400, detail="Invalid CIF file with no structures!")
+
+        original_structure = structures[0]
+        structure = original_structure.copy()
+        structure.make_supercell(supercell_size)
+
+        # Update manager with supercell
+        manager.update_supercell(structure)
+
+        structure_data = {
+            'original_data': {
+                'filename': manager.get_structure_info()['filename'],
+                'composition': str(original_structure.composition),
+                'num_atoms': len(original_structure.sites),
+                'lattice': original_structure.lattice.abc + original_structure.lattice.angles,
+                'volume': original_structure.lattice.volume,
+                'density': original_structure.density,
+                'formula': str(original_structure.composition),
+                'lattice_parameters': {
+                    'a': float(original_structure.lattice.a),
+                    'b': float(original_structure.lattice.b),
+                    'c': float(original_structure.lattice.c),
+                    'alpha': float(original_structure.lattice.alpha),
+                    'beta': float(original_structure.lattice.beta),
+                    'gamma': float(original_structure.lattice.gamma)
+                }
+            },
+            'supercell_info': {
+                'size': supercell_size,
+                'num_atoms': len(structure.sites),
+                'composition': str(structure.composition),
+                'formula': str(structure.composition),
+                'volume': structure.lattice.volume,
+                'density': structure.density
+            },
+            'cif_content': structure.to(fmt='cif')
+        }
+
+        logger.info(f"Unified supercell created - Session: {session_id[:8]}, Size: {supercell_size}")
+
+        return structure_data
+
+    except Exception as e:
+        logger.error(f"Unified supercell creation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/element-labels/unified")
+async def get_element_labels_unified(request: dict):
+    """
+    Unified element labels endpoint for 3D visualization
+    """
+    try:
+        session_id = request.get("session_id")
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
+
+        # Get unified structure manager
+        manager = unified_session_manager.get_manager(session_id)
+        structure_info = manager.get_structure_info()
+
+        if not structure_info['filename']:
+            raise HTTPException(status_code=404, detail=f"No structure found for session {session_id}")
+
+        # Get current structure (supercell if available, otherwise original)
+        structure = manager.get_current_structure()
+        if not structure:
+            raise HTTPException(status_code=404, detail="No structure available in session")
+
+        # Get element labels in site order
+        element_labels = [str(site.specie) for site in structure.sites]
+
+        return {
+            "success": True,
+            "labels": element_labels,
+            "num_sites": len(structure.sites)
+        }
+
+    except Exception as e:
+        logger.error(f"Unified element labels failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/supercell/cif-unified")
+async def generate_supercell_cif_unified(request: dict):
+    """
+    Unified supercell CIF generation endpoint for 3D visualization
+    """
+    try:
+        session_id = request.get("session_id")
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
+
+        # Get unified structure manager
+        manager = unified_session_manager.get_manager(session_id)
+        structure_info = manager.get_structure_info()
+
+        if not structure_info['filename']:
+            raise HTTPException(status_code=404, detail=f"No structure found for session {session_id}")
+
+        # Get current supercell structure
+        structure = manager.get_current_structure()
+        if not structure:
+            raise HTTPException(status_code=404, detail="No supercell structure available in session")
+
+        # Generate CIF content
+        cif_content = structure.to(fmt='cif')
+
+        return {
+            "success": True,
+            "cif_content": cif_content,
+            "filename": structure_info['filename']
+        }
+
+    except Exception as e:
+        logger.error(f"Unified supercell CIF generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/structure/modified-cif-unified")
+async def generate_modified_structure_cif_unified(request: dict):
+    """
+    Unified modified structure CIF generation endpoint
+    """
+    try:
+        session_id = request.get("session_id")
+        operations = request.get("operations", [])
+
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
+
+        # Get unified structure manager
+        manager = unified_session_manager.get_manager(session_id)
+        structure_info = manager.get_structure_info()
+
+        if not structure_info['filename']:
+            raise HTTPException(status_code=404, detail=f"No structure found for session {session_id}")
+
+        # Get current structure
+        structure = manager.get_current_structure()
+        if not structure:
+            raise HTTPException(status_code=404, detail="No structure available in session")
+
+        # Apply operations to create modified structure
+        modified_structure = structure.copy()
+
+        # Apply operations in reverse order for proper deletion indices
+        delete_operations = [op for op in operations if op.get("action") == "delete"]
+        substitute_operations = [op for op in operations if op.get("action") == "substitute"]
+
+        # Sort deletions by index in reverse order
+        delete_operations.sort(key=lambda x: x.get("index", 0), reverse=True)
+
+        # Apply deletions first (in reverse order)
+        for op in delete_operations:
+            if "index" in op and 0 <= op["index"] < len(modified_structure.sites):
+                modified_structure.remove_sites([op["index"]])
+
+        # Apply substitutions (indices may have changed after deletions)
+        for op in substitute_operations:
+            if "index" in op and "element" in op and 0 <= op["index"] < len(modified_structure.sites):
+                modified_structure.replace(op["index"], op["element"])
+
+        # Generate CIF content
+        cif_content = modified_structure.to(fmt='cif')
+
+        return {
+            "success": True,
+            "cif_content": cif_content,
+            "filename": structure_info['filename'],
+            "operations_applied": len(operations)
+        }
+
+    except Exception as e:
+        logger.error(f"Unified modified structure CIF generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/operations/apply-unified")
+async def apply_atomic_operations_unified(request: dict):
+    """
+    Unified atomic operations application endpoint
+    """
+    try:
+        session_id = request.get("session_id")
+        operations = request.get("operations", [])
+
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
+
+        # Get unified structure manager
+        manager = unified_session_manager.get_manager(session_id)
+        structure_info = manager.get_structure_info()
+
+        if not structure_info['filename']:
+            raise HTTPException(status_code=404, detail=f"No structure found for session {session_id}")
+
+        # Get current structure
+        structure = manager.get_current_structure()
+        if not structure:
+            raise HTTPException(status_code=404, detail="No structure available in session")
+
+        # Apply operations to create modified structure
+        modified_structure = structure.copy()
+
+        # Apply operations similar to above
+        delete_operations = [op for op in operations if op.get("action") == "delete"]
+        substitute_operations = [op for op in operations if op.get("action") == "substitute"]
+
+        # Sort deletions by index in reverse order
+        delete_operations.sort(key=lambda x: x.get("index", 0), reverse=True)
+
+        # Apply operations
+        for op in delete_operations:
+            if "index" in op and 0 <= op["index"] < len(modified_structure.sites):
+                modified_structure.remove_sites([op["index"]])
+
+        for op in substitute_operations:
+            if "index" in op and "element" in op and 0 <= op["index"] < len(modified_structure.sites):
+                modified_structure.replace(op["index"], op["element"])
+
+        # Update manager with modified structure
+        manager.update_supercell(modified_structure, operations)
+
+        return {
+            "success": True,
+            "message": f"Applied {len(operations)} operations to session structure",
+            "operations_applied": len(operations),
+            "structure_info": manager.get_structure_info()
+        }
+
+    except Exception as e:
+        logger.error(f"Unified operations application failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# =============================================================================
+# LEGACY API ENDPOINTS (kept for backward compatibility)
+# =============================================================================
 
 def check_backend_status():
     try:
