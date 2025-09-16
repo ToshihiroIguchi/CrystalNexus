@@ -697,11 +697,11 @@ body {
 }
 
 .supercell-axis-group input {
-    width: 50px;
-    padding: 4px 6px;
+    width: 75px;
+    padding: 6px 9px;
     border: 1px solid #ddd;
     border-radius: 4px;
-    font-size: 13px;
+    font-size: 19.5px;
     text-align: center;
     font-weight: 500;
 }
