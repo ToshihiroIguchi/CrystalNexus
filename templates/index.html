@@ -912,7 +912,15 @@
                 
                 // Show success status
                 showFileLoadSuccess(file.name);
-                
+
+                // Store filename variables for Analyze button (CRITICAL FIX)
+                window.currentFilename = file.name;
+                window.currentFullPath = file.name;
+
+                console.log('📁 UPLOAD: Set filename variables in analyzeUploadedFile:');
+                console.log('  - currentFilename:', window.currentFilename);
+                console.log('  - currentFullPath:', window.currentFullPath);
+
                 displayCrystalInfo(data);
                 
                 // Reset analysis state for new file (intelligent button system)
@@ -1132,6 +1140,11 @@
                             // Store both full filename and base name for different API uses
                             window.currentFilename = file.name; // For uploaded files, this is just basename
                             window.currentFullPath = file.name; // Same as filename for uploads
+
+                            console.log('📁 UPLOAD: Set filename variables:');
+                            console.log('  - currentFilename:', window.currentFilename);
+                            console.log('  - currentFullPath:', window.currentFullPath);
+
                             displayCrystalInfo(data);
                             // Reset analysis state for new file
                             isStructureAnalyzed = false;
@@ -1374,8 +1387,18 @@
             
             if (analyzeBtn) {
                 analyzeBtn.addEventListener('click', async () => {
+                    console.log('🔬 ANALYZE: Button clicked');
+                    console.log('🔬 ANALYZE: supercellData available:', !!supercellData);
+                    console.log('🔬 ANALYZE: currentFilename:', window.currentFilename);
+                    console.log('🔬 ANALYZE: supercellData:', supercellData);
+
                     if (supercellData && window.currentFilename) {
+                        console.log('✅ ANALYZE: Conditions met, running analysis...');
                         await runCHGNetAnalysis();
+                    } else {
+                        console.log('❌ ANALYZE: Conditions not met - cannot run analysis');
+                        if (!supercellData) console.log('  - Missing supercellData');
+                        if (!window.currentFilename) console.log('  - Missing currentFilename');
                     }
                 });
             }
@@ -3027,6 +3050,20 @@ Crystal system: ${data.crystal_system}`;
                 
                 // Complete data deletion and display supercell info
                 completeDataDeletion();
+
+                // Debug: Check what filename variables we have
+                console.log('🔍 SUPERCELL: Checking filename variables:');
+                console.log('  - window.currentFilename:', window.currentFilename);
+                console.log('  - window.currentFullPath:', window.currentFullPath);
+
+                // Restore filename for uploaded files (needed for Analyze button)
+                if (window.currentFullPath) {
+                    window.currentFilename = window.currentFullPath;
+                    console.log('✅ SUPERCELL: Restored currentFilename:', window.currentFilename);
+                } else {
+                    console.log('❌ SUPERCELL: No currentFullPath to restore from');
+                }
+
                 displaySupercellInfo();
                 
                 // Robust 3D control system initialization simplified
@@ -3054,6 +3091,10 @@ Crystal system: ${data.crystal_system}`;
         }
 
         function completeDataDeletion() {
+            console.log('🗑️ DATA_DELETION: Before deletion:');
+            console.log('  - currentFilename:', window.currentFilename);
+            console.log('  - currentFullPath:', window.currentFullPath);
+
             // Complete deletion of original crystal data
             window.currentCrystalData = null;
             
@@ -3077,6 +3118,10 @@ Crystal system: ${data.crystal_system}`;
                 window.gc();
             }
             
+            console.log('🗑️ DATA_DELETION: After deletion:');
+            console.log('  - currentFilename:', window.currentFilename);
+            console.log('  - currentFullPath:', window.currentFullPath);
+
             console.log('✓ Complete data deletion performed:');
             console.log('  - window.currentCrystalData set to null');
             console.log('  - Modal content cleared');
