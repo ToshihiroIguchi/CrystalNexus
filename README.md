@@ -64,15 +64,28 @@ CrystalNexus/
 ├── requirements.txt        # Python dependencies (2025 latest versions)
 ├── .gitignore             # Git ignore configuration
 ├── README.md              # Project documentation
-├── sample_cif/            # Sample crystal structure files
-│   ├── BaTiO3.cif        # Barium titanate (perovskite)
-│   ├── C.cif             # Carbon (diamond)
-│   ├── Nd2Fe14B.cif      # Neodymium iron boron (permanent magnet)
-│   ├── SrFe12O19.cif     # Strontium ferrite (hexaferrite)
-│   └── ZrO2.cif          # Zirconia (ceramic)
+├── sample_cif/            # Sample crystal structure files (organized by category)
+│   ├── Gases/            # Gas phase structures
+│   │   ├── CO2(gas).cif   # Carbon dioxide
+│   │   ├── H2(gas).cif    # Hydrogen gas
+│   │   └── H2O(gas).cif   # Water vapor
+│   ├── Metals/           # Metallic structures
+│   │   ├── Cu.cif         # Copper
+│   │   ├── Nd2Fe14B.cif   # Neodymium iron boron (permanent magnet)
+│   │   ├── Ni.cif         # Nickel
+│   │   └── Si.cif         # Silicon
+│   └── Oxides/           # Oxide ceramics
+│       ├── BaTiO3(cubic).cif      # Barium titanate (cubic perovskite)
+│       ├── BaTiO3(tetragonal).cif # Barium titanate (tetragonal)
+│       ├── CaZrO3.cif     # Calcium zirconate
+│       ├── FeBiO3.cif     # Iron bismuth oxide
+│       ├── SrFe12O19.cif  # Strontium ferrite (hexaferrite)
+│       └── ZrO2.cif       # Zirconia (ceramic)
 ├── templates/             # HTML templates
 │   └── index.html        # Main application interface
 ├── static/               # Static web assets
+│   ├── css/              # Stylesheets
+│   ├── js/               # JavaScript files
 │   ├── favicon.ico       # Browser favicon
 │   ├── crystalnexus_whitelogo.png  # Application logo
 │   └── user_guide.html   # Comprehensive user documentation
@@ -140,7 +153,7 @@ python start_crystalnexus.py
 
 5. **Access the application:**
 - Open your web browser
-- Navigate to: **http://localhost:8080**
+- Navigate to: **http://localhost:8080** (default port, configurable via CRYSTALNEXUS_PORT environment variable)
 
 ### **start_crystalnexus.py Features:**
 The intelligent startup script provides comprehensive server management:
@@ -256,7 +269,7 @@ If you encounter issues with the latest versions, ensure you're using Python 3.8
 
 ### 1. **Loading Crystal Structures**
 - Click "Select CIF File" to open the file selection modal
-- Choose from 5 sample structures or upload your own CIF file
+- Choose from 13 sample structures organized by category (Gases, Metals, Oxides) or upload your own CIF file
 - Supported formats: Standard CIF files with crystallographic data
 
 ### 2. **Creating Supercells**
@@ -314,13 +327,30 @@ If you encounter issues with the latest versions, ensure you're using Python 3.8
 
 ## Sample Crystal Structures
 
-CrystalNexus includes 5 carefully selected sample structures representing different material classes:
+CrystalNexus includes 13 carefully selected sample structures organized by category:
 
+### Gas Phase Structures
+| Structure | Formula | Applications |
+|-----------|---------|-------------|
+| **CO2(gas)** | CO₂ | Carbon capture, atmospheric studies |
+| **H2(gas)** | H₂ | Hydrogen fuel, energy storage |
+| **H2O(gas)** | H₂O | Water vapor, humidity studies |
+
+### Metallic Structures
 | Structure | Formula | Type | Applications |
 |-----------|---------|------|-------------|
-| **BaTiO3** | BaTiO₃ | Perovskite | Ferroelectric ceramics, capacitors |
-| **C** | C | Covalent crystal | Diamond, cutting tools, electronics |
+| **Cu** | Cu | Metal | Electrical conductors, electronics |
 | **Nd2Fe14B** | Nd₂Fe₁₄B | Intermetallic | Permanent magnets, motors |
+| **Ni** | Ni | Metal | Catalysts, alloys |
+| **Si** | Si | Semiconductor | Electronics, solar cells |
+
+### Oxide Ceramics
+| Structure | Formula | Type | Applications |
+|-----------|---------|------|-------------|
+| **BaTiO3(cubic)** | BaTiO₃ | Perovskite | Ferroelectric ceramics, capacitors |
+| **BaTiO3(tetragonal)** | BaTiO₃ | Perovskite | Ferroelectric materials |
+| **CaZrO3** | CaZrO₃ | Perovskite | High-temperature ceramics |
+| **FeBiO3** | FeBiO₃ | Perovskite | Multiferroic materials |
 | **SrFe12O19** | SrFe₁₂O₁₉ | Hexaferrite | Magnetic recording, microwave devices |
 | **ZrO2** | ZrO₂ | Oxide ceramic | Thermal barrier coatings, fuel cells |
 
@@ -336,8 +366,10 @@ CrystalNexus includes 5 carefully selected sample structures representing differ
 - `POST /api/analyze-cif-sample` - Analyze sample CIF file
 - `POST /api/analyze-cif-upload` - Analyze uploaded CIF file
 - `POST /api/create-supercell` - Generate supercell structure
-- `POST /api/chgnet-analyze` - Run CHGNet ML analysis
+- `POST /api/chgnet-predict` - Run CHGNet energy prediction
+- `POST /api/chgnet-relax` - Run CHGNet structure relaxation
 - `POST /api/generate-relaxed-structure-cif` - Get relaxed structure
+- `POST /api/generate-modified-structure-cif` - Get modified structure
 
 ### Structure Modification
 - `POST /api/get-element-labels` - Get atom labels for operations
