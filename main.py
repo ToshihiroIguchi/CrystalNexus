@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 import uvicorn
+import asyncio
 
 from pymatgen.core import Structure, Element
 from pymatgen.io.cif import CifParser
@@ -189,9 +190,15 @@ class CHGNetModelManager:
     """
     _instance: Optional['CHGNetModelManager'] = None
     _model = None
-    _relaxer = None
     _lock = asyncio.Lock()
     batch_size = CHGNET_BATCH_SIZE  # Configurable batch size for CPU processing
+    
+    def __init__(self):
+        # Two-Lane Highway Concurrency Control
+        # Relax Lane: limit to 1 concurrent heavy task
+        self.sem_relax = asyncio.Semaphore(1)
+        # Predict Lane: limit to 4 concurrent light tasks
+        self.sem_predict = asyncio.Semaphore(4)
     
     def __new__(cls):
         if cls._instance is None:
@@ -207,15 +214,14 @@ class CHGNetModelManager:
         return self._model
     
     async def get_relaxer(self):
-        """Get StructOptimizer instance (lazy loading)"""
-        if self._relaxer is None:
-            async with self._lock:
-                if self._relaxer is None:  # Double-check locking
-                    model = await self.get_model()
-                    from chgnet.model import StructOptimizer
-                    self._relaxer = StructOptimizer(model=model, use_device="cpu", optimizer_class="FIRE")
-                    logger.info("CHGNet StructOptimizer created and cached")
-        return self._relaxer
+        """
+        Get StructOptimizer instance (thread-safe instantiation)
+        Returns a NEW instance per call to ensure thread safety
+        """
+        model = await self.get_model()
+        from chgnet.model import StructOptimizer
+        # Create new optimizer instance sharing the same model
+        return StructOptimizer(model=model, use_device="cpu", optimizer_class="FIRE")
     
     async def _load_model(self):
         """Internal method to load CHGNet model"""
@@ -273,7 +279,7 @@ class CHGNetModelManager:
             
         return results
     
-    async def predict_single_optimized(self, structure, **kwargs):
+    async def predict_single_optimized(self, structure, use_semaphore=True, **kwargs):
         """
         Optimized single structure prediction with memory management
         """
@@ -282,16 +288,27 @@ class CHGNetModelManager:
         # Memory optimization for large structures
         if len(structure) > 100:
             # Force garbage collection before large structure prediction
-            import gc
-            gc.collect()
+            # Run in thread to avoid blocking
+            await asyncio.to_thread(self._gc_collect)
             logger.debug(f"Garbage collection performed for large structure ({len(structure)} atoms)")
             
         try:
-            pred = model.predict_structure(structure, **kwargs)
+            # Check if we should use the semaphore
+            if use_semaphore:
+                async with self.sem_predict:
+                    pred = await asyncio.to_thread(model.predict_structure, structure, **kwargs)
+            else:
+                # Already guarded by another semaphore (e.g. relax), runs directly in current thread context
+                # But wait, predict_structure is sync CPU bound, so we MUST run it in thread regardless of semaphore
+                pred = await asyncio.to_thread(model.predict_structure, structure, **kwargs)
             return pred
         except Exception as e:
             logger.error(f"Optimized prediction failed: {e}")
             raise
+
+    def _gc_collect(self):
+        import gc
+        gc.collect()
             
     async def predict_auto_mode_batch(self, base_structure, target_atoms, operation_type, **kwargs):
         """
@@ -559,6 +576,16 @@ class SessionManager:
     
     def __init__(self):
         self.sessions: Dict[str, Dict] = {}
+        self.busy_sessions: Set[str] = set()
+        
+    def set_busy(self, session_id: str, busy: bool):
+        if busy:
+            self.busy_sessions.add(session_id)
+        else:
+            self.busy_sessions.discard(session_id)
+            
+    def is_busy(self, session_id: str) -> bool:
+        return session_id in self.busy_sessions
         
     def create_session(self, session_id: str, filename: str, original_structure: Structure) -> None:
         """Create new session"""
@@ -716,6 +743,9 @@ async def apply_atomic_operations(request: dict):
 
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required")
+            
+        if session_manager.is_busy(session_id):
+            raise HTTPException(status_code=409, detail="Session is busy with analysis")
 
         # Get current structure from session
         current_structure = session_manager.get_current_structure(session_id)
@@ -1805,12 +1835,17 @@ async def chgnet_predict_structure(request: dict):
         
         # Predict structure properties using optimized prediction
         try:
+            if session_manager.is_busy(session_id):
+                 raise HTTPException(status_code=409, detail="Session is busy")
+            
+            # Predict uses sem_predict internally via predict_single_optimized(use_semaphore=True)
             pred = await chgnet_manager.predict_single_optimized(structure,
+                                                               use_semaphore=True,
                                                                return_site_energies=True,
                                                                return_atom_feas=False,
                                                                return_crystal_feas=False)
         except TypeError:
-            pred = await chgnet_manager.predict_single_optimized(structure)
+            pred = await chgnet_manager.predict_single_optimized(structure, use_semaphore=True)
         
         # Extract results with number of atoms for energy conversion
         results = safe_get_prediction(pred, num_atoms=len(structure.sites))
@@ -1863,65 +1898,88 @@ async def chgnet_relax_structure(request: dict):
         structure = session_manager.get_current_structure(session_id)
         if structure is None:
             raise HTTPException(status_code=404, detail=f"No structure found for session {session_id}")
+            
+        if session_manager.is_busy(session_id):
+            raise HTTPException(status_code=409, detail="Session is processing another analysis")
         
-        session_info = session_manager.get_session_info(session_id)
-        filename = session_info.get('filename', 'unknown') if session_info else 'unknown'
+        session_manager.set_busy(session_id, True)
         
-        logger.info(f"CHGNet relaxation for session {session_id[:8]}... ({filename}) with fmax={fmax}, max_steps={max_steps}")
-        logger.info(f"Structure: {structure.composition} ({len(structure)} sites)")
-        
-        # Load CHGNet model and relaxer (using singleton pattern)
         try:
-            chgnet = await chgnet_manager.get_model()
-            relaxer = await chgnet_manager.get_relaxer()
-        except RuntimeError as e:
-            raise HTTPException(status_code=503, detail=str(e))
-        
-        # Predict initial structure using optimized prediction
-        try:
-            pred_initial = await chgnet_manager.predict_single_optimized(structure,
-                                                                       return_site_energies=True,
-                                                                       return_atom_feas=True,
-                                                                       return_crystal_feas=True)
-            initial_results = safe_get_prediction(pred_initial, num_atoms=len(structure.sites))
-        except TypeError:
-            # Fallback if detailed prediction fails
-            pred_initial = await chgnet_manager.predict_single_optimized(structure)
-            initial_results = safe_get_prediction(pred_initial, num_atoms=len(structure.sites))
-        except Exception as e:
-            logger.warning(f"Initial prediction failed: {e}")
-            initial_results = {"energy_eV_per_atom": None}
-        
-        # CHGNet structure relaxation
-        logger.info(f"Starting CHGNet relaxation: fmax={fmax}, max_steps={max_steps}")
-        result = relaxer.relax(structure, fmax=fmax, steps=max_steps, verbose=True, relax_cell=True)
-        
-        # Basic result validation
-        logger.info(f"CHGNet result keys: {sorted(result.keys())}")
-        if 'final_structure' not in result:
-            raise RuntimeError("CHGNet relaxation failed: no final_structure returned")
-        if 'trajectory' not in result:
-            logger.warning("CHGNet relaxation warning: no trajectory returned")
-        
-        final_structure = result.get("final_structure")
-        if final_structure is None:
-            raise RuntimeError("Relaxation failed: no final structure returned")
-        
-        # Predict relaxed structure using optimized prediction
-        try:
-            pred_final = await chgnet_manager.predict_single_optimized(final_structure,
-                                                                     return_site_energies=True,
-                                                                     return_atom_feas=True,
-                                                                     return_crystal_feas=True)
-            final_results = safe_get_prediction(pred_final, num_atoms=len(final_structure.sites))
-        except TypeError:
-            # Fallback if detailed prediction fails
-            pred_final = await chgnet_manager.predict_single_optimized(final_structure)
-            final_results = safe_get_prediction(pred_final, num_atoms=len(final_structure.sites))
-        except Exception as e:
-            logger.warning(f"Final prediction failed: {e}")
-            final_results = {"energy_eV_per_atom": None}
-        
+            session_info = session_manager.get_session_info(session_id)
+            filename = session_info.get('filename', 'unknown') if session_info else 'unknown'
+            
+            logger.info(f"CHGNet relaxation for session {session_id[:8]}... ({filename}) with fmax={fmax}, max_steps={max_steps}")
+            logger.info(f"Structure: {structure.composition} ({len(structure)} sites)")
+            
+            # Load CHGNet model and relaxer (using singleton pattern)
+            try:
+                chgnet = await chgnet_manager.get_model()
+                relaxer = await chgnet_manager.get_relaxer()
+            except RuntimeError as e:
+                raise HTTPException(status_code=503, detail=str(e))
+            
+            # Acquire semaphore for heavy lifting
+            async with chgnet_manager.sem_relax:
+                
+                # Predict initial structure using optimized prediction (no semaphore, we already have relax lock)
+                try:
+                    pred_initial = await chgnet_manager.predict_single_optimized(structure,
+                                                                               use_semaphore=False,
+                                                                               return_site_energies=True,
+                                                                               return_atom_feas=True,
+                                                                               return_crystal_feas=True)
+                    initial_results = safe_get_prediction(pred_initial, num_atoms=len(structure.sites))
+                except TypeError:
+                    # Fallback if detailed prediction fails
+                    pred_initial = await chgnet_manager.predict_single_optimized(structure, use_semaphore=False)
+                    initial_results = safe_get_prediction(pred_initial, num_atoms=len(structure.sites))
+                except Exception as e:
+                    logger.warning(f"Initial prediction failed: {e}")
+                    initial_results = {"energy_eV_per_atom": None}
+                
+                # CHGNet structure relaxation - RUN IN THREAD
+                logger.info(f"Starting CHGNet relaxation: fmax={fmax}, max_steps={max_steps}")
+                
+                 # Need to define a small wrapper for run_in_threadpool if needed, or just use to_thread
+                 # Since relaxer.relax is purely CPU bound sync code:
+                result = await asyncio.to_thread(
+                    relaxer.relax, 
+                    structure, 
+                    fmax=fmax, 
+                    steps=max_steps, 
+                    verbose=True, 
+                    relax_cell=True
+                )
+                
+                # Basic result validation
+                logger.info(f"CHGNet result keys: {sorted(result.keys())}")
+                if 'final_structure' not in result:
+                    raise RuntimeError("CHGNet relaxation failed: no final_structure returned")
+                if 'trajectory' not in result:
+                    logger.warning("CHGNet relaxation warning: no trajectory returned")
+                
+                final_structure = result.get("final_structure")
+                if final_structure is None:
+                    raise RuntimeError("Relaxation failed: no final structure returned")
+                
+                # Predict relaxed structure using optimized prediction
+                try:
+                    pred_final = await chgnet_manager.predict_single_optimized(final_structure,
+                                                                             use_semaphore=False,
+                                                                             return_site_energies=True,
+                                                                             return_atom_feas=True,
+                                                                             return_crystal_feas=True)
+                    final_results = safe_get_prediction(pred_final, num_atoms=len(final_structure.sites))
+                except TypeError:
+                    # Fallback if detailed prediction fails
+                    pred_final = await chgnet_manager.predict_single_optimized(final_structure, use_semaphore=False)
+                    final_results = safe_get_prediction(pred_final, num_atoms=len(final_structure.sites))
+                except Exception as e:
+                    logger.warning(f"Final prediction failed: {e}")
+                    final_results = {"energy_eV_per_atom": None}
+        finally:
+            session_manager.set_busy(session_id, False)
+            
         # Calculate energy difference in total eV
         energy_diff = None
         energy_diff_per_atom = None
