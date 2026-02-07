@@ -1827,6 +1827,11 @@ async def chgnet_predict_structure(request: dict):
             elif operation["action"] == "delete":
                 structure.remove_sites([site_index])
         
+        session_id = request.get("session_id")
+        
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required for structure prediction (concurrency control)")
+         
         # Load CHGNet model (using singleton pattern)
         try:
             chgnet = await chgnet_manager.get_model()
@@ -1875,6 +1880,8 @@ async def chgnet_predict_structure(request: dict):
     except ValueError as e:
         logger.error(f"CHGNet prediction validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"CHGNet prediction error: {e}")
         import traceback

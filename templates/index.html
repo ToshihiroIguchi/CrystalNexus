@@ -4445,7 +4445,9 @@ Crystal system: ${data.crystal_system}`;
                     body: JSON.stringify({
                         filename: window.currentStructureData?.original_data?.filename || 'structure.cif',
                         operations: tempOperations,
-                        supercell_size: window.currentStructureData?.supercell_info?.size || [1, 1, 1]
+                        supercell_size: window.currentStructureData?.supercell_info?.size || [1, 1, 1],
+                        // [NEW] Explicitly pass session_id for busy checking
+                        session_id: window.sessionId
                     }),
                     signal: signal
                 });
@@ -4509,7 +4511,9 @@ Crystal system: ${data.crystal_system}`;
                     body: JSON.stringify({
                         filename: window.currentStructureData?.original_data?.filename || 'structure.cif',
                         operations: tempOperations,
-                        supercell_size: window.currentStructureData?.supercell_info?.size || [1, 1, 1]
+                        supercell_size: window.currentStructureData?.supercell_info?.size || [1, 1, 1],
+                        // [NEW] Explicitly pass session_id for busy checking
+                        session_id: window.sessionId
                     }),
                     signal: signal
                 });
