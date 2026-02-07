@@ -308,7 +308,7 @@ body {
     top: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0,0,0,0.5);
+    background-color: rgba(0, 0, 0, 0.5);
 }
 
 .modal-content {
@@ -326,7 +326,7 @@ body {
     display: grid;
     grid-template-columns: 350px 1fr;
     gap: 20px;
-    grid-template-areas: 
+    grid-template-areas:
         "header header"
         "main sidebar"
         "confirm confirm";
@@ -344,7 +344,7 @@ body {
     padding-bottom: 10px;
 }
 
-.file-selection {
+.file-selection-group {
     grid-area: main;
     margin-bottom: 20px;
 }
@@ -390,18 +390,25 @@ body {
     margin-top: 8px;
 }
 
-.file-selection select,
-.file-selection input[type="file"] {
+.file-selection-group select,
+.file-selection-group input[type="file"],
+.full-width-select {
     width: 100%;
-    padding: 8px;
+    padding: 8px 12px;
     border: 1px solid #ddd;
     border-radius: 5px;
     margin-bottom: 8px;
     font-size: 13px;
+    background-color: white;
+    appearance: auto;
+    /* Ensure standard dropdown arrow is visible but styled */
+    min-height: 36px;
+    /* Match button height approximately */
 }
 
-.file-selection select:focus,
-.file-selection input[type="file"]:focus {
+.file-selection-group select:focus,
+.file-selection-group input[type="file"]:focus,
+.full-width-select:focus {
     outline: none;
     border-color: #3498db;
     box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
@@ -769,12 +776,14 @@ body {
     overflow: hidden;
 }
 
-.button, .primary-action {
+.button,
+.primary-action {
     background-color: #3498db;
     grid-area: confirm;
 }
 
-.button:hover:not(:disabled), .primary-action:hover:not(:disabled) {
+.button:hover:not(:disabled),
+.primary-action:hover:not(:disabled) {
     background-color: #2980b9;
     transform: translateY(-1px);
     box-shadow: 0 4px 8px rgba(52, 152, 219, 0.3);
@@ -810,34 +819,42 @@ body {
     box-shadow: 0 2px 4px rgba(127, 140, 141, 0.3);
 }
 
-.success-action, .execute-button {
+.success-action,
+.execute-button {
     background-color: #27ae60 !important;
     color: white;
 }
 
-.success-action:hover:not(:disabled), .execute-button:hover:not(:disabled) {
+.success-action:hover:not(:disabled),
+.execute-button:hover:not(:disabled) {
     background-color: #229954 !important;
     transform: translateY(-1px);
     box-shadow: 0 4px 8px rgba(39, 174, 96, 0.3);
 }
 
-.warning-action, .reset-operations-btn, .substitute-button {
+.warning-action,
+.reset-operations-btn,
+.substitute-button {
     background-color: #f39c12 !important;
     color: white;
 }
 
-.warning-action:hover:not(:disabled), .reset-operations-btn:hover:not(:disabled), .substitute-button:hover:not(:disabled) {
+.warning-action:hover:not(:disabled),
+.reset-operations-btn:hover:not(:disabled),
+.substitute-button:hover:not(:disabled) {
     background-color: #e67e22 !important;
     transform: translateY(-1px);
     box-shadow: 0 4px 8px rgba(243, 156, 18, 0.3);
 }
 
-.destructive-action, .delete-button {
+.destructive-action,
+.delete-button {
     background-color: #e74c3c !important;
     color: white;
 }
 
-.destructive-action:hover:not(:disabled), .delete-button:hover:not(:disabled) {
+.destructive-action:hover:not(:disabled),
+.delete-button:hover:not(:disabled) {
     background-color: #c0392b !important;
     transform: translateY(-1px);
     box-shadow: 0 4px 8px rgba(231, 76, 60, 0.3);
@@ -861,7 +878,8 @@ body {
     box-shadow: 0 2px 6px rgba(149, 165, 166, 0.3);
 }
 
-.special-action, .detail-analysis-btn {
+.special-action,
+.detail-analysis-btn {
     background: #3498db !important;
     color: white;
     border: 2px solid #3498db !important;
@@ -873,7 +891,8 @@ body {
     border: none !important;
 }
 
-.special-action:hover:not(:disabled), .detail-analysis-btn:hover:not(:disabled) {
+.special-action:hover:not(:disabled),
+.detail-analysis-btn:hover:not(:disabled) {
     background: #2980b9 !important;
     border-color: #2980b9 !important;
     transform: translateY(-2px);
@@ -901,10 +920,16 @@ body {
     box-shadow: 0 2px 4px rgba(127, 140, 141, 0.3);
 }
 
-.success-action:disabled, .warning-action:disabled, 
-.destructive-action:disabled, .secondary-action:disabled, .special-action:disabled,
-.execute-button:disabled, .reset-operations-btn:disabled, .substitute-button:disabled,
-.delete-button:disabled, .detail-analysis-btn:disabled {
+.success-action:disabled,
+.warning-action:disabled,
+.destructive-action:disabled,
+.secondary-action:disabled,
+.special-action:disabled,
+.execute-button:disabled,
+.reset-operations-btn:disabled,
+.substitute-button:disabled,
+.delete-button:disabled,
+.detail-analysis-btn:disabled {
     background: #bdc3c7 !important;
     cursor: not-allowed;
     transform: none;
@@ -939,45 +964,56 @@ body {
     left: -100%;
     width: 100%;
     height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
     animation: shimmer 2s infinite;
 }
 
 
 @keyframes shimmer {
-    0% { left: -100%; }
-    100% { left: 100%; }
+    0% {
+        left: -100%;
+    }
+
+    100% {
+        left: 100%;
+    }
 }
 
 @keyframes gradientShift {
     0% {
         background-position: 0% 50%;
     }
+
     50% {
         background-position: 100% 50%;
     }
+
     100% {
         background-position: 0% 50%;
     }
 }
 
 @keyframes pulse {
-    0%, 100% { 
-        transform: scale(1); 
-        opacity: 1; 
+
+    0%,
+    100% {
+        transform: scale(1);
+        opacity: 1;
     }
-    50% { 
-        transform: scale(1.08); 
-        opacity: 0.95; 
+
+    50% {
+        transform: scale(1.08);
+        opacity: 0.95;
     }
 }
 
 @keyframes spin {
-    from { 
-        transform: translateY(-50%) rotate(0deg); 
+    from {
+        transform: translateY(-50%) rotate(0deg);
     }
-    to { 
-        transform: translateY(-50%) rotate(360deg); 
+
+    to {
+        transform: translateY(-50%) rotate(360deg);
     }
 }
 
@@ -986,13 +1022,16 @@ body {
 }
 
 @keyframes subtle-pulse {
-    0%, 100% { 
-        transform: scale(1); 
-        opacity: 1; 
+
+    0%,
+    100% {
+        transform: scale(1);
+        opacity: 1;
     }
-    50% { 
-        transform: scale(1.01); 
-        opacity: 0.9; 
+
+    50% {
+        transform: scale(1.01);
+        opacity: 0.9;
     }
 }
 
@@ -1716,8 +1755,13 @@ body {
 }
 
 @keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
 }
 
 .detail-analysis-btn {
@@ -1773,8 +1817,15 @@ body {
 }
 
 @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(-10px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 .control-btn:hover {
