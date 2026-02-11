@@ -9,7 +9,9 @@
     <link rel="stylesheet" href="/static/css/styles.css">
     <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="/static/js/utils.js"></script>
+    <script src="/static/js/auto_mode_chart.js"></script>
     <style>
         .info-icon {
             font-size: 14px;
@@ -3324,6 +3326,12 @@ Crystal system: ${data.crystal_system}`;
                     <div class="progress-bar" id="execute-progress-bar" style="display: none;">
                         <div class="progress-fill"></div>
                     </div>
+                    
+                    <!-- Auto Mode Chart Container -->
+                    <div class="chart-container" style="position: relative; height: 60px; width: 100%; margin-top: 5px; margin-bottom: 5px; display: none;" id="chart-container-wrapper">
+                        <canvas id="auto-mode-chart"></canvas>
+                    </div>
+
                     <div class="current-best" id="current-best" style="display: none; margin-top: 8px; padding: 6px 8px; background: rgba(46, 204, 113, 0.1); border: 1px solid rgba(46, 204, 113, 0.3); border-radius: 4px; font-size: 11px; color: #27ae60;">
                         <div style="font-weight: bold; margin-bottom: 2px;">Current Best:</div>
                         <div id="current-best-energy" style="font-family: monospace;">-</div>
@@ -3346,6 +3354,33 @@ Crystal system: ${data.crystal_system}`;
 
             // Initialize cancel button
             initializeCancelButton();
+
+            // Initialize Chart if not already done
+            const chartCanvas = document.getElementById('auto-mode-chart');
+
+            // Check if existing chart is stale (canvas reference mismatch)
+            if (window.autoModeChart) {
+                // If the chart's canvas is different from the one currently in the DOM, it's stale
+                if (window.autoModeChart.canvas !== chartCanvas) {
+                    console.log('♻️ Re-initializing chart (canvas mismatch)');
+                    if (typeof window.autoModeChart.destroy === 'function') {
+                        window.autoModeChart.destroy();
+                    }
+                    window.autoModeChart = null;
+                }
+            }
+
+            if (!window.autoModeChart && chartCanvas) {
+                // Check if Chart.js is loaded
+                if (typeof Chart !== 'undefined') {
+                    window.autoModeChart = new AutoModeChart('auto-mode-chart');
+                } else {
+                    console.warn('Chart.js not loaded yet');
+                }
+            } else if (window.autoModeChart) {
+                // Reset chart for new session/operations
+                window.autoModeChart.reset();
+            }
         }
 
         function extractUniqueElements(labels) {
@@ -3759,12 +3794,15 @@ Crystal system: ${data.crystal_system}`;
             const statusText = document.getElementById('execute-status-text');
             const progressBar = document.getElementById('execute-progress-bar');
             const cancelBtn = document.getElementById('cancel-btn');
+            const chartContainer = document.getElementById('chart-container-wrapper');
 
             statusDiv.style.display = 'block';
             statusText.textContent = message;
 
             if (showProgress) {
                 progressBar.style.display = 'block';
+                // Show chart when progress is shown (during Auto Mode)
+                if (chartContainer) chartContainer.style.display = 'block';
             } else {
                 progressBar.style.display = 'none';
             }
@@ -3793,11 +3831,15 @@ Crystal system: ${data.crystal_system}`;
             const statusDiv = document.getElementById('execute-status');
             const cancelBtn = document.getElementById('cancel-btn');
             const currentBest = document.getElementById('current-best');
+            const chartContainer = document.getElementById('chart-container-wrapper');
+
             statusDiv.style.display = 'none';
             cancelBtn.style.display = 'none';
             if (currentBest) {
                 currentBest.style.display = 'none';
             }
+            // Hide chart when status is hidden
+            if (chartContainer) chartContainer.style.display = 'none';
         }
 
         // Update current best result during calculation
@@ -3907,6 +3949,11 @@ Crystal system: ${data.crystal_system}`;
                 startTime: Date.now()
             };
 
+            // Reset Chart
+            if (window.autoModeChart) {
+                window.autoModeChart.reset();
+            }
+
             currentAbortController = new AbortController();
             setExecuteButtonState('processing', '⏳ Starting...');
             showExecuteStatus('Initializing energy calculations...', true, true);
@@ -3942,6 +3989,11 @@ Crystal system: ${data.crystal_system}`;
                             index: atom.index,
                             attempts: result.attempts
                         });
+
+                        // Update chart
+                        if (window.autoModeChart) {
+                            window.autoModeChart.addDataPoint(atom.label, result.energy);
+                        }
 
                         // Update best result
                         if (!calculationResults.bestResult || result.energy < calculationResults.bestResult.energy) {
@@ -4194,6 +4246,11 @@ Crystal system: ${data.crystal_system}`;
                 startTime: Date.now()
             };
 
+            // Reset Chart
+            if (window.autoModeChart) {
+                window.autoModeChart.reset();
+            }
+
             currentAbortController = new AbortController();
             setExecuteButtonState('processing', '⏳ Starting...');
             showExecuteStatus('Initializing energy calculations...', true, true);
@@ -4229,6 +4286,11 @@ Crystal system: ${data.crystal_system}`;
                             index: atom.index,
                             attempts: result.attempts
                         });
+
+                        // Update chart
+                        if (window.autoModeChart) {
+                            window.autoModeChart.addDataPoint(atom.label, result.energy);
+                        }
 
                         // Update best result
                         if (!calculationResults.bestResult || result.energy < calculationResults.bestResult.energy) {
