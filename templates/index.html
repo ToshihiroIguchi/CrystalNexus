@@ -3971,53 +3971,53 @@ Crystal system: ${data.crystal_system}`;
 
                     showExecuteStatus(`Testing ${atom.label} → ${newElement}... (${i + 1}/${targetAtoms.length})`, true, true);
 
-                    // Use error-handling energy calculation
-                    const result = await calculateEnergyWithRetry(
-                        atom.label,
-                        { type: 'substitution', newElement },
-                        currentAbortController.signal
-                    );
+                    try {
+                        // Direct validation/calculation call (Main-branch style, no retries)
+                        const energy = await performSubstitutionCalculation(
+                            atom.label,
+                            newElement,
+                            currentAbortController.signal
+                        );
 
-                    if (currentAbortController.signal.aborted) {
-                        break;
-                    }
-
-                    if (result.success) {
+                        // Success path
                         calculationResults.successful.push({
                             atom: atom.label,
-                            energy: result.energy,
+                            energy: energy,
                             index: atom.index,
-                            attempts: result.attempts
+                            attempts: 1
                         });
 
                         // Update chart
                         if (window.autoModeChart) {
-                            window.autoModeChart.addDataPoint(atom.label, result.energy);
+                            window.autoModeChart.addDataPoint(atom.label, energy);
                         }
 
                         // Update best result
-                        if (!calculationResults.bestResult || result.energy < calculationResults.bestResult.energy) {
+                        if (!calculationResults.bestResult || energy < calculationResults.bestResult.energy) {
                             calculationResults.bestResult = {
                                 atom: atom.label,
-                                energy: result.energy,
+                                energy: energy,
                                 index: atom.index
                             };
-                            updateCurrentBest(result.energy, atom.label, newElement);
+                            updateCurrentBest(energy, atom.label, newElement);
                         }
 
-                        console.log(`${atom.label} → ${newElement}: ${result.energy.toFixed(6)} eV/atom (${result.attempts} attempts)`);
+                        console.log(`${atom.label} → ${newElement}: ${energy.toFixed(6)} eV/atom`);
 
-                    } else {
+                    } catch (error) {
+                        // Failure path
+                        const errorMsg = error.message || 'Unknown error';
+
                         calculationResults.failed.push({
                             atom: atom.label,
-                            errors: result.errors,
-                            finalError: result.finalError
+                            errors: [{ error: errorMsg }],
+                            finalError: errorMsg
                         });
 
-                        console.warn(`Failed to calculate energy for ${atom.label}: ${result.finalError}`);
+                        console.warn(`Failed to calculate energy for ${atom.label}: ${errorMsg}`);
 
                         if (AUTO_MODE_CONFIG.showRealTimeErrors) {
-                            updateRealTimeErrorDisplay(atom.label, result.finalError);
+                            updateRealTimeErrorDisplay(atom.label, errorMsg);
                         }
                     }
 
