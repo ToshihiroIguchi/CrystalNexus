@@ -151,7 +151,7 @@ python start_crystalnexus.py
 *   **Correction**: This usually means a missing system dependency. Install the [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170).
 
 ### Q: Performance is slow
-*   **Correction**: Computing relaxation for large supercells (100+ atoms) on a CPU can be slow. CHGNet is optimized for CUDA (NVIDIA GPUs), but CrystalNexus runs on CPU by default for compatibility. Be patient with complex structures.
+*   **Correction**: Computing relaxation for large supercells (100+ atoms) can be slow because CrystalNexus is configured to run on **CPU only** to ensure broad compatibility and stability. Please be patient when analyzing complex structures or large supercells.
 
 ## Technology Stack
 
