@@ -1,96 +1,157 @@
 # CrystalNexus
 
-CrystalNexus is a comprehensive web-based application for crystal structure analysis and materials science research. It integrates the **CHGNet** (Crystal Hamiltonian Graph Neural Network) machine learning model to provide real-time structure relaxation, energy prediction, and property analysis through an intuitive user interface.
+CrystalNexus is a comprehensive web-based application for crystal structure analysis and materials science research. It bridges the gap between traditional crystallography and modern AI by integrating the **CHGNet** (Crystal Hamiltonian Graph Neural Network) machine learning model. This allows researchers to perform real-time structure relaxation, energy prediction, and magnetic property analysis directly in the browser, without the need for complex command-line tools or expensive commercial software.
 
 ## Key Features
 
-### Crystal Structure Analysis
-*   **CIF File Support**: Load, analyze, and visualize standard Crystallographic Information Files (CIF)
-*   **3D Visualization**: Real-time interactive crystal structure rendering using 3Dmol.js
-*   **Supercell Generation**: Create custom supercells with automatic visualization updates
-*   **Materials Project Integration**: Integrated search link to the Materials Project database for easy access to crystal structures
+### 🔬 Crystal Structure Analysis
+*   **Universal CIF Support**: Seamlessly load, parse, and visualizes standard Crystallographic Information Files (CIF) from any source.
+*   **Interactive 3D Visualization**: powered by **3Dmol.js**, allowing you to rotate, zoom, and inspect atomic structures, bonds, and unit cells in real-time.
+*   **Smart Supercell Generation**: Create custom supercells (e.g., 2x2x2) with a single click. The application automatically handles atomic positions and lattice vectors.
+*   **Materials Project Integration**: Quickly search for and download structures from the Materials Project database via a direct integrated link.
 
-### Machine Learning Integration (CHGNet)
-*   **Structure Relaxation**: Automatic atomic position and lattice optimization
-*   **Property Prediction**: Determine total energy, magmom, and site-specific energies
-*   **Auto Mode Optimization**: AI-driven atom substitution and deletion to find the most energetically favorable configurations
-*   **Real-time Feedback**: Visual sparkline charts tracking energy changes during auto-optimization
+### 🤖 Machine Learning Integration (CHGNet v0.4.0)
+*   **State-of-the-Art Model**: Utilizes the latest CHGNet pre-trained transformer model for accurate universal interatomic potential predictions.
+*   **One-Click Relaxation**: Automatically optimizes atomic positions and lattice parameters to find the ground-state structure.
+*   **Property Prediction**: Instantly calculates:
+    *   **Total Energy** (eV/atom)
+    *   **Magnetic Moments** (magmom)
+    *   **Site-Specific Energies**
+*   **Auto Mode Optimization**: An advanced AI-driven feature that iteratively substitutes or deletes atoms to discover the most energetically favorable configuration.
+*   **Real-time Feedback**: Watch energy minimization progress live via dynamic sparkline charts.
 
-### Comprehensive Analysis Tools
-*   **Local Analytics**: Built-in SQLite database tracks usage history and calculation statistics (local only, privacy-focused)
-*   **Detailed Metrics**: View lattice parameters, stress tensors, and atomic forces
-*   **Data Export**: Download complete analysis results including relaxed structures (CIF), property data (CSV/TXT), and trajectory logs in a single ZIP archive
+### 📊 Comprehensive Analysis Tools
+*   **Local Analytics Dashboard**: A built-in SQLite database tracks your usage history and calculation statistics. **Data privacy is paramount**: all analytics are stored locally on your machine and are never uploaded to the cloud.
+*   **Detailed Metrics**: Inspect precise lattice parameters (a, b, c, α, β, γ), stress tensors, and atomic forces for every step of the relaxation.
+*   **Full Data Export**: Download a comprehensive ZIP archive containing:
+    *   The final relaxed structure (CIF)
+    *   Property data (CSV/TXT)
+    *   Full optimization trajectory logs
 
 ## Directory Structure
 
 ```
 CrystalNexus/
-├── main.py                 # FastAPI backend application
-├── start_crystalnexus.py   # Server startup script with health monitoring
-├── analytics_db.py         # Local analytics database manager
-├── sample_cif/            # Curated library of sample crystal structures
-├── templates/             # HTML templates (Jinja2)
+├── main.py                 # Core FastAPI backend application
+├── start_crystalnexus.py   # robust server startup script with auto-recovery and health monitoring
+├── analytics_db.py         # Local analytics database manager (SQLite)
+├── sample_cif/            # Curated library of sample crystal structures (Oxides, Metals, etc.)
+├── templates/             # Jinja2 HTML templates for the frontend
 ├── static/               # Static assets (CSS, JS, images)
-├── uploads/              # Temporary directory for user uploads
-└── requirements.txt        # Python dependencies
+├── uploads/              # Temporary directory for user uploads (auto-cleaned)
+└── requirements.txt        # Detailed Python dependencies list
 ```
 
 ## Installation
 
 ### Prerequisites
-*   Python 3.8+
-*   pip package manager
-*   Git
+*   **Python**: Version 3.8 to 3.12 is required.
+*   **Git**: For version control and cloning the repository.
+*   **Visual C++ Build Tools (Windows Only)**: Required for compiling some Python dependencies (like `pymatgen` and `numpy`). You can download them from [Microsoft's website](https://visualstudio.microsoft.com/visual-cpp-build-tools/).
 
-### Quick Start
+### Step-by-Step Installation Guide
 
-1.  **Clone the repository**
-    ```bash
-    git clone https://github.com/ToshihiroIguchi/CrystalNexus.git
-    cd CrystalNexus
-    ```
+#### 1. Clone the Repository
+Open your terminal or command prompt and run:
+```bash
+git clone https://github.com/ToshihiroIguchi/CrystalNexus.git
+cd CrystalNexus
+```
 
-2.  **Set up Virtual Environment**
-    ```bash
-    python -m venv venv
-    
-    # Windows
-    venv\Scripts\activate
-    
-    # macOS/Linux
-    source venv/bin/activate
-    ```
+#### 2. Create a Virtual Environment
+It is highly recommended to use a virtual environment to avoid conflicts with other Python projects.
 
-3.  **Install Dependencies**
-    ```bash
-    pip install -r requirements.txt
-    ```
-    *Note: Installation may take a few minutes due to PyTorch and CHGNet dependencies.*
+**For Windows (PowerShell):**
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+```
+*Note: If you get a permission error, run `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser` first.*
 
-4.  **Run the Application**
-    ```bash
-    python start_crystalnexus.py
-    ```
-    Access the application at `http://localhost:8080`.
+**For Windows (Command Prompt):**
+```cmd
+python -m venv venv
+venv\Scripts\activate.bat
+```
 
-## API Documentation
+**For macOS / Linux:**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
 
-CrystalNexus provides a RESTful API powered by FastAPI.
+#### 3. Install Dependencies
+Install all required libraries using `pip`. This step may take a few minutes as it installs large machine learning libraries (PyTorch, CHGNet).
 
-### Core Endpoints
-*   `GET /`: Main application interface
-*   `GET /health`: System health check
-*   `GET /api/sample-cif-files`: List available sample structures
+```bash
+pip install -r requirements.txt
+```
 
-### Analysis & Calculation
-*   `POST /api/analyze-cif-upload`: Process uploaded CIF files
-*   `POST /api/chgnet-predict`: Run static energy calculation
-*   `POST /api/chgnet-relax`: Perform structure relaxation
-*   `POST /api/create-supercell`: Generate supercell structures
+#### 4. Verify Installation
+Check if the installation was successful by listing the installed packages:
+```bash
+pip list
+```
+Ensure `chgnet`, `pymatgen`, `fastapi`, and `torch` are present.
 
-### Structure Modification
-*   `POST /api/apply-atomic-operations`: Apply batch modifications (substitution/deletion)
-*   `POST /api/generate-modified-structure-cif`: Export modified structure as CIF
+---
+
+## Usage Manual
+
+### Starting the Server
+We provide a dedicated startup script that handles port checking, health monitoring, and auto-restarts.
+
+Run the following command in your terminal:
+```bash
+python start_crystalnexus.py
+```
+
+*   **What happens next?**
+    *   The script checks if port `8080` is free.
+    *   It starts the FastAPI backend server.
+    *   It monitors the server health continuously.
+    *   Once ready, it will display: `CrystalNexus is ready! URL: http://localhost:8080`
+
+### Workflow Guide
+
+#### 1. Loading a Structure
+*   **Option A (Select Sample)**: Click the **"Select CIF File"** button. Choose a file from the dropdown list (e.g., `Oxides/BaTiO3(cubic).cif`).
+*   **Option B (Upload)**: Click **"Upload CIF"** to use your own file.
+*   **Option C (Materials Project)**: Click the link in the modal to search the Materials Project database, download a CIF, and then upload it here.
+
+#### 2. Visualization
+*   **Rotate**: Left-click and drag.
+*   **Zoom**: Mouse wheel scroll.
+*   **Pan**: Right-click (or Ctrl+Left-click) and drag.
+*   **Inspect**: Hover over atoms to see their element and coordinates.
+
+#### 3. Structure Analysis (CHGNet)
+*   **Static Calculation**: Click **"Analyze Structure"** (Default). This calculates the energy of the *current* geometry without moving atoms.
+*   **Relaxation**: Check the **"Relax Structure"** box before analyzing. This will optimize the geometry. The 3D view will update to show the new, relaxed structure.
+
+#### 4. Advanced Editing
+*   **Supercell**: Open the **"Structure Operations"** menu. Enter dimensions (e.g., 2 2 2) and click **"Create Supercell"**.
+*   **Auto Mode**: Select "Auto Mode" to let AI iteratively improve your structure by testing substitutions (e.g., substituting Ti with Zr).
+
+#### 5. Exporting Results
+*   After an analysis is complete, click the **"Detailed Analysis"** button.
+*   In the modal, click **"Download All Data (ZIP)"** to save your work.
+
+---
+
+## Troubleshooting
+
+### Q: "Backend failed to start" or "Port 8080 is in use"
+*   **Correction**: The `start_crystalnexus.py` script attempts to auto-kill the process using port 8080. If it fails, manually find the process using `netstat -ano | findstr :8080` (Windows) or `lsof -i :8080` (Mac/Linux) and terminate it.
+
+### Q: "Module not found: chgnet"
+*   **Correction**: Ensure you activated your virtual environment (`venv`) before running the server. Re-run `pip install -r requirements.txt`.
+
+### Q: "DLL load failed" on Windows
+*   **Correction**: This usually means a missing system dependency. Install the [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170).
+
+### Q: Performance is slow
+*   **Correction**: Computing relaxation for large supercells (100+ atoms) on a CPU can be slow. CHGNet is optimized for CUDA (NVIDIA GPUs), but CrystalNexus runs on CPU by default for compatibility. Be patient with complex structures.
 
 ## Technology Stack
 
@@ -98,10 +159,6 @@ CrystalNexus provides a RESTful API powered by FastAPI.
 *   **Machine Learning**: CHGNet, PyTorch, Pymatgen
 *   **Frontend**: HTML5, Vanilla JS, Jinja2, 3Dmol.js
 *   **Database**: SQLite (for local analytics)
-
-## Contributing
-
-Contributions are welcome. Please ensure to follow the existing code style and submit pull requests for any new features or bug fixes.
 
 ## License
 
