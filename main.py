@@ -53,7 +53,7 @@ except Exception as e:
     CHGNET_AVAILABLE = False
     if WINDOWS_PLATFORM and "Buffer dtype mismatch" in str(e):
         logger.error(f"Windows CHGNet compatibility issue detected: {e}")
-        logger.error("Solution: pip install -r requirements-windows.txt")
+        logger.error("Solution: Install Microsoft Visual C++ Redistributable")
     else:
         logger.error(f"CHGNet loading error: {e}")
 
@@ -235,7 +235,7 @@ class CHGNetModelManager:
                 
         except Exception as load_error:
             if WINDOWS_PLATFORM and "Buffer dtype mismatch" in str(load_error):
-                raise RuntimeError("Windows CHGNet compatibility issue. Try: pip install -r requirements-windows.txt")
+                raise RuntimeError("Windows CHGNet compatibility issue. Solution: Install Microsoft Visual C++ Redistributable")
             else:
                 raise RuntimeError(f"Failed to load CHGNet model: {load_error}")
                 
