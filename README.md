@@ -137,6 +137,12 @@ python start_crystalnexus.py
 *   After an analysis is complete, click the **"Detailed Analysis"** button.
 *   In the modal, click **"Download All Data (ZIP)"** to save your work.
 
+#### 6. View Analytics
+*   Access the local analytics dashboard at `http://localhost:8080/analytics` to monitor:
+    *   Daily usage trends
+    *   Most analyzed structures
+    *   Recent calculation logs
+
 ---
 
 ## Troubleshooting
