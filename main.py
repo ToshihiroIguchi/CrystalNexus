@@ -19,6 +19,7 @@ import uvicorn
 from pymatgen.core import Structure, Element
 from pymatgen.io.cif import CifParser
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+from analytics_db import analytics_db
 
 # Logging configuration (early initialization)
 logging.basicConfig(
@@ -690,6 +691,27 @@ app = FastAPI(title=APP_NAME, lifespan=lifespan)
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+@app.middleware("http")
+async def analytics_middleware(request: Request, call_next):
+    response = await call_next(request)
+    
+    # Log to analytics db (skip static files to reduce noise, but keep main page load)
+    if not request.url.path.startswith("/static"):
+        try:
+            client_host = request.client.host if request.client else "unknown"
+            user_agent = request.headers.get("user-agent", "unknown")
+            analytics_db.log_access(
+                path=request.url.path,
+                method=request.method,
+                status_code=response.status_code,
+                client_host=client_host,
+                user_agent=user_agent
+            )
+        except Exception as e:
+            logger.error(f"Analytics logging failed: {e}")
+            
+    return response
+
 SAMPLE_CIF_DIR = Path(SAMPLE_CIF_DIR_NAME)
 
 # Apply DEBUG settings
@@ -859,6 +881,17 @@ async def analyze_sample_cif(data: dict):
         
         result = await analyze_cif_file(file_path)
         result["filename"] = safe_path_str
+
+        # Analytics Logging
+        try:
+            analytics_db.log_event(
+                event_type="sample_load",
+                filename=safe_path_str,
+                formula=result.get("formula"),
+                num_atoms=result.get("num_atoms")
+            )
+        except Exception as e:
+            logger.error(f"Failed to log sample load event: {e}")
         
         # Store the original structure for consistency with uploaded files
         try:
@@ -930,6 +963,17 @@ async def analyze_uploaded_cif(file: UploadFile = File(...)):
             result = await analyze_cif_file(temp_path)
             safe_name = safe_filename(file.filename)
             result["filename"] = safe_name
+
+            # Analytics Logging
+            try:
+                analytics_db.log_event(
+                    event_type="upload",
+                    filename=safe_name,
+                    formula=result.get("formula"),
+                    num_atoms=result.get("num_atoms")
+                )
+            except Exception as e:
+                logger.error(f"Failed to log upload event: {e}")
             logger.info(f"✅ UPLOAD: Analysis completed, result keys: {list(result.keys())}")
 
             # Store the original structure for later use in createSupercell
@@ -2033,6 +2077,28 @@ async def chgnet_relax_structure(request: dict):
         }
         logger.info(f"Saved relaxed structure to session {session_id[:8]}...")
         
+        # Analytics Logging - Log successful relaxation
+        try:
+            start_time = time.time() # This is only approximate as we don't track start in this scope precisely
+            # But we have steps and conversion info
+            
+            analytics_db.log_event(
+                event_type="relax",
+                filename=filename,
+                formula=final_formula, # Use final formula
+                num_atoms=final_num_sites,
+                execution_time=None, # We don't have precise execution time here easily without refactoring
+                parameters={
+                    "fmax": fmax, 
+                    "steps": steps, 
+                    "converged": converged,
+                    "energy_change_eV": energy_diff
+                },
+                session_id=session_id
+            )
+        except Exception as e:
+            logger.error(f"Failed to log relaxation event: {e}")
+
         return {
             "status": "success",
             "initial_prediction": initial_results,
@@ -2251,5 +2317,49 @@ if __name__ == "__main__":
         else:
             logger.error("Failed to start backend")
     else:
-        logger.info("Backend is already running")
         uvicorn.run(app, host=HOST, port=PORT, reload=DEBUG)
+
+# --- Analytics API Routes ---
+
+@app.get("/analytics", response_class=HTMLResponse)
+async def analytics_dashboard(request: Request):
+    """Serve the analytics dashboard page"""
+    return templates.TemplateResponse("analytics.html", {"request": request})
+
+@app.get("/api/analytics/summary")
+async def get_analytics_summary():
+    """Get summary statistics for dashboard"""
+    try:
+        daily_counts = analytics_db.get_daily_access_counts(days=14)
+        feature_usage = analytics_db.get_feature_usage()
+        return {
+            "daily_access": daily_counts,
+            "feature_usage": feature_usage
+        }
+    except Exception as e:
+        logger.error(f"Values to get analytics summary: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get analytics summary")
+
+@app.get("/api/analytics/ranking")
+async def get_analytics_ranking():
+    """Get popular samples ranking"""
+    try:
+        popular_samples = analytics_db.get_popular_samples(limit=10)
+        return {
+            "popular_samples": popular_samples
+        }
+    except Exception as e:
+        logger.error(f"Failed to get analytics ranking: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get analytics ranking")
+
+@app.get("/api/analytics/recent")
+async def get_analytics_recent():
+    """Get recent activity log"""
+    try:
+        recent_events = analytics_db.get_recent_events(limit=50)
+        return {
+            "recent_events": recent_events
+        }
+    except Exception as e:
+        logger.error(f"Failed to get recent events: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get recent events")

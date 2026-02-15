@@ -65,3 +65,6 @@ UPGRADE_NOTES.md
 *_results.json
 *_summary.csv
 *.traj
+
+# Analytics database
+analytics.db

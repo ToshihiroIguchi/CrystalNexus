@@ -3328,8 +3328,8 @@ Crystal system: ${data.crystal_system}`;
                     </div>
                     
                     <!-- Auto Mode Chart Container -->
-                    <div class="chart-container" style="position: relative; height: 60px; width: 100%; margin-top: 5px; margin-bottom: 5px; display: none;" id="chart-container-wrapper">
-                        <canvas id="auto-mode-chart"></canvas>
+                    <div class="chart-container" style="position: relative; height: 57px; width: 100%; margin-top: 5px; margin-bottom: 5px; display: none; overflow: hidden;" id="chart-container-wrapper">
+                        <canvas id="auto-mode-chart" style="width: 100%; height: 100%; display: block;"></canvas>
                     </div>
 
                     <div class="current-best" id="current-best" style="display: none; margin-top: 8px; padding: 6px 8px; background: rgba(46, 204, 113, 0.1); border: 1px solid rgba(46, 204, 113, 0.3); border-radius: 4px; font-size: 11px; color: #27ae60;">
@@ -3951,7 +3951,7 @@ Crystal system: ${data.crystal_system}`;
 
             // Reset Chart
             if (window.autoModeChart) {
-                window.autoModeChart.reset();
+                window.autoModeChart.reset(targetAtoms.length);
             }
 
             currentAbortController = new AbortController();
@@ -4248,7 +4248,7 @@ Crystal system: ${data.crystal_system}`;
 
             // Reset Chart
             if (window.autoModeChart) {
-                window.autoModeChart.reset();
+                window.autoModeChart.reset(targetAtoms.length);
             }
 
             currentAbortController = new AbortController();
