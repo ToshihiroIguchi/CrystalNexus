@@ -142,7 +142,7 @@ python start_crystalnexus.py
 ## Troubleshooting
 
 ### Q: "Backend failed to start" or "Port 8080 is in use"
-*   **Correction**: The `start_crystalnexus.py` script attempts to auto-kill the process using port 8080. If it fails, manually find the process using `netstat -ano | findstr :8080` (Windows) or `lsof -i :8080` (Mac/Linux) and terminate it.
+*   **Solution**: The `start_crystalnexus.py` script automatically detects and stops any existing process using port 8080. Simply running `python start_crystalnexus.py` again should resolve the issue. Manual intervention is only necessary in rare cases where the script lacks permission to terminate the process.
 
 ### Q: "Module not found: chgnet"
 *   **Correction**: Ensure you activated your virtual environment (`venv`) before running the server. Re-run `pip install -r requirements.txt`.
