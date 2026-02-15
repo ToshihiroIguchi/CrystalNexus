@@ -2000,7 +2000,9 @@ async def chgnet_relax_structure(request: dict):
             "fmax": fmax,
             "max_steps": max_steps,
             "energy_change_eV": energy_diff,
-            "energy_change_eV_per_atom": energy_diff_per_atom
+            "energy_change_eV_per_atom": energy_diff_per_atom,
+            "optimizer_steps": max(0, steps - 2) if steps >= 2 else 0,
+            "trajectory_frames": steps
         }
         
         # Calculate structure properties once to avoid redundancy
