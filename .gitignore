@@ -68,3 +68,14 @@ UPGRADE_NOTES.md
 
 # Analytics database
 analytics.db
+
+# Uploaded files
+uploads/
+!uploads/.gitkeep
+
+# Temporary verification scripts
+verify_*.py
+check_gpu.py
+
+# Implementation plans
+implementation_plan_*.md
