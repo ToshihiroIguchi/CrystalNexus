@@ -3360,6 +3360,9 @@ Crystal system: ${data.crystal_system}`;
                     <button class="cancel-btn" id="cancel-btn" style="display: none; margin-top: 8px; padding: 4px 8px; background: #e74c3c; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
                         ❌ Cancel Operation
                     </button>
+                    <button class="secondary-action" id="close-status-btn" style="display: none; margin-top: 8px; padding: 6px 12px; background: #7f8c8d; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; width: 100%;">
+                        Close Results
+                    </button>
                 </div>
             `;
 
@@ -3374,6 +3377,14 @@ Crystal system: ${data.crystal_system}`;
 
             // Initialize cancel button
             initializeCancelButton();
+
+            // Initialize close button
+            const closeBtn = document.getElementById('close-status-btn');
+            if (closeBtn) {
+                closeBtn.addEventListener('click', function () {
+                    hideExecuteStatus();
+                });
+            }
 
             // Initialize Chart if not already done
             const chartCanvas = document.getElementById('auto-mode-chart');
@@ -3814,15 +3825,21 @@ Crystal system: ${data.crystal_system}`;
             const statusText = document.getElementById('execute-status-text');
             const progressBar = document.getElementById('execute-progress-bar');
             const cancelBtn = document.getElementById('cancel-btn');
+            const closeBtn = document.getElementById('close-status-btn');
             const chartContainer = document.getElementById('chart-container-wrapper');
+            const currentBest = document.getElementById('current-best');
 
             statusDiv.style.display = 'block';
             statusText.textContent = message;
+
+            // Ensure close button is hidden when starting/running
+            if (closeBtn) closeBtn.style.display = 'none';
 
             if (showProgress) {
                 progressBar.style.display = 'block';
                 // Show chart when progress is shown (during Auto Mode)
                 if (chartContainer) chartContainer.style.display = 'block';
+                if (currentBest) currentBest.style.display = 'block';
             } else {
                 progressBar.style.display = 'none';
             }
@@ -3847,19 +3864,78 @@ Crystal system: ${data.crystal_system}`;
             progressFill.style.width = `${percentage}%`;
         }
 
+        function showExecutionComplete(message, results = null) {
+            const statusText = document.getElementById('execute-status-text');
+            const progressBar = document.getElementById('execute-progress-bar');
+            const cancelBtn = document.getElementById('cancel-btn');
+            const closeBtn = document.getElementById('close-status-btn');
+
+            // Update status message
+            if (statusText) statusText.textContent = message;
+
+            // Hide progress and cancel button
+            if (progressBar) progressBar.style.display = 'none';
+            if (cancelBtn) cancelBtn.style.display = 'none';
+
+            // Show close button
+            if (closeBtn) closeBtn.style.display = 'block';
+
+            // Explicitly show the parent div because displayStructureOperations might have hidden it
+            const statusDiv = document.getElementById('execute-status');
+            if (statusDiv) statusDiv.style.display = 'block';
+
+            // Restore chart and best result if provided
+            if (results) {
+                const chartWrapper = document.getElementById('chart-container-wrapper');
+                if (chartWrapper) {
+                    chartWrapper.style.display = 'block';
+
+                    // Re-initialize chart on the new canvas element created by displayStructureOperations
+                    if (window.autoModeChart) {
+                        window.autoModeChart.destroy();
+                    }
+                    window.autoModeChart = new AutoModeChart('auto-mode-chart');
+
+                    // Repopulate data
+                    if (results.successful && results.successful.length > 0) {
+                        // Total processed might be higher than successful if some failed,
+                        // but resetting to successful length is safest for the chart window
+                        window.autoModeChart.reset(results.successful.length);
+                        results.successful.forEach(r => {
+                            window.autoModeChart.addDataPoint(r.atom, r.energy);
+                        });
+                    }
+                }
+
+                if (results.bestResult) {
+                    const currentBest = document.getElementById('current-best');
+                    const currentBestEnergy = document.getElementById('current-best-energy');
+                    const currentBestAtom = document.getElementById('current-best-atom');
+
+                    if (currentBest && currentBestEnergy && currentBestAtom) {
+                        currentBest.style.display = 'block';
+                        // Keep precision consistent with other parts
+                        currentBestEnergy.textContent = `${results.bestResult.energy.toFixed(4)} eV/atom`;
+                        currentBestAtom.textContent = results.bestResult.atom;
+                    }
+                }
+            }
+        }
+
         function hideExecuteStatus() {
             const statusDiv = document.getElementById('execute-status');
-            const cancelBtn = document.getElementById('cancel-btn');
-            const currentBest = document.getElementById('current-best');
             const chartContainer = document.getElementById('chart-container-wrapper');
+            const currentBest = document.getElementById('current-best');
+            const closeBtn = document.getElementById('close-status-btn');
 
             statusDiv.style.display = 'none';
-            cancelBtn.style.display = 'none';
-            if (currentBest) {
-                currentBest.style.display = 'none';
-            }
+
+            // Reset close button
+            if (closeBtn) closeBtn.style.display = 'none';
+
             // Hide chart when status is hidden
             if (chartContainer) chartContainer.style.display = 'none';
+            if (currentBest) currentBest.style.display = 'none';
         }
 
         // Update current best result during calculation
@@ -4078,22 +4154,27 @@ Crystal system: ${data.crystal_system}`;
                 const resultSummary = successful
                     .sort((a, b) => a.energy - b.energy)
                     .map((r, i) => `${i + 1}. ${r.atom}: ${r.energy.toFixed(6)} eV/atom (${r.attempts} attempts)`)
-                    .join('\\n');
+                    .join('\n');
 
-                console.log(`Energy comparison results (${successful.length}/${totalProcessed} successful):\\n${resultSummary}`);
+                console.log(`Energy comparison results (${successful.length}/${totalProcessed} successful):\n${resultSummary}`);
 
                 if (failed.length > 0) {
                     console.warn(`Failed calculations (${failed.length}):`, failed.map(f => `${f.atom}: ${f.finalError}`));
                 }
 
-                // Execute optimal substitution
-                await handleSubstitution(bestResult.atom, newElement);
+                try {
+                    // Execute optimal substitution
+                    await handleSubstitution(bestResult.atom, newElement);
 
-                // Show success notification with statistics
-                showNotification(
-                    `Optimal substitution completed: ${bestResult.atom} → ${newElement} (Success rate: ${summary.successRate}%)`,
-                    'success'
-                );
+                    // Show success notification with statistics
+                    showNotification(
+                        `Optimal substitution completed: ${bestResult.atom} → ${newElement} (Success rate: ${summary.successRate}%)`,
+                        'success'
+                    );
+                } catch (error) {
+                    console.error('Optimal substitution application failed:', error);
+                    showNotification('Optimization succeeded but application failed', 'error');
+                }
 
                 // Show calculation report if there were failures
                 if (failed.length > 0) {
@@ -4115,7 +4196,8 @@ Crystal system: ${data.crystal_system}`;
                 showFailureReport(summary, failed, 'substitution');
             }
 
-            hideExecuteStatus();
+            // Show completion state instead of hiding
+            showExecutionComplete(`Substitution Completed. Best: ${bestResult.atom} -> ${newElement} (${bestResult.energy.toFixed(4)} eV)`, results);
             setExecuteButtonState('complete');
         }
 
@@ -4375,22 +4457,27 @@ Crystal system: ${data.crystal_system}`;
                 const resultSummary = successful
                     .sort((a, b) => a.energy - b.energy)
                     .map((r, i) => `${i + 1}. Delete ${r.atom}: ${r.energy.toFixed(6)} eV/atom (${r.attempts} attempts)`)
-                    .join('\\n');
+                    .join('\n');
 
-                console.log(`Energy comparison results (${successful.length}/${totalProcessed} successful):\\n${resultSummary}`);
+                console.log(`Energy comparison results (${successful.length}/${totalProcessed} successful):\n${resultSummary}`);
 
                 if (failed.length > 0) {
                     console.warn(`Failed calculations (${failed.length}):`, failed.map(f => `${f.atom}: ${f.finalError}`));
                 }
 
-                // Execute optimal deletion
-                await handleDeletion(bestResult.atom);
+                try {
+                    // Execute optimal deletion
+                    await handleDeletion(bestResult.atom);
 
-                // Show success notification with statistics
-                showNotification(
-                    `Optimal deletion completed: ${bestResult.atom} removed (Success rate: ${summary.successRate}%)`,
-                    'success'
-                );
+                    // Show success notification with statistics
+                    showNotification(
+                        `Optimal deletion completed: ${bestResult.atom} removed (Success rate: ${summary.successRate}%)`,
+                        'success'
+                    );
+                } catch (error) {
+                    console.error('Optimal deletion application failed:', error);
+                    showNotification('Optimization succeeded but application failed', 'error');
+                }
 
                 // Show calculation report if there were failures
                 if (failed.length > 0) {
@@ -4412,7 +4499,8 @@ Crystal system: ${data.crystal_system}`;
                 showFailureReport(summary, failed, 'deletion');
             }
 
-            hideExecuteStatus();
+            // Show completion state instead of hiding
+            showExecutionComplete(`Deletion Completed. Best: ${bestResult.atom} (${bestResult.energy.toFixed(4)} eV)`, results);
             setExecuteButtonState('complete');
         }
 
