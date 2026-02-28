@@ -2317,61 +2317,24 @@ async def generate_relaxed_structure_cif(request: dict):
 @app.post("/api/get-insertable-elements")
 async def get_insertable_elements(data: dict):
     """
-    Finds the maximum void radius in the structure and filters elements
-    that can physically fit based on atomic radius.
+    Returns all allowed elements for insertion. 
+    Geometric filtering is removed for performance optimization.
     """
     try:
-        session_id = data.get("session_id")
-        if not session_id:
-            raise HTTPException(status_code=400, detail="Session ID is required")
-            
-        structure = session_manager.get_current_structure(session_id)
-        if not structure:
-            raise HTTPException(status_code=404, detail="Structure not found")
-            
-        from pymatgen.analysis.defects.generators import VoronoiInterstitialGenerator
-        
-        # Use H as a probe to find all interstitial sites
-        try:
-            generator = VoronoiInterstitialGenerator()
-            interstitials = generator.get_defects(structure, insert_species=["H"])
-        except Exception as e:
-            logger.error(f"Failed to generate interstitial sites: {e}")
-            interstitials = []
-            
-        max_void_radius = 0.0
-        if interstitials:
-            for defect in interstitials:
-                neighbors = structure.get_neighbors(defect.site, 5.0)
-                if neighbors:
-                    min_dist = min([n.nn_distance for n in neighbors])
-                    max_void_radius = max(max_void_radius, min_dist)
-                    
-        logger.info(f"🔍 Found max void radius: {max_void_radius:.3f} Å")
+        # We no longer need Voronoi analysis here as it's slow.
+        # Just return the sorted list of allowed elements.
         
         insertable_elements = []
-        # Add 0.5 Angstrom tolerance as atoms can relax and push others away slightly
-        tolerance = 0.5
-        
         for symbol in ALLOWED_ELEMENTS:
-            element = Element(symbol)
-            atomic_radius = element.atomic_radius
+            insertable_elements.append(symbol)
             
-            # If radius is unknown, we conservatively include it
-            if atomic_radius is None:
-                insertable_elements.append(symbol)
-            else:
-                # If the atom can roughly fit in the void
-                if atomic_radius <= max_void_radius + tolerance:
-                    insertable_elements.append(symbol)
-                    
         # Sort by atomic number
         insertable_elements.sort(key=lambda x: Element(x).Z)
         
         return {
             "status": "success",
             "insertable_elements": insertable_elements,
-            "max_void_radius": max_void_radius
+            "max_void_radius": None  # No longer calculated for speed
         }
     except Exception as e:
         logger.error(f"Error getting insertable elements: {e}")

@@ -3503,6 +3503,8 @@ Crystal system: ${data.crystal_system}`;
 
                 if (data.max_void_radius) {
                     infoDiv.textContent = `Max void radius: ${data.max_void_radius.toFixed(2)} Å`;
+                } else {
+                    infoDiv.textContent = '';
                 }
             } catch (error) {
                 dropdown.innerHTML = '<option value="">Failed to load elements</option>';
