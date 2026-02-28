@@ -358,27 +358,35 @@ def validate_atomic_operation(operation, structure_size, operation_index=None):
         # Check required fields
         if "action" not in operation:
             return False, "missing 'action' field"
-        if "index" not in operation:
-            return False, "missing 'index' field"
         
-        # Validate index type and range
-        index = operation["index"]
-        if not isinstance(index, int):
-            return False, f"index must be integer, got {type(index).__name__}: {index}"
-        if index < 0:
-            return False, f"index cannot be negative: {index}"
-        if index >= structure_size:
-            return False, f"index {index} out of range (max: {structure_size-1})"
-        
-        # Validate action type
         action = operation["action"]
-        if action not in ["substitute", "delete"]:
-            return False, f"invalid action '{action}', must be 'substitute' or 'delete'"
-        
+        if action not in ["substitute", "delete", "insert"]:
+            return False, f"invalid action '{action}', must be 'substitute', 'delete' or 'insert'"
+            
+        if action in ["substitute", "delete"]:
+            if "index" not in operation:
+                return False, "missing 'index' field"
+            
+            # Validate index type and range
+            index = operation["index"]
+            if not isinstance(index, int):
+                return False, f"index must be integer, got {type(index).__name__}: {index}"
+            if index < 0:
+                return False, f"index cannot be negative: {index}"
+            if index >= structure_size:
+                return False, f"index {index} out of range (max: {structure_size-1})"
+                
+        if action == "insert":
+            if "coords" not in operation:
+                return False, "missing 'coords' field"
+            coords = operation["coords"]
+            if not isinstance(coords, list) or len(coords) != 3:
+                return False, "coords must be a list of 3 numbers"
+            
         # Validate substitution target element
-        if action == "substitute":
+        if action in ["substitute", "insert"]:
             if "to" not in operation:
-                return False, "substitution missing 'to' element"
+                return False, "missing 'to' element"
             try:
                 validate_element(operation["to"])
             except ValueError as e:
@@ -777,13 +785,18 @@ async def apply_atomic_operations(request: dict):
             raise HTTPException(status_code=400, detail=str(e))
 
         # All operations validated - process in descending order by index to avoid index shift issues
-        stable_operations = sorted(valid_operations, key=lambda x: x["index"], reverse=True)
-        logger.info(f"🔧 OPERATIONS: Processing {len(stable_operations)} validated operations in order: {[f'{op["action"]}@{op["index"]}' for op in stable_operations]}")
+        # For 'insert', we can run them first because appending doesn't shift existing indices
+        # Sort by action type first (delete/substitute before insert), then by index descending for delete/substitute
+        stable_operations = sorted(valid_operations, key=lambda x: (
+            0 if x["action"] in ["delete", "substitute"] else 1, # Process delete/substitute first
+            x.get("index", float('inf')) # Then by index descending for delete/substitute, insert last
+        ), reverse=True)
+        logger.info(f"🔧 OPERATIONS: Processing {len(stable_operations)} validated operations in order: {[f'{op["action"]}@{op.get("index", "append")}' for op in stable_operations]}")
 
         for i, operation in enumerate(stable_operations):
-            site_index = operation["index"]
             action = operation["action"]
-            logger.info(f"🔧 OPERATIONS: Step {i+1}/{len(stable_operations)} - {action} at site {site_index}")
+            site_index = operation.get("index")
+            logger.info(f"🔧 OPERATIONS: Step {i+1}/{len(stable_operations)} - {action} at site {site_index if site_index is not None else 'end'}")
 
             if action == "substitute":
                 # Already validated: element and index are valid
@@ -799,6 +812,13 @@ async def apply_atomic_operations(request: dict):
                 logger.info(f"🗑️ OPERATIONS: Deleting site {site_index} ({deleted_element}) - Structure before: {len(structure.sites)} sites")
                 structure.remove_sites([site_index])
                 logger.info(f"✅ OPERATIONS: Site {site_index} deleted - Structure after: {len(structure.sites)} sites")
+                
+            elif action == "insert":
+                new_element = operation["to"]
+                coords = operation["coords"]
+                logger.info(f"➕ OPERATIONS: Inserting {new_element} at {coords} - Structure before: {len(structure.sites)} sites")
+                structure.append(new_element, coords)
+                logger.info(f"✅ OPERATIONS: Insertion completed - Structure after: {len(structure.sites)} sites")
         
         # Update session with modified structure and operations
         logger.info(f"💾 OPERATIONS: Updating session with final structure - Formula: {structure.formula}, Sites: {len(structure.sites)}")
@@ -1480,12 +1500,16 @@ async def generate_modified_structure_cif(request: dict):
         if invalid_operations:
             logger.warning(f"Skipping {len(invalid_operations)} invalid operations during CIF generation: {invalid_operations}")
         
-        # Process valid operations in descending order by index to eliminate index adjustment issues
-        stable_operations = sorted(valid_operations, key=lambda x: x["index"], reverse=True)
+        # Process valid operations in descending order by index for substitute and delete to eliminate index adjustment issues.
+        # Process insert operations last since they don't affect indices of existing sites being processed backward.
+        stable_operations = sorted(valid_operations, key=lambda x: (
+            0 if x["action"] in ["delete", "substitute"] else 1,
+            x.get("index", float('inf'))
+        ), reverse=True)
         operations_applied = 0
         
         for operation in stable_operations:
-            site_index = operation["index"]
+            site_index = operation.get("index")
             if operation["action"] == "substitute":
                 new_element = operation["to"]
                 old_coords = structure[site_index].frac_coords
@@ -1502,6 +1526,16 @@ async def generate_modified_structure_cif(request: dict):
                 structure.remove_sites([site_index])
                 
                 logger.info(f"CIF Generation: Deleted {deleted_element} at site {site_index}")
+                operations_applied += 1
+                
+            elif operation["action"] == "insert":
+                new_element = operation["to"]
+                coords = operation["coords"]
+                
+                frac_coords = [float(c) % 1.0 for c in coords]
+                structure.append(new_element, frac_coords)
+                
+                logger.info(f"CIF Generation: Inserted {new_element} at {frac_coords}")
                 operations_applied += 1
         
         logger.info(f"Applied {operations_applied}/{len(operations)} operations successfully")
@@ -2279,6 +2313,156 @@ async def generate_relaxed_structure_cif(request: dict):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=error_msg)
+
+@app.post("/api/get-insertable-elements")
+async def get_insertable_elements(data: dict):
+    """
+    Finds the maximum void radius in the structure and filters elements
+    that can physically fit based on atomic radius.
+    """
+    try:
+        session_id = data.get("session_id")
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
+            
+        structure = session_manager.get_current_structure(session_id)
+        if not structure:
+            raise HTTPException(status_code=404, detail="Structure not found")
+            
+        from pymatgen.analysis.defects.generators import VoronoiInterstitialGenerator
+        
+        # Use H as a probe to find all interstitial sites
+        try:
+            generator = VoronoiInterstitialGenerator()
+            interstitials = generator.get_defects(structure, insert_species=["H"])
+        except Exception as e:
+            logger.error(f"Failed to generate interstitial sites: {e}")
+            interstitials = []
+            
+        max_void_radius = 0.0
+        if interstitials:
+            for defect in interstitials:
+                neighbors = structure.get_neighbors(defect.site, 5.0)
+                if neighbors:
+                    min_dist = min([n.nn_distance for n in neighbors])
+                    max_void_radius = max(max_void_radius, min_dist)
+                    
+        logger.info(f"🔍 Found max void radius: {max_void_radius:.3f} Å")
+        
+        insertable_elements = []
+        # Add 0.5 Angstrom tolerance as atoms can relax and push others away slightly
+        tolerance = 0.5
+        
+        for symbol in ALLOWED_ELEMENTS:
+            element = Element(symbol)
+            atomic_radius = element.atomic_radius
+            
+            # If radius is unknown, we conservatively include it
+            if atomic_radius is None:
+                insertable_elements.append(symbol)
+            else:
+                # If the atom can roughly fit in the void
+                if atomic_radius <= max_void_radius + tolerance:
+                    insertable_elements.append(symbol)
+                    
+        # Sort by atomic number
+        insertable_elements.sort(key=lambda x: Element(x).Z)
+        
+        return {
+            "status": "success",
+            "insertable_elements": insertable_elements,
+            "max_void_radius": max_void_radius
+        }
+    except Exception as e:
+        logger.error(f"Error getting insertable elements: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/get-interstitial-candidates")
+async def get_interstitial_candidates(data: dict):
+    """
+    Evaluates interstitial sites for a given element and returns
+    candidates sorted by energy using CHGNet.
+    """
+    try:
+        session_id = data.get("session_id")
+        element_symbol = data.get("element")
+        
+        if not session_id or not element_symbol:
+            raise HTTPException(status_code=400, detail="Session ID and element are required")
+            
+        structure = session_manager.get_current_structure(session_id)
+        if not structure:
+            raise HTTPException(status_code=404, detail="Structure not found")
+            
+        try:
+            validate_element(element_symbol)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+            
+        from pymatgen.analysis.defects.generators import VoronoiInterstitialGenerator
+        
+        try:
+            generator = VoronoiInterstitialGenerator()
+            interstitials = generator.get_defects(structure, insert_species=[element_symbol])
+        except Exception as e:
+            logger.error(f"Failed to find insertion sites for {element_symbol}: {e}")
+            raise HTTPException(status_code=400, detail=f"Failed to find insertion voids: {str(e)}")
+            
+        logger.info(f"🔍 Evaluating {len(interstitials)} interstitial candidate sites for {element_symbol}")
+        
+        candidates = []
+        for i, defect in enumerate(interstitials):
+            # Evaluate energy with CHGNet
+            cand_structure = structure.copy()
+            frac_coords = defect.site.frac_coords
+            cand_structure.append(element_symbol, frac_coords)
+            
+            try:
+                pred_result = await chgnet_manager.predict_single_optimized(cand_structure)
+                energy_val = pred_result.get("e", 100000.0) if isinstance(pred_result, dict) else 100000.0
+                energy = float(energy_val)
+            except Exception as e:
+                logger.error(f"Energy prediction failed for candidate {i}: {e}")
+                energy = 100000.0  # Use a large finite number to avoid JSON Inf serialization errors
+                
+            # Distance to nearest neighbor in original structure to show void size
+            neighbors = structure.get_neighbors(defect.site, 5.0)
+            min_dist = min([n.nn_distance for n in neighbors]) if neighbors else 0.0
+            
+            candidates.append({
+                "id": i,
+                "label": f"Candidate {i+1}",
+                "frac_coords": frac_coords.tolist(),
+                "energy": energy,
+                "min_dist": round(min_dist, 3)
+            })
+            
+        # Sort by energy ascending (most stable first)
+        candidates.sort(key=lambda x: x["energy"])
+        
+        # Optionally, format energy relative to best for UI
+        if candidates and candidates[0]["energy"] < 99999.0:
+            best_e = candidates[0]["energy"]
+            for c in candidates:
+                if c["energy"] < 99999.0:
+                    c["rel_energy"] = round(c["energy"] - best_e, 3)
+                    c["energy"] = round(c["energy"], 4)
+                else:
+                    c["rel_energy"] = "N/A"
+                    c["energy"] = "Failed"
+        else:
+            for c in candidates:
+                c["rel_energy"] = "N/A"
+                c["energy"] = "Failed"
+                    
+        return {
+            "status": "success",
+            "element": element_symbol,
+            "candidates": candidates
+        }
+    except Exception as e:
+        logger.error(f"Error getting interstitial candidates: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 def check_backend_status():
     try:

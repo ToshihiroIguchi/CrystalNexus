@@ -3293,46 +3293,91 @@ Crystal system: ${data.crystal_system}`;
                     </button>
                 </div>
                 
-                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
-                    <span style="font-size: 14px; font-weight: bold;">Mode:</span>
-                    <label style="display: flex; align-items: center; gap: 3px; font-size: 13px; cursor: pointer;"
-                           title="Select element type - automatically finds the most energy-stable atom of that type">
-                        <input type="radio" name="selection-mode" value="auto" id="auto-mode" checked>Auto
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 3px; font-size: 13px; cursor: pointer;" 
-                           title="Select specific atom by label">
-                        <input type="radio" name="selection-mode" value="manual" id="manual-mode">Manual
-                    </label>
-                </div>
-                
-                <div class="element-selector" id="manual-selector" style="display: none;">
-                    <label for="element-dropdown">Select Atom to Modify:</label>
-                    <select id="element-dropdown">
-                        <option value="">Choose an atom...</option>
-                        ${labels.map(label => `<option value="${label}">${label}</option>`).join('')}
-                    </select>
-                </div>
-                
-                <div class="element-selector" id="auto-selector">
-                    <label for="element-type-dropdown" 
-                           title="Auto mode will test all atoms of this type and select the most energy-stable option">
-                        Select Element Type:
-                    </label>
-                    <select id="element-type-dropdown" 
-                            title="Choose an element type to automatically find the optimal atom for modification">
-                        <option value="">Choose element type...</option>
-                    </select>
-                </div>
-                
                 <div class="control-group" style="margin-bottom: 15px;">
-                    <label for="substitute-element">Action:</label>
-                    <select id="substitute-element" disabled>
-                        <option value="">Select operation...</option>
-                        <option value="DELETE">🗑️ Delete atom</option>
-                        <optgroup label="Substitute with:">
-                            ${chgnetOptions}
-                        </optgroup>
+                    <label for="operation-type">Operation Type:</label>
+                    <select id="operation-type">
+                        <option value="modify">Modify Existing Atom (Substitute/Delete)</option>
+                        <option value="insert">Insert New Atom</option>
                     </select>
+                </div>
+                
+                <!-- Modify Existing Atom Workflow -->
+                <div id="modify-workflow">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
+                        <span style="font-size: 14px; font-weight: bold;">Mode:</span>
+                        <label style="display: flex; align-items: center; gap: 3px; font-size: 13px; cursor: pointer;"
+                               title="Select element type - automatically finds the most energy-stable atom of that type">
+                            <input type="radio" name="selection-mode" value="auto" id="auto-mode" checked>Auto
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 3px; font-size: 13px; cursor: pointer;" 
+                               title="Select specific atom by label">
+                            <input type="radio" name="selection-mode" value="manual" id="manual-mode">Manual
+                        </label>
+                    </div>
+                    
+                    <div class="element-selector" id="manual-selector" style="display: none;">
+                        <label for="element-dropdown">Select Atom to Modify:</label>
+                        <select id="element-dropdown">
+                            <option value="">Choose an atom...</option>
+                            ${labels.map(label => `<option value="${label}">${label}</option>`).join('')}
+                        </select>
+                    </div>
+                    
+                    <div class="element-selector" id="auto-selector">
+                        <label for="element-type-dropdown" 
+                               title="Auto mode will test all atoms of this type and select the most energy-stable option">
+                            Select Element Type:
+                        </label>
+                        <select id="element-type-dropdown" 
+                                title="Choose an element type to automatically find the optimal atom for modification">
+                            <option value="">Choose element type...</option>
+                        </select>
+                    </div>
+                    
+                    <div class="control-group" style="margin-bottom: 15px;">
+                        <label for="substitute-element">Action:</label>
+                        <select id="substitute-element" disabled>
+                            <option value="">Select operation...</option>
+                            <option value="DELETE">🗑️ Delete atom</option>
+                            <optgroup label="Substitute with:">
+                                ${chgnetOptions}
+                            </optgroup>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Insert New Atom Workflow -->
+                <div id="insert-workflow" style="display: none;">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
+                        <span style="font-size: 14px; font-weight: bold;">Mode:</span>
+                        <label style="display: flex; align-items: center; gap: 3px; font-size: 13px; cursor: pointer;"
+                               title="Automatically insert at the most stable site">
+                            <input type="radio" name="insert-mode" value="auto" id="insert-auto-mode" checked>Auto
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 3px; font-size: 13px; cursor: pointer;" 
+                               title="Select from candidate insertion sites">
+                            <input type="radio" name="insert-mode" value="manual" id="insert-manual-mode">Manual
+                        </label>
+                    </div>
+
+                    <div class="control-group" style="margin-bottom: 15px;">
+                        <label for="insert-element">Element to Insert:</label>
+                        <select id="insert-element">
+                            <option value="">Loading insertable elements...</option>
+                        </select>
+                        <div id="insert-void-info" style="font-size: 11px; color: #7f8c8d; margin-top: 4px;"></div>
+                    </div>
+
+                    <div id="insert-manual-selector" style="display: none; margin-bottom: 15px;">
+                        <label for="insert-candidate">Select Insertion Site (Energy):</label>
+                        <select id="insert-candidate">
+                            <option value="">Select element first...</option>
+                        </select>
+                        <div id="insert-loading" style="display: none; font-size: 12px; color: #3498db; margin-top: 5px;">
+                            <span class="loading-spinner" style="display: inline-block; width: 12px; height: 12px; border: 2px solid #3498db; border-radius: 50%; border-top-color: transparent; animation: spin 1s linear infinite;"></span>
+                            Evaluating candidates...
+                        </div>
+                    </div>
                 </div>
                 
                 <div style="display: flex; gap: 10px; align-items: center;">
@@ -3440,31 +3485,113 @@ Crystal system: ${data.crystal_system}`;
             });
         }
 
+        async function loadInsertableElements() {
+            const dropdown = document.getElementById('insert-element');
+            const infoDiv = document.getElementById('insert-void-info');
+            try {
+                const response = await fetch('/api/get-insertable-elements', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: window.sessionId })
+                });
+                const data = await response.json();
+
+                dropdown.innerHTML = '<option value="">Choose an element to insert...</option>';
+                data.insertable_elements.forEach(el => {
+                    dropdown.innerHTML += `<option value="${el}">${el}</option>`;
+                });
+
+                if (data.max_void_radius) {
+                    infoDiv.textContent = `Max void radius: ${data.max_void_radius.toFixed(2)} Å`;
+                }
+            } catch (error) {
+                dropdown.innerHTML = '<option value="">Failed to load elements</option>';
+                console.error('Error loading insertable elements:', error);
+            }
+        }
+
+        async function loadInsertCandidates(element) {
+            const dropdown = document.getElementById('insert-candidate');
+            const loading = document.getElementById('insert-loading');
+
+            dropdown.innerHTML = '<option value="">Select candidate...</option>';
+            dropdown.disabled = true;
+            loading.style.display = 'block';
+
+            try {
+                const response = await fetch('/api/get-interstitial-candidates', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: window.sessionId, element: element })
+                });
+                const data = await response.json();
+                window.insertionCandidates = data.candidates || [];
+
+                window.insertionCandidates.forEach((cand) => {
+                    const option = document.createElement('option');
+                    option.value = cand.id;
+                    const energyStr = cand.rel_energy !== undefined ? cand.rel_energy : cand.energy;
+                    option.textContent = `${cand.label} (ΔE: ${energyStr} eV, Void: ${cand.min_dist} Å)`;
+                    dropdown.appendChild(option);
+                });
+                dropdown.disabled = false;
+            } catch (error) {
+                console.error('Error fetching candidates:', error);
+                dropdown.innerHTML = '<option value="">Error finding sites</option>';
+            } finally {
+                loading.style.display = 'none';
+            }
+        }
+
         function setupOperationListeners() {
             const atomDropdown = document.getElementById('element-dropdown');
             const elementTypeDropdown = document.getElementById('element-type-dropdown');
             const operationSelect = document.getElementById('substitute-element');
-            const executeBtn = document.getElementById('execute-btn');
-            const resetOperationsBtn = document.getElementById('reset-operations-btn');
             const manualMode = document.getElementById('manual-mode');
             const autoMode = document.getElementById('auto-mode');
             const manualSelector = document.getElementById('manual-selector');
             const autoSelector = document.getElementById('auto-selector');
 
-            // Enable reset operations button if original data exists
+            const opTypeSelect = document.getElementById('operation-type');
+            const modifyWorkflow = document.getElementById('modify-workflow');
+            const insertWorkflow = document.getElementById('insert-workflow');
+
+            const insertAutoMode = document.getElementById('insert-auto-mode');
+            const insertManualMode = document.getElementById('insert-manual-mode');
+            const insertElementDropdown = document.getElementById('insert-element');
+            const insertManualSelector = document.getElementById('insert-manual-selector');
+            const insertCandidateDropdown = document.getElementById('insert-candidate');
+            const executeBtn = document.getElementById('execute-btn');
+            const resetOperationsBtn = document.getElementById('reset-operations-btn');
+
             if (resetOperationsBtn && window.originalSupercellData && window.originalLabels.length > 0) {
                 resetOperationsBtn.disabled = false;
             }
 
-            // Initialize Auto mode as default (since auto-mode is checked by default)
             operationSelect.disabled = !elementTypeDropdown.value;
 
-            // Selection mode toggle handlers
+            let insertableElementsLoaded = false;
+            opTypeSelect.addEventListener('change', async function () {
+                if (window.viewer && typeof clearGhostAtom === 'function') clearGhostAtom(); // Clear preview
+                if (this.value === 'insert') {
+                    modifyWorkflow.style.display = 'none';
+                    insertWorkflow.style.display = 'block';
+                    if (!insertableElementsLoaded) {
+                        await loadInsertableElements();
+                        insertableElementsLoaded = true;
+                    }
+                } else {
+                    modifyWorkflow.style.display = 'block';
+                    insertWorkflow.style.display = 'none';
+                }
+                updateExecuteButton();
+            });
+
+            // Modify Selection mode toggles
             manualMode.addEventListener('change', function () {
                 if (this.checked) {
                     manualSelector.style.display = 'block';
                     autoSelector.style.display = 'none';
-                    // Reset selections
                     elementTypeDropdown.value = '';
                     operationSelect.disabled = !atomDropdown.value;
                     updateExecuteButton();
@@ -3475,7 +3602,6 @@ Crystal system: ${data.crystal_system}`;
                 if (this.checked) {
                     manualSelector.style.display = 'none';
                     autoSelector.style.display = 'block';
-                    // Reset selections
                     atomDropdown.value = '';
                     operationSelect.disabled = !elementTypeDropdown.value;
                     updateExecuteButton();
@@ -3483,18 +3609,12 @@ Crystal system: ${data.crystal_system}`;
             });
 
             atomDropdown.addEventListener('change', function () {
-                const selected = this.value;
-                if (manualMode.checked) {
-                    operationSelect.disabled = !selected;
-                }
+                if (manualMode.checked) operationSelect.disabled = !this.value;
                 updateExecuteButton();
             });
 
             elementTypeDropdown.addEventListener('change', function () {
-                const selected = this.value;
-                if (autoMode.checked) {
-                    operationSelect.disabled = !selected;
-                }
+                if (autoMode.checked) operationSelect.disabled = !this.value;
                 updateExecuteButton();
             });
 
@@ -3502,46 +3622,105 @@ Crystal system: ${data.crystal_system}`;
                 updateExecuteButton();
             });
 
+            // Insert Selection mode toggles
+            insertManualMode.addEventListener('change', function () {
+                if (window.viewer && typeof clearGhostAtom === 'function') clearGhostAtom();
+                insertCandidateDropdown.value = '';
+                if (this.checked) {
+                    insertManualSelector.style.display = 'block';
+                    if (insertElementDropdown.value && window.insertionCandidates && window.insertionCandidates.length === 0) {
+                        loadInsertCandidates(insertElementDropdown.value);
+                    }
+                }
+                updateExecuteButton();
+            });
+
+            insertAutoMode.addEventListener('change', function () {
+                if (window.viewer && typeof clearGhostAtom === 'function') clearGhostAtom();
+                if (this.checked) {
+                    insertManualSelector.style.display = 'none';
+                }
+                updateExecuteButton();
+            });
+
+            insertElementDropdown.addEventListener('change', async function () {
+                if (window.viewer && typeof clearGhostAtom === 'function') clearGhostAtom();
+                window.insertionCandidates = [];
+                insertCandidateDropdown.innerHTML = '<option value="">Select element first...</option>';
+
+                if (this.value && insertManualMode.checked) {
+                    await loadInsertCandidates(this.value);
+                }
+                updateExecuteButton();
+            });
+
+            insertCandidateDropdown.addEventListener('change', function () {
+                const candId = this.value;
+                if (candId && window.insertionCandidates) {
+                    const cand = window.insertionCandidates.find(c => c.id.toString() === candId.toString());
+                    if (cand && typeof showGhostAtom === 'function') {
+                        showGhostAtom(cand.frac_coords, insertElementDropdown.value);
+                    }
+                } else {
+                    if (typeof clearGhostAtom === 'function') clearGhostAtom();
+                }
+                updateExecuteButton();
+            });
+
             executeBtn.addEventListener('click', async function (event) {
-                event.preventDefault(); // Prevent default button behavior
+                event.preventDefault();
 
-                const selectedOperation = operationSelect.value;
-                const isAutoMode = autoMode.checked;
+                if (opTypeSelect.value === 'modify') {
+                    const selectedOperation = operationSelect.value;
+                    const isAutoMode = autoMode.checked;
+                    const selectedTarget = isAutoMode ? elementTypeDropdown.value : atomDropdown.value;
 
-                // Get target selection based on mode
-                const selectedTarget = isAutoMode ? elementTypeDropdown.value : atomDropdown.value;
-
-                if (selectedTarget && selectedOperation) {
-                    try {
-                        if (isAutoMode) {
-                            // Auto mode: Find optimal atom through energy calculations
-                            if (selectedOperation === 'DELETE') {
-                                await handleOptimalDeletion(selectedTarget);
+                    if (selectedTarget && selectedOperation) {
+                        try {
+                            if (isAutoMode) {
+                                if (selectedOperation === 'DELETE') await handleOptimalDeletion(selectedTarget);
+                                else await handleOptimalSubstitution(selectedTarget, selectedOperation);
                             } else {
-                                await handleOptimalSubstitution(selectedTarget, selectedOperation);
+                                if (selectedOperation === 'DELETE') await handleDeletion(selectedTarget);
+                                else await handleSubstitution(selectedTarget, selectedOperation);
                             }
-                        } else {
-                            // Manual mode: Direct operation
-                            if (selectedOperation === 'DELETE') {
-                                await handleDeletion(selectedTarget);
-                            } else {
-                                await handleSubstitution(selectedTarget, selectedOperation);
-                            }
+                        } catch (error) {
+                            console.error('Operation failed:', error);
+                            showNotification('Operation failed. Please try again.', 'error');
+                        } finally {
+                            executeBtn.disabled = false;
+                            updateExecuteButton();
+                            markStructureAsChanged();
                         }
-                    } catch (error) {
-                        console.error('Operation failed:', error);
-                        showNotification('Operation failed. Please try again.', 'error');
-                    } finally {
-                        // Re-enable button
-                        executeBtn.disabled = false;
-                        updateExecuteButton(); // Restore proper text
-                        // 原子操作完了後に構造変更を通知
-                        markStructureAsChanged();
+                    }
+                } else if (opTypeSelect.value === 'insert') {
+                    const elementToInsert = insertElementDropdown.value;
+                    const isAutoMode = insertAutoMode.checked;
+
+                    if (elementToInsert) {
+                        if (window.viewer && typeof clearGhostAtom === 'function') clearGhostAtom();
+                        try {
+                            if (isAutoMode) {
+                                await handleOptimalInsertion(elementToInsert);
+                            } else {
+                                const candId = insertCandidateDropdown.value;
+                                if (candId) {
+                                    const cand = window.insertionCandidates.find(c => c.id.toString() === candId.toString());
+                                    await handleInsertion(cand, elementToInsert);
+                                }
+                            }
+                        } catch (error) {
+                            console.error('Insertion failed:', error);
+                            showNotification('Insertion failed. Please try again.', 'error');
+                        } finally {
+                            executeBtn.disabled = false;
+                            updateExecuteButton();
+                            markStructureAsChanged();
+                        }
                     }
                 }
             });
 
-            // Reset Operations button listener
             resetOperationsBtn.addEventListener('click', function (event) {
                 event.preventDefault();
                 resetToOriginalStructure();
@@ -3549,40 +3728,63 @@ Crystal system: ${data.crystal_system}`;
         }
 
         function updateExecuteButton() {
+            const opTypeSelect = document.getElementById('operation-type');
             const atomDropdown = document.getElementById('element-dropdown');
             const elementTypeDropdown = document.getElementById('element-type-dropdown');
             const operationSelect = document.getElementById('substitute-element');
             const executeBtn = document.getElementById('execute-btn');
+
             const manualMode = document.getElementById('manual-mode');
+            const autoMode = document.getElementById('auto-mode');
+            const insertAutoMode = document.getElementById('insert-auto-mode');
+            const insertManualMode = document.getElementById('insert-manual-mode');
+            const insertElementDropdown = document.getElementById('insert-element');
+            const insertCandidateDropdown = document.getElementById('insert-candidate');
 
-            // Determine current mode and selection
-            const isManualMode = manualMode && manualMode.checked;
-            const selectedTarget = isManualMode ? atomDropdown.value : elementTypeDropdown.value;
-            const selectedOperation = operationSelect.value;
+            if (opTypeSelect && opTypeSelect.value === 'insert') {
+                const isAutoMode = insertAutoMode && insertAutoMode.checked;
+                const selectedElement = insertElementDropdown ? insertElementDropdown.value : '';
 
-            // Enable if both target and operation are selected
-            executeBtn.disabled = !selectedTarget || !selectedOperation;
-
-            // Update button text based on operation and mode
-            if (selectedTarget && selectedOperation) {
-                if (selectedOperation === 'DELETE') {
-                    if (isManualMode) {
-                        executeBtn.textContent = `Delete ${selectedTarget}`;
-                    } else {
-                        executeBtn.textContent = `Auto Delete ${selectedTarget} (optimal)`;
-                    }
-                    executeBtn.style.backgroundColor = '#e74c3c'; // Red for deletion
+                if (isAutoMode) {
+                    executeBtn.disabled = !selectedElement;
+                    executeBtn.textContent = selectedElement ? `Auto Insert ${selectedElement} (optimal)` : 'Execute';
                 } else {
-                    if (isManualMode) {
-                        executeBtn.textContent = `${selectedTarget} → ${selectedOperation}`;
-                    } else {
-                        executeBtn.textContent = `Auto ${selectedTarget} → ${selectedOperation} (optimal)`;
-                    }
-                    executeBtn.style.backgroundColor = '#27ae60'; // Green for substitution
+                    const selectedCandidate = insertCandidateDropdown ? insertCandidateDropdown.value : '';
+                    executeBtn.disabled = !selectedElement || !selectedCandidate;
+                    executeBtn.textContent = selectedElement && selectedCandidate ? `Insert ${selectedElement}` : 'Execute';
                 }
+                executeBtn.style.backgroundColor = '#3498db'; // Blue for insert
             } else {
-                executeBtn.textContent = 'Execute';
-                executeBtn.style.backgroundColor = '#27ae60'; // Default green
+                // Determine current mode and selection (modify)
+                const isManualMode = manualMode && manualMode.checked;
+                const isAutoMode = autoMode && autoMode.checked;
+                const selectedTarget = isManualMode ? atomDropdown?.value : elementTypeDropdown?.value;
+                const selectedOperation = operationSelect?.value;
+
+                // Enable if both target and operation are selected
+                executeBtn.disabled = !selectedTarget || !selectedOperation;
+
+                // Update button text based on operation and mode
+                if (selectedTarget && selectedOperation) {
+                    if (selectedOperation === 'DELETE') {
+                        if (isManualMode) {
+                            executeBtn.textContent = `Delete ${selectedTarget}`;
+                        } else {
+                            executeBtn.textContent = `Auto Delete ${selectedTarget} (optimal)`;
+                        }
+                        executeBtn.style.backgroundColor = '#e74c3c'; // Red for deletion
+                    } else {
+                        if (isManualMode) {
+                            executeBtn.textContent = `${selectedTarget} → ${selectedOperation}`;
+                        } else {
+                            executeBtn.textContent = `Auto ${selectedTarget} → ${selectedOperation} (optimal)`;
+                        }
+                        executeBtn.style.backgroundColor = '#27ae60'; // Green for substitution
+                    }
+                } else {
+                    executeBtn.textContent = 'Execute';
+                    executeBtn.style.backgroundColor = '#27ae60'; // Default green
+                }
             }
         }
 
@@ -3662,6 +3864,100 @@ Crystal system: ${data.crystal_system}`;
             console.log(`✓ Deleted ${elementLabel}`);
             showNotification(`Successfully deleted ${elementLabel}`, 'success');
         }
+
+        async function handleOptimalInsertion(element) {
+            showExecuteStatus(`Finding optimal insertion site for ${element}...`);
+
+            try {
+                const response = await fetch('/api/get-interstitial-candidates', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: window.sessionId, element: element })
+                });
+                const data = await response.json();
+
+                if (data.status === 'success' && data.candidates && data.candidates.length > 0) {
+                    const bestCand = data.candidates[0];
+                    if (bestCand.energy === "Failed" || bestCand.energy === Infinity) {
+                        throw new Error("Could not find any stable insertion site");
+                    }
+                    console.log(`Found optimal site for ${element}: Energy ${bestCand.energy} eV at ${bestCand.frac_coords}`);
+                    await handleInsertion(bestCand, element);
+                } else {
+                    throw new Error("No candidate sites found");
+                }
+            } catch (error) {
+                console.error("Optimal insertion error:", error);
+                hideExecuteStatus();
+                showNotification(`Optimal insertion failed: ${error.message}`, 'error');
+                throw error;
+            }
+        }
+
+        async function handleInsertion(cand, elementToInsert) {
+            if (!window.currentStructureData || window.currentLabels.length === 0) {
+                showNotification('No structure data available for modification', 'error');
+                return;
+            }
+
+            // Assign a new label for the inserted atom
+            // Find max index for this element to create a unique label
+            const existingSameExt = window.currentLabels.filter(l => l.startsWith(elementToInsert));
+            let maxNum = -1;
+            existingSameExt.forEach(l => {
+                const match = l.match(/\d+$/);
+                if (match) {
+                    const num = parseInt(match[0]);
+                    if (num > maxNum) maxNum = num;
+                }
+            });
+            const newLabel = `${elementToInsert}${maxNum + 1}`;
+
+            // Record operation in history
+            window.atomicOperations.push({
+                action: "insert",
+                to: elementToInsert,
+                coords: cand.frac_coords,
+                timestamp: Date.now(),
+                label: newLabel
+            });
+
+            console.log(`📝 Recorded insertion: ${newLabel} at ${cand.frac_coords} (operation #${window.atomicOperations.length})`);
+
+            // Update the structure data in UI side
+            window.currentLabels.push(newLabel);
+            window.currentStructureData.supercell_info.num_sites = window.currentLabels.length;
+
+            // Recalculate formula
+            const newFormula = calculateNewFormulaAfterInsertion(elementToInsert);
+            window.currentStructureData.supercell_info.formula = newFormula;
+
+            // Update session with new operations via backend API
+            await updateSessionWithOperations();
+
+            // Refresh densities etc
+            const newDensity = await recalculateDensityWithPymatgen(
+                newFormula,
+                window.currentStructureData.supercell_info.volume,
+                window.currentStructureData.original_data?.lattice_parameters || {}
+            );
+            if (newDensity !== null) {
+                window.currentStructureData.supercell_info.density = newDensity;
+            }
+
+            // Update displays
+            supercellData = window.currentStructureData;
+            displaySupercellInfo();
+            displayStructureOperations(window.currentLabels);
+            updateStructureVisualization();
+            resetPhysicalProperties();
+
+            console.log(`✓ Inserted ${elementToInsert}`);
+            showNotification(`Successfully inserted ${elementToInsert}`, 'success');
+            hideExecuteStatus();
+            if (typeof clearGhostAtom === 'function') clearGhostAtom();
+        }
+
 
         async function updateStructureForSubstitution(atomIndex, oldLabel, newElement) {
             // Update the formula by replacing one atom
@@ -3796,7 +4092,28 @@ Crystal system: ${data.crystal_system}`;
                 .join(' ');
         }
 
+        function calculateNewFormulaAfterInsertion(insertedElement) {
+            const currentFormula = window.currentStructureData.supercell_info.formula;
 
+            // Parse current formula
+            const elementCounts = {};
+            const matches = currentFormula.match(/([A-Z][a-z]?)(\d+)/g) || [];
+
+            matches.forEach(match => {
+                const element = match.replace(/\d+$/, '');
+                const count = parseInt(match.replace(/^[A-Z][a-z]?/, '')) || 1;
+                elementCounts[element] = count;
+            });
+
+            // Increase count for inserted element
+            elementCounts[insertedElement] = (elementCounts[insertedElement] || 0) + 1;
+
+            // Rebuild formula
+            return Object.entries(elementCounts)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([element, count]) => `${element}${count}`)
+                .join(' ');
+        }
         // Execute status functions using same system as Analyze Structure
         function setExecuteButtonState(state, text) {
             const executeBtn = document.getElementById('execute-btn');
@@ -5075,6 +5392,89 @@ Crystal system: ${data.crystal_system}`;
                     `;
                 }
             }
+        }
+
+        async function showGhostAtom(frac_coords, elementToInsert) {
+            if (!window.viewer3D || !window.currentFilename) return;
+
+            showExecuteStatus(`Previewing ${elementToInsert} insertion...`, false);
+            try {
+                // Create a temporary operation list
+                const previewOps = [...(window.atomicOperations || []), {
+                    action: "insert",
+                    to: elementToInsert,
+                    coords: frac_coords,
+                    timestamp: Date.now(),
+                    label: "PREVIEW_ATOM"
+                }];
+
+                const requestData = {
+                    filename: window.currentFilename,
+                    supercell_size: window.currentSupercellSize,
+                    operations: previewOps
+                };
+
+                const response = await fetch('/api/generate-modified-structure-cif', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestData)
+                });
+
+                if (!response.ok) throw new Error("Preview generation failed");
+                const cifData = await response.text();
+
+                const viewerElement = document.getElementById('3dmol-viewer');
+                if (viewerElement && viewerElement.offsetWidth > 0 && viewerElement.offsetHeight > 0) {
+                    window.viewer3D.clear();
+                    window.viewer3D.addModel(cifData, 'cif');
+
+                    if (typeof updateMoleculeStyleRobust === 'function') {
+                        updateMoleculeStyleRobust();
+                    }
+
+                    // Style the inserted preview atom distinctly (glowing / distinct color)
+                    const m = window.viewer3D.getModel();
+                    const atoms = m.selectedAtoms({});
+                    if (atoms.length > 0) {
+                        const lastAtom = atoms[atoms.length - 1]; // Append operation puts it last
+                        window.viewer3D.setStyle(
+                            { serial: lastAtom.serial },
+                            { sphere: { color: 'cyan', radius: 1.5, wireframe: true } }
+                        );
+                        // Add a label
+                        window.viewer3D.addLabel(`${elementToInsert} (Preview)`, {
+                            position: lastAtom,
+                            backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                            fontColor: 'white',
+                            backgroundOpacity: 0.8
+                        });
+                    }
+
+                    if (typeof displayUnitCell !== 'undefined' && displayUnitCell) {
+                        window.viewer3D.addUnitCell({
+                            box: { color: 'black', opacity: 0.8, linewidth: 2 },
+                            axes: typeof displayAxes !== 'undefined' ? displayAxes : true
+                        });
+                    }
+
+                    window.viewer3D.zoomTo();
+                    window.viewer3D.render();
+                    hideExecuteStatus();
+                }
+            } catch (error) {
+                console.error("Preview error:", error);
+                hideExecuteStatus();
+            }
+        }
+
+        let ghostClearTimeout = null;
+        async function clearGhostAtom() {
+            if (!window.viewer3D) return;
+            // Debounce the clear operation to avoid flashy re-renders if scrolling quickly
+            if (ghostClearTimeout) clearTimeout(ghostClearTimeout);
+            ghostClearTimeout = setTimeout(async () => {
+                await updateStructureVisualization();
+            }, 100);
         }
 
         async function updateStructureVisualization() {
