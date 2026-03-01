@@ -53,7 +53,6 @@ test_*.py
 
 # Test files and folders
 test*.cif
-tests/
 
 # Claude Code configuration
 .claude/
@@ -68,6 +67,11 @@ UPGRADE_NOTES.md
 
 # Analytics database
 analytics.db
+
+# Output and temporary log files
+*.txt
+*.cif
+!sample_cif/
 
 # Uploaded files
 uploads/
