@@ -17,7 +17,7 @@ CrystalNexus is a comprehensive web-based application for crystal structure anal
     *   **Total Energy** (eV/atom)
     *   **Magnetic Moments** (magmom)
     *   **Site-Specific Energies**
-*   **Auto Mode Optimization**: An advanced AI-driven feature that iteratively substitutes or deletes atoms to discover the most energetically favorable configuration.
+*   **Auto Mode Optimization**: An advanced AI-driven feature that iteratively substitutes, deletes, or inserts atoms to discover the most energetically favorable configuration.
 *   **Real-time Feedback**: Watch energy minimization progress live via dynamic sparkline charts.
 
 ### 📊 Comprehensive Analysis Tools
@@ -131,7 +131,10 @@ python start_crystalnexus.py
 
 #### 4. Advanced Editing
 *   **Supercell**: Open the **"Structure Operations"** menu. Enter dimensions (e.g., 2 2 2) and click **"Create Supercell"**.
-*   **Auto Mode**: Select "Auto Mode" to let AI iteratively improve your structure by testing substitutions (e.g., substituting Ti with Zr).
+*   **Structure Modifier**: Use the Tabs UI to manipulate the crystal:
+    *   **Edit Existing**: Substitute or delete specific atoms.
+    *   **Insert New**: Add new atoms into stable void sites (interstitial sites) within the crystal lattice.
+*   **Auto Mode**: Select "Auto Mode" (within Edit or Insert) to let AI iteratively improve your structure by testing the most energetically favorable atomic changes.
 
 #### 5. Exporting Results
 *   After an analysis is complete, click the **"Detailed Analysis"** button.
