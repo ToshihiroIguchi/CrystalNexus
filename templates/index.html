@@ -322,6 +322,42 @@
             margin: 6px 0;
             line-height: 1.5;
         }
+
+        /* Operation Tabs Styles */
+        .operation-tabs {
+            display: flex;
+            background: #f1f3f5;
+            padding: 4px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            gap: 4px;
+        }
+
+        .op-tab {
+            flex: 1;
+            padding: 8px 10px;
+            border: none;
+            background: transparent;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            color: #495057;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: none;
+            white-space: nowrap;
+        }
+
+        .op-tab:hover {
+            background: rgba(0, 0, 0, 0.05);
+        }
+
+        .op-tab.active {
+            background: #ffffff;
+            color: #2c3e50;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            font-weight: bold;
+        }
     </style>
 </head>
 
@@ -3293,12 +3329,13 @@ Crystal system: ${data.crystal_system}`;
                     </button>
                 </div>
                 
-                <div class="control-group" style="margin-bottom: 15px;">
-                    <label for="operation-type">Operation Type:</label>
-                    <select id="operation-type">
-                        <option value="modify">Modify Existing Atom (Substitute/Delete)</option>
-                        <option value="insert">Insert New Atom</option>
-                    </select>
+                <div class="operation-tabs">
+                    <button class="op-tab active" data-mode="modify" id="tab-modify">
+                        Edit Existing
+                    </button>
+                    <button class="op-tab" data-mode="insert" id="tab-insert">
+                        Insert New
+                    </button>
                 </div>
                 
                 <!-- Modify Existing Atom Workflow -->
@@ -3660,7 +3697,8 @@ Crystal system: ${data.crystal_system}`;
             const manualSelector = document.getElementById('manual-selector');
             const autoSelector = document.getElementById('auto-selector');
 
-            const opTypeSelect = document.getElementById('operation-type');
+            const tabModify = document.getElementById('tab-modify');
+            const tabInsert = document.getElementById('tab-insert');
             const modifyWorkflow = document.getElementById('modify-workflow');
             const insertWorkflow = document.getElementById('insert-workflow');
 
@@ -3679,9 +3717,14 @@ Crystal system: ${data.crystal_system}`;
             operationSelect.disabled = !elementTypeDropdown.value;
 
             let insertableElementsLoaded = false;
-            opTypeSelect.addEventListener('change', async function () {
+
+            async function switchTab(mode) {
                 if (window.viewer && typeof clearGhostAtom === 'function') clearGhostAtom(); // Clear preview
-                if (this.value === 'insert') {
+                window.currentOperationMode = mode;
+
+                if (mode === 'insert') {
+                    tabModify.classList.remove('active');
+                    tabInsert.classList.add('active');
                     modifyWorkflow.style.display = 'none';
                     insertWorkflow.style.display = 'block';
                     if (!insertableElementsLoaded) {
@@ -3689,11 +3732,19 @@ Crystal system: ${data.crystal_system}`;
                         insertableElementsLoaded = true;
                     }
                 } else {
+                    tabInsert.classList.remove('active');
+                    tabModify.classList.add('active');
                     modifyWorkflow.style.display = 'block';
                     insertWorkflow.style.display = 'none';
                 }
                 updateExecuteButton();
-            });
+            }
+
+            if (tabModify && tabInsert) {
+                tabModify.addEventListener('click', () => switchTab('modify'));
+                tabInsert.addEventListener('click', () => switchTab('insert'));
+                window.currentOperationMode = 'modify';
+            }
 
             // Modify Selection mode toggles
             manualMode.addEventListener('change', function () {
@@ -3778,7 +3829,7 @@ Crystal system: ${data.crystal_system}`;
             executeBtn.addEventListener('click', async function (event) {
                 event.preventDefault();
 
-                if (opTypeSelect.value === 'modify') {
+                if (window.currentOperationMode === 'modify') {
                     const selectedOperation = operationSelect.value;
                     const isAutoMode = autoMode.checked;
                     const selectedTarget = isAutoMode ? elementTypeDropdown.value : atomDropdown.value;
@@ -3801,7 +3852,7 @@ Crystal system: ${data.crystal_system}`;
                             markStructureAsChanged();
                         }
                     }
-                } else if (opTypeSelect.value === 'insert') {
+                } else if (window.currentOperationMode === 'insert') {
                     const elementToInsert = insertElementDropdown.value;
                     const isAutoMode = insertAutoMode.checked;
 
@@ -3836,7 +3887,6 @@ Crystal system: ${data.crystal_system}`;
         }
 
         function updateExecuteButton() {
-            const opTypeSelect = document.getElementById('operation-type');
             const atomDropdown = document.getElementById('element-dropdown');
             const elementTypeDropdown = document.getElementById('element-type-dropdown');
             const operationSelect = document.getElementById('substitute-element');
@@ -3849,7 +3899,7 @@ Crystal system: ${data.crystal_system}`;
             const insertElementDropdown = document.getElementById('insert-element');
             const insertCandidateDropdown = document.getElementById('insert-candidate');
 
-            if (opTypeSelect && opTypeSelect.value === 'insert') {
+            if (window.currentOperationMode === 'insert') {
                 const isAutoMode = insertAutoMode && insertAutoMode.checked;
                 const selectedElement = insertElementDropdown ? insertElementDropdown.value : '';
 
