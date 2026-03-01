@@ -25,7 +25,7 @@ class AutoModeChart {
         // Enforce resize check in case it was hidden during init
         const rect = this.canvas.getBoundingClientRect();
         const dpr = window.devicePixelRatio || 1;
-        if (this.canvas.width !== rect.width * dpr && rect.width > 0) {
+        if ((this.canvas.width !== rect.width * dpr || this.canvas.height !== rect.height * dpr) && rect.width > 0 && rect.height > 0) {
             this.resize();
         }
 

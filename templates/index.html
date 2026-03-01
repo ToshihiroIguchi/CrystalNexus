@@ -3447,12 +3447,7 @@ Crystal system: ${data.crystal_system}`;
             }
 
             if (!window.autoModeChart && chartCanvas) {
-                // Check if Chart.js is loaded
-                if (typeof Chart !== 'undefined') {
-                    window.autoModeChart = new AutoModeChart('auto-mode-chart');
-                } else {
-                    console.warn('Chart.js not loaded yet');
-                }
+                window.autoModeChart = new AutoModeChart('auto-mode-chart');
             } else if (window.autoModeChart) {
                 // Reset chart for new session/operations
                 window.autoModeChart.reset();
@@ -3512,36 +3507,147 @@ Crystal system: ${data.crystal_system}`;
             }
         }
 
-        async function loadInsertCandidates(element) {
-            const dropdown = document.getElementById('insert-candidate');
-            const loading = document.getElementById('insert-loading');
-
-            dropdown.innerHTML = '<option value="">Select candidate...</option>';
-            dropdown.disabled = true;
-            loading.style.display = 'block';
+        async function performIterativeInsertionEvaluation(element) {
+            // Reset candidates
+            window.insertionCandidates = [];
+            window.lastEvaluatedElement = element;
 
             try {
-                const response = await fetch('/api/get-interstitial-candidates', {
+                // Step 1: Get potential voids (coordinates)
+                const voidsResponse = await fetch('/api/get-insertion-voids', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ session_id: window.sessionId, element: element })
                 });
-                const data = await response.json();
-                window.insertionCandidates = data.candidates || [];
+                const voidsData = await voidsResponse.json();
+                const voids = voidsData.voids || [];
 
-                window.insertionCandidates.forEach((cand) => {
-                    const option = document.createElement('option');
-                    option.value = cand.id;
-                    const energyStr = cand.rel_energy !== undefined ? cand.rel_energy : cand.energy;
-                    option.textContent = `${cand.label} (ΔE: ${energyStr} eV, Void: ${cand.min_dist} Å)`;
-                    dropdown.appendChild(option);
-                });
-                dropdown.disabled = false;
+                if (voids.length === 0) {
+                    return { success: false, message: "No potential insertion sites found." };
+                }
+
+                // Prepare for iterative evaluation
+                showExecuteStatus(`Evaluating ${voids.length} candidate sites for ${element}...`, true, true);
+                updateExecuteProgress(0, voids.length);
+
+                if (window.autoModeChart) {
+                    window.autoModeChart.reset(voids.length);
+                }
+
+                currentAbortController = new AbortController();
+
+                // Step 2: Evaluate each void iteratively
+                for (let i = 0; i < voids.length; i++) {
+                    if (currentAbortController.signal.aborted) break;
+
+                    const v = voids[i];
+                    showExecuteStatus(`Evaluating site ${i + 1}/${voids.length} for ${element}...`, true, true);
+
+                    try {
+                        const energyResponse = await fetch('/api/evaluate-insertion-energy', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                session_id: window.sessionId,
+                                element: element,
+                                frac_coords: v.frac_coords
+                            }),
+                            signal: currentAbortController.signal
+                        });
+                        const energyData = await energyResponse.json();
+
+                        if (energyData.status === 'success') {
+                            const energy = energyData.energy;
+                            const cand = {
+                                ...v,
+                                energy: energy,
+                                rel_energy: 0
+                            };
+                            window.insertionCandidates.push(cand);
+
+                            // Update chart
+                            if (window.autoModeChart) {
+                                window.autoModeChart.addDataPoint(`Site ${i + 1}`, energy);
+                            }
+
+                            // Update Current Best in status UI
+                            const currentBest = [...window.insertionCandidates].sort((a, b) => a.energy - b.energy)[0];
+                            updateCurrentBest(currentBest.energy, currentBest.label, `INSERT ${element}`);
+                        }
+                    } catch (err) {
+                        if (err.name === 'AbortError') break;
+                        console.error(`Error evaluating site ${i + 1}:`, err);
+                    }
+
+                    updateExecuteProgress(i + 1, voids.length);
+                }
+
+                if (currentAbortController.signal.aborted) {
+                    return { success: false, message: "Evaluation cancelled by user." };
+                }
+
+                // Calculate relative energies based on the best candidate
+                if (window.insertionCandidates.length > 0) {
+                    const sortedCandidates = [...window.insertionCandidates].sort((a, b) => a.energy - b.energy);
+                    const bestE = sortedCandidates[0].energy;
+
+                    window.insertionCandidates.forEach(c => {
+                        if (typeof c.energy === 'number' && c.energy < 99999) {
+                            c.rel_energy = (c.energy - bestE).toFixed(3);
+                        } else {
+                            c.rel_energy = "N/A";
+                        }
+                    });
+
+                    return { success: true, count: window.insertionCandidates.length };
+                } else {
+                    return { success: false, message: "All site evaluations failed." };
+                }
+
             } catch (error) {
-                console.error('Error fetching candidates:', error);
+                console.error('Error in iterative evaluation:', error);
+                return { success: false, message: error.message };
+            } finally {
+                currentAbortController = null;
+            }
+        }
+
+        async function loadInsertCandidates(element) {
+            const dropdown = document.getElementById('insert-candidate');
+            const loading = document.getElementById('insert-loading');
+
+            dropdown.innerHTML = '<option value="">Evaluating sites...</option>';
+            dropdown.disabled = true;
+            loading.style.display = 'block';
+
+            try {
+                const result = await performIterativeInsertionEvaluation(element);
+
+                if (result.success) {
+                    // Populate dropdown (sorted by energy for better UX in manual mode)
+                    dropdown.innerHTML = '<option value="">Select candidate...</option>';
+                    const sortedCandidates = [...window.insertionCandidates].sort((a, b) => a.energy - b.energy);
+                    sortedCandidates.forEach((cand) => {
+                        const option = document.createElement('option');
+                        option.value = cand.id;
+                        option.textContent = `${cand.label} (ΔE: ${cand.rel_energy} eV, Void: ${cand.min_dist} Å)`;
+                        dropdown.appendChild(option);
+                    });
+                    dropdown.disabled = false;
+                    showNotification(`Found and evaluated ${window.insertionCandidates.length} potential sites.`, 'success');
+                } else {
+                    dropdown.innerHTML = `<option value="">${result.message || 'Evaluation failed'}</option>`;
+                    if (result.message && !result.message.includes('cancelled')) {
+                        showNotification(result.message, 'error');
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading candidates:', error);
                 dropdown.innerHTML = '<option value="">Error finding sites</option>';
             } finally {
                 loading.style.display = 'none';
+                hideExecuteStatus();
+                hideCurrentBest();
             }
         }
 
@@ -3868,31 +3974,51 @@ Crystal system: ${data.crystal_system}`;
         }
 
         async function handleOptimalInsertion(element) {
-            showExecuteStatus(`Finding optimal insertion site for ${element}...`);
+            setExecuteButtonState('processing', '⏳ Optimizing...');
 
             try {
-                const response = await fetch('/api/get-interstitial-candidates', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ session_id: window.sessionId, element: element })
-                });
-                const data = await response.json();
+                // Perform iterative evaluation
+                const result = await performIterativeInsertionEvaluation(element);
 
-                if (data.status === 'success' && data.candidates && data.candidates.length > 0) {
-                    const bestCand = data.candidates[0];
-                    if (bestCand.energy === "Failed" || bestCand.energy === Infinity) {
-                        throw new Error("Could not find any stable insertion site");
+                if (result.success && window.insertionCandidates.length > 0) {
+                    const bestCand = [...window.insertionCandidates].sort((a, b) => a.energy - b.energy)[0];
+
+                    if (bestCand.energy > 90000) {
+                        throw new Error("No stable insertion sites found.");
                     }
-                    console.log(`Found optimal site for ${element}: Energy ${bestCand.energy} eV at ${bestCand.frac_coords}`);
+
+                    showExecuteStatus(`Optimal site found (ΔE: ${bestCand.rel_energy} eV). Executing insertion...`, false);
                     await handleInsertion(bestCand, element);
+
+                    // Transform insertion candidates into the format expected by showExecutionComplete
+                    const formattedResults = {
+                        successful: window.insertionCandidates.map((c, i) => ({
+                            atom: `Site ${i + 1}`,
+                            energy: c.energy,
+                            index: i,
+                            attempts: 1
+                        })),
+                        bestResult: {
+                            atom: `Site 1`,
+                            energy: bestCand.energy,
+                            index: 0
+                        }
+                    };
+
+                    showExecutionComplete(`Insertion Completed. Best: Site 1 (${bestCand.energy.toFixed(4)} eV)`, formattedResults);
+
                 } else {
-                    throw new Error("No candidate sites found");
+                    if (result.message && !result.message.includes('cancelled')) {
+                        showNotification(`Optimization failed: ${result.message}`, 'error');
+                    }
+                    hideExecuteStatus();
                 }
             } catch (error) {
                 console.error("Optimal insertion error:", error);
                 hideExecuteStatus();
                 showNotification(`Optimal insertion failed: ${error.message}`, 'error');
-                throw error;
+            } finally {
+                setExecuteButtonState('complete');
             }
         }
 
@@ -3956,7 +4082,6 @@ Crystal system: ${data.crystal_system}`;
 
             console.log(`✓ Inserted ${elementToInsert}`);
             showNotification(`Successfully inserted ${elementToInsert}`, 'success');
-            hideExecuteStatus();
             if (typeof clearGhostAtom === 'function') clearGhostAtom();
         }
 
@@ -4188,6 +4313,7 @@ Crystal system: ${data.crystal_system}`;
             const progressBar = document.getElementById('execute-progress-bar');
             const cancelBtn = document.getElementById('cancel-btn');
             const closeBtn = document.getElementById('close-status-btn');
+            const currentBest = document.getElementById('current-best');
 
             // Update status message
             if (statusText) statusText.textContent = message;
@@ -4199,11 +4325,11 @@ Crystal system: ${data.crystal_system}`;
             // Show close button
             if (closeBtn) closeBtn.style.display = 'block';
 
-            // Explicitly show the parent div because displayStructureOperations might have hidden it
+            // Explicitly show the parent div
             const statusDiv = document.getElementById('execute-status');
             if (statusDiv) statusDiv.style.display = 'block';
 
-            // Restore chart and best result if provided
+            // Restoring chart to the clean canvas created by displayStructureOperations
             if (results) {
                 const chartWrapper = document.getElementById('chart-container-wrapper');
                 if (chartWrapper) {
@@ -4217,8 +4343,6 @@ Crystal system: ${data.crystal_system}`;
 
                     // Repopulate data
                     if (results.successful && results.successful.length > 0) {
-                        // Total processed might be higher than successful if some failed,
-                        // but resetting to successful length is safest for the chart window
                         window.autoModeChart.reset(results.successful.length);
                         results.successful.forEach(r => {
                             window.autoModeChart.addDataPoint(r.atom, r.energy);
@@ -4233,8 +4357,7 @@ Crystal system: ${data.crystal_system}`;
 
                     if (currentBest && currentBestEnergy && currentBestAtom) {
                         currentBest.style.display = 'block';
-                        // Keep precision consistent with other parts
-                        currentBestEnergy.textContent = `${results.bestResult.energy.toFixed(4)} eV/atom`;
+                        currentBestEnergy.textContent = `${results.bestResult.energy.toFixed(6)} eV/atom`;
                         currentBestAtom.textContent = results.bestResult.atom;
                     }
                 }
@@ -4451,7 +4574,6 @@ Crystal system: ${data.crystal_system}`;
                 setExecuteButtonState('complete');
                 showNotification('Fatal error during optimal substitution', 'error');
             } finally {
-                hideCurrentBest();
                 currentAbortController = null;
             }
         }
@@ -4470,7 +4592,7 @@ Crystal system: ${data.crystal_system}`;
                 showExecuteStatus('Optimal atom found, executing substitution...', false);
 
                 // Display calculation summary
-                const resultSummary = successful
+                const resultSummary = [...successful]
                     .sort((a, b) => a.energy - b.energy)
                     .map((r, i) => `${i + 1}. ${r.atom}: ${r.energy.toFixed(6)} eV/atom (${r.attempts} attempts)`)
                     .join('\n');
@@ -4754,7 +4876,6 @@ Crystal system: ${data.crystal_system}`;
                 setExecuteButtonState('complete');
                 showNotification('Fatal error during optimal deletion', 'error');
             } finally {
-                hideCurrentBest();
                 currentAbortController = null;
             }
         }
@@ -4773,7 +4894,7 @@ Crystal system: ${data.crystal_system}`;
                 showExecuteStatus('Optimal atom found, executing deletion...', false);
 
                 // Display calculation summary
-                const resultSummary = successful
+                const resultSummary = [...successful]
                     .sort((a, b) => a.energy - b.energy)
                     .map((r, i) => `${i + 1}. Delete ${r.atom}: ${r.energy.toFixed(6)} eV/atom (${r.attempts} attempts)`)
                     .join('\n');
