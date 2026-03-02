@@ -1200,7 +1200,8 @@ body {
     font-size: 14px;
 }
 
-.element-selector select {
+.element-selector select,
+.control-group select {
     width: 100%;
     padding: 8px 12px;
     border: 1px solid #ddd;
@@ -1210,13 +1211,15 @@ body {
     cursor: pointer;
 }
 
-.element-selector select:focus {
+.element-selector select:focus,
+.control-group select:focus {
     outline: none;
     border-color: #3498db;
     box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
 }
 
-.element-selector select:disabled {
+.element-selector select:disabled,
+.control-group select:disabled {
     background-color: #f5f5f5;
     cursor: not-allowed;
     color: #999;
@@ -1274,13 +1277,6 @@ body {
     color: #34495e;
 }
 
-.control-group select {
-    padding: 6px 10px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    font-size: 13px;
-    background-color: white;
-}
 
 .execute-button {
     background-color: #27ae60;

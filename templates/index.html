@@ -3406,10 +3406,12 @@ Crystal system: ${data.crystal_system}`;
                     </div>
 
                     <div id="insert-manual-selector" style="display: none; margin-bottom: 15px;">
-                        <label for="insert-candidate">Select Insertion Site (Energy):</label>
-                        <select id="insert-candidate">
-                            <option value="">Select element first...</option>
-                        </select>
+                        <div class="control-group">
+                            <label for="insert-candidate">Select Insertion Site:</label>
+                            <select id="insert-candidate">
+                                <option value="">Select element first...</option>
+                            </select>
+                        </div>
                         <div id="insert-loading" style="display: none; font-size: 12px; color: #3498db; margin-top: 5px;">
                             <span class="loading-spinner" style="display: inline-block; width: 12px; height: 12px; border: 2px solid #3498db; border-radius: 50%; border-top-color: transparent; animation: spin 1s linear infinite;"></span>
                             Evaluating candidates...
@@ -3544,13 +3546,15 @@ Crystal system: ${data.crystal_system}`;
             }
         }
 
-        async function performIterativeInsertionEvaluation(element) {
+        async function performIterativeInsertionEvaluation(element, quickMode = false) {
             // Reset candidates
             window.insertionCandidates = [];
             window.lastEvaluatedElement = element;
 
             try {
-                // Step 1: Get potential voids (coordinates)
+                // Phase 1: Geometric Search
+                showExecuteStatus(`Geometric Search (Voronoi) for ${element}...`, true, true);
+
                 const voidsResponse = await fetch('/api/get-insertion-voids', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -3563,13 +3567,25 @@ Crystal system: ${data.crystal_system}`;
                     return { success: false, message: "No potential insertion sites found." };
                 }
 
-                // Prepare for iterative evaluation
-                showExecuteStatus(`Evaluating ${voids.length} candidate sites for ${element}...`, true, true);
-                updateExecuteProgress(0, voids.length);
-
                 if (window.autoModeChart) {
                     window.autoModeChart.reset(voids.length);
                 }
+
+                // IMPORTANT: In Quick Mode (Manual), we stop here and let the user pick.
+                // We'll evaluate energy on-demand when they select a specific site.
+                if (quickMode) {
+                    showExecuteStatus(`Search complete. Select a site.`, false, false);
+                    window.insertionCandidates = voids.map(v => ({
+                        ...v,
+                        energy: null,
+                        rel_energy: "N/A"
+                    }));
+                    return { success: true, count: voids.length, quickMode: true };
+                }
+
+                // Phase 2: Energy Prediction
+                showExecuteStatus(`Energy Prediction (CHGNet) for ${element}...`, true, true);
+                updateExecuteProgress(0, voids.length);
 
                 currentAbortController = new AbortController();
 
@@ -3578,7 +3594,7 @@ Crystal system: ${data.crystal_system}`;
                     if (currentAbortController.signal.aborted) break;
 
                     const v = voids[i];
-                    showExecuteStatus(`Evaluating site ${i + 1}/${voids.length} for ${element}...`, true, true);
+                    showExecuteStatus(`Evaluating site ${i + 1}/${voids.length}...`, true, true);
 
                     try {
                         const energyResponse = await fetch('/api/evaluate-insertion-energy', {
@@ -3619,7 +3635,7 @@ Crystal system: ${data.crystal_system}`;
                     updateExecuteProgress(i + 1, voids.length);
                 }
 
-                if (currentAbortController.signal.aborted) {
+                if (currentAbortController && currentAbortController.signal.aborted) {
                     return { success: false, message: "Evaluation cancelled by user." };
                 }
 
@@ -3653,21 +3669,22 @@ Crystal system: ${data.crystal_system}`;
             const dropdown = document.getElementById('insert-candidate');
             const loading = document.getElementById('insert-loading');
 
-            dropdown.innerHTML = '<option value="">Evaluating sites...</option>';
+            dropdown.innerHTML = '<option value="">Searching voids...</option>';
             dropdown.disabled = true;
-            loading.style.display = 'block';
+            // Removed local spinner visibility to unify with main status bar
 
             try {
-                const result = await performIterativeInsertionEvaluation(element);
+                // Manual mode uses Quick Mode (skip heavy energy loop)
+                const result = await performIterativeInsertionEvaluation(element, true);
 
                 if (result.success) {
                     // Populate dropdown (sorted by energy for better UX in manual mode)
                     dropdown.innerHTML = '<option value="">Select candidate...</option>';
-                    const sortedCandidates = [...window.insertionCandidates].sort((a, b) => a.energy - b.energy);
+                    const sortedCandidates = [...window.insertionCandidates].sort((a, b) => b.min_dist - a.min_dist);
                     sortedCandidates.forEach((cand) => {
                         const option = document.createElement('option');
                         option.value = cand.id;
-                        option.textContent = `${cand.label} (ΔE: ${cand.rel_energy} eV, Void: ${cand.min_dist} Å)`;
+                        option.textContent = `${cand.label} (Void: ${cand.min_dist} Å)`;
                         dropdown.appendChild(option);
                     });
                     dropdown.disabled = false;
@@ -3813,15 +3830,23 @@ Crystal system: ${data.crystal_system}`;
                 updateExecuteButton();
             });
 
-            insertCandidateDropdown.addEventListener('change', function () {
+            insertCandidateDropdown.addEventListener('change', async function () {
                 const candId = this.value;
                 if (candId && window.insertionCandidates) {
                     const cand = window.insertionCandidates.find(c => c.id.toString() === candId.toString());
                     if (cand && typeof showGhostAtom === 'function') {
                         showGhostAtom(cand.frac_coords, insertElementDropdown.value);
                     }
+
+                    // Trigger on-demand energy evaluation for Manual mode
+                    if (cand && cand.energy === null) {
+                        await evaluateSpecificCandidate(candId, insertElementDropdown.value);
+                    } else if (cand && cand.energy !== null) {
+                        updateCurrentBest(cand.energy, cand.label, `SITE EVAL (${insertElementDropdown.value})`);
+                    }
                 } else {
                     if (typeof clearGhostAtom === 'function') clearGhostAtom();
+                    hideCurrentBest();
                 }
                 updateExecuteButton();
             });
@@ -4133,6 +4158,65 @@ Crystal system: ${data.crystal_system}`;
             console.log(`✓ Inserted ${elementToInsert}`);
             showNotification(`Successfully inserted ${elementToInsert}`, 'success');
             if (typeof clearGhostAtom === 'function') clearGhostAtom();
+            hideCurrentBest();
+            hideExecuteStatus();
+        }
+
+        async function evaluateSpecificCandidate(candId, element) {
+            const cand = window.insertionCandidates.find(c => c.id.toString() === candId.toString());
+            if (!cand) return;
+
+            console.log(`🧪 Evaluating specific candidate: ${cand.label} for ${element}`);
+            showExecuteStatus(`Evaluating energy for ${cand.label}...`, true, false);
+
+            // Show loading state in current-best box
+            const currentBestDisplay = document.getElementById('current-best');
+            const energyElement = document.getElementById('current-best-energy');
+            const atomElement = document.getElementById('current-best-atom');
+            if (currentBestDisplay && energyElement && atomElement) {
+                currentBestDisplay.style.display = 'block';
+                energyElement.textContent = '⏳ Evaluating...';
+                atomElement.textContent = cand.label;
+            }
+
+            try {
+                const response = await fetch('/api/evaluate-insertion-energy', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: window.sessionId,
+                        element: element,
+                        frac_coords: cand.frac_coords
+                    })
+                });
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    cand.energy = data.energy;
+                    console.log(`✅ Energy for ${cand.label}: ${cand.energy}`);
+                    if (energyElement) energyElement.textContent = `${cand.energy.toFixed(3)} eV`;
+
+                    // Update dropdown text to include energy
+                    const dropdown = document.getElementById('insert-candidate');
+                    const option = Array.from(dropdown.options).find(opt => opt.value === candId.toString());
+                    if (option) {
+                        option.textContent = `${cand.label} (E: ${cand.energy.toFixed(3)} eV, Void: ${cand.min_dist} Å)`;
+                    }
+
+                    showExecuteStatus(`Evaluation complete for ${cand.label}.`, false, false);
+                    updateExecuteButton(); // Ensure button text/state is correct
+
+                    setTimeout(() => {
+                        const currentVal = document.getElementById('insert-candidate').value;
+                        if (currentVal !== candId.toString()) {
+                            hideExecuteStatus();
+                        }
+                    }, 3000);
+                }
+            } catch (error) {
+                console.error('❌ Error evaluating specific site:', error);
+                if (energyElement) energyElement.textContent = 'Error';
+            }
         }
 
 
@@ -4324,7 +4408,15 @@ Crystal system: ${data.crystal_system}`;
             const currentBest = document.getElementById('current-best');
 
             statusDiv.style.display = 'block';
-            statusText.textContent = message;
+
+            // Add blue color and spinning icon if processing/progress is shown
+            if (showProgress) {
+                statusText.style.color = '#3498db';
+                statusText.innerHTML = `<span class="loading-spinner" style="display: inline-block; width: 12px; height: 12px; border: 2px solid #3498db; border-radius: 50%; border-top-color: transparent; animation: spin 1s linear infinite; margin-right: 8px; vertical-align: middle;"></span>${message}`;
+            } else {
+                statusText.style.color = '#2c3e50';
+                statusText.textContent = message;
+            }
 
             // Ensure close button is hidden when starting/running
             if (closeBtn) closeBtn.style.display = 'none';
