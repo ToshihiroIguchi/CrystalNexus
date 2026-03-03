@@ -119,7 +119,25 @@
         .citation:hover {
             text-decoration: underline;
         }
+
+        /* KaTeX responsive adjustments */
+        .equation {
+            overflow-x: auto;
+            overflow-y: hidden;
+            padding: 10px 0;
+        }
     </style>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" onload="renderMathInElement(document.body, {
+            delimiters: [
+                {left: '$$', right: '$$', display: true},
+                {left: '$', right: '$', display: false},
+                {left: '\\(', right: '\\)', display: false},
+                {left: '\\[', right: '\\]', display: true}
+            ],
+            throwOnError : false
+        });"></script>
 </head>
 
 <body>
@@ -155,20 +173,20 @@
     <h3>2.1 Graph Neural Network Architecture</h3>
 
     <p>CHGNet employs a graph neural network architecture where crystal structures are represented as undirected graphs
-        G = (V, E), with vertices V corresponding to atoms and edges E representing interatomic interactions<sup><a
-                href="#ref3" class="citation">[3]</a></sup>. Each atom i is characterized by an initial feature vector
-        h<sub>i</sub><sup>(0)</sup> encoding atomic number, coordination environment, and local chemical information.
+        $G = (V, E)$, with vertices $V$ corresponding to atoms and edges $E$ representing interatomic
+        interactions<sup><a href="#ref3" class="citation">[3]</a></sup>. Each atom $i$ is characterized by an initial
+        feature vector
+        $h_i^{(0)}$ encoding atomic number, coordination environment, and local chemical information.
     </p>
 
     <p>The model utilizes a message-passing framework where atomic representations are iteratively updated through L
         layers:</p>
 
     <div class="equation">
-        h<sub>i</sub><sup>(l+1)</sup> = UPDATE<sup>(l)</sup>(h<sub>i</sub><sup>(l)</sup>,
-        AGGREGATE<sup>(l)</sup>({h<sub>j</sub><sup>(l)</sup> : j ∈ N(i)}))
+        $$h_i^{(l+1)} = \text{UPDATE}^{(l)}\left(h_i^{(l)}, \text{AGGREGATE}^{(l)}(\{h_j^{(l)} : j \in N(i)\})\right)$$
     </div>
 
-    <p>where N(i) represents the neighborhood of atom i, determined by a distance cutoff radius of 5.0 Å<sup><a
+    <p>where $N(i)$ represents the neighborhood of atom $i$, determined by a distance cutoff radius of 5.0 Å<sup><a
                 href="#ref3" class="citation">[3]</a></sup>.</p>
 
     <h3>2.2 Multi-task Learning Framework</h3>
@@ -177,12 +195,13 @@
         shared representations. The total loss function is formulated as:</p>
 
     <div class="equation">
-        L<sub>total</sub> = λ<sub>E</sub>L<sub>energy</sub> + λ<sub>F</sub>L<sub>forces</sub> +
-        λ<sub>S</sub>L<sub>stress</sub> + λ<sub>M</sub>L<sub>magmom</sub>
+        $$L_{\text{total}} = \lambda_E L_{\text{energy}} + \lambda_F L_{\text{forces}} + \lambda_S L_{\text{stress}} +
+        \lambda_M L_{\text{magmom}}$$
     </div>
 
-    <p>where λ values represent task-specific weighting coefficients optimized during training<sup><a href="#ref3"
-                class="citation">[3]</a></sup>. This approach ensures consistent predictions across all physical
+    <p>where $\lambda$ values represent task-specific weighting coefficients optimized during training<sup><a
+                href="#ref3" class="citation">[3]</a></sup>. This approach ensures consistent predictions across all
+        physical
         quantities while maintaining computational efficiency.</p>
 
     <h3>2.3 Training Dataset and Validation</h3>
@@ -207,7 +226,7 @@
     <h3>3.2 Input Validation and Data Processing</h3>
 
     <p>The application implements rigorous validation protocols for Crystallographic Information File (CIF) inputs.
-        Occupancy validation ensures all atomic sites possess full occupancy (1.0 ± 10<sup>-6</sup>), as partial
+        Occupancy validation ensures all atomic sites possess full occupancy ($1.0 \pm 10^{-6}$), as partial
         occupancy structures are incompatible with the CHGNet training paradigm. Element validation restricts inputs to
         the 89 elements supported by the underlying model.</p>
 
@@ -242,7 +261,7 @@
     <ul>
         <li><strong>Total Energy:</strong> System energy in electron volts (eV)</li>
         <li><strong>Energy per Atom:</strong> Normalized energy values for comparative analysis</li>
-        <li><strong>Magnetic Moments:</strong> Atomic and total magnetic moments in Bohr magnetons (μ<sub>B</sub>)</li>
+        <li><strong>Magnetic Moments:</strong> Atomic and total magnetic moments in Bohr magnetons ($\mu_B$)</li>
         <li><strong>Optimized Geometry:</strong> Relaxed atomic positions and lattice parameters</li>
         <li><strong>Computational Metrics:</strong> Calculation time and convergence statistics</li>
     </ul>
@@ -260,10 +279,10 @@
             the chemical species<sup><a href="#ref6" class="citation">[6]</a></sup>.</li>
         <li><strong>Auto (Optimal) Mode:</strong> Employs an exhaustive screening algorithm to identify the most
             energetically favorable substitution site for a target element. For a chosen source element type (e.g.,
-            oxygen), the system evaluates the energy <em>E</em> of the structure with the substitution applied at each
-            valid site <em>i</em>:
+            oxygen), the system evaluates the energy $E$ of the structure with the substitution applied at each
+            valid site $i$:
             <div class="equation">
-                i* = arg min<sub>i</sub> { E(Substitution at site i) }
+                $$i^* = \text{arg min}_i \{ E(\text{Substitution at site } i) \}$$
             </div>
             Energy predictions are performed using the CHGNet universal potential, allowing for rapid assessment across
             all candidate sites<sup><a href="#ref3" class="citation">[3]</a></sup>.
@@ -274,7 +293,7 @@
     <p>Element insertion facilitates the exploration of interstitial chemistry and defect properties through a
         dual-stage optimization process:</p>
     <ul>
-        <li><strong>Manual Mode:</strong> Enables the addition of atoms at specific fractional coordinates [x, y, z].
+        <li><strong>Manual Mode:</strong> Enables the addition of atoms at specific fractional coordinates $[x, y, z]$.
         </li>
         <li><strong>Auto (Optimal) Mode:</strong> Utilizes a hybrid geometric-energetic approach to identify stable
             interstitial positions:
