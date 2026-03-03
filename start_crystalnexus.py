@@ -98,8 +98,8 @@ def start_backend():
             cmd.append("--reload")
             print("Debug mode: Auto-reload enabled")
         
-        # 対策1: プロセス出力の適切な処理
-        # stdout/stderrをPIPEしない（コンソールに直接出力してバッファー詰まり回避）
+        # Countermeasure 1: Proper handling of process output
+        # Do not pipe stdout/stderr (output directly to console to avoid buffer clogging)
         kwargs = {}
         if platform.system() == "Windows":
             kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
@@ -133,8 +133,8 @@ def start_backend():
 
 def monitor_process_health(process, status_queue):
     """
-    対策3: プロセス監視機能 - バックグラウンドでプロセスの健全性を監視
-    KeyboardInterrupt対応版: interruptible sleepを使用
+    Countermeasure 3: Process Monitoring - Monitor process health in background
+    KeyboardInterrupt compatible version: Use interruptible sleep
     """
     global shutdown_requested
     
@@ -155,7 +155,7 @@ def monitor_process_health(process, status_queue):
             except requests.exceptions.RequestException as e:
                 status_queue.put(("health_check_error", f"Health check error: {e}"))
             
-            # Interruptible sleep: 30秒を1秒刻みに分割
+            # Interruptible sleep: Divide 30 seconds into 1-second increments
             for _ in range(30):
                 if shutdown_requested:
                     break
@@ -171,8 +171,8 @@ def monitor_process_health(process, status_queue):
 
 def print_status_updates(status_queue):
     """
-    対策3: ステータス更新の非同期表示
-    KeyboardInterrupt対応版: interruptible sleepを使用
+    Countermeasure 3: Asynchronous Status Display
+    KeyboardInterrupt compatible version: Use interruptible sleep
     """
     global shutdown_requested
     last_health_ok = time.time()
@@ -191,9 +191,9 @@ def print_status_updates(status_queue):
                     print(f"\n[{current_time}] WARNING: {message}")
                 elif status_type == "health_ok":
                     last_health_ok = time.time()
-                    # 正常時は詳細ログを出力しない（静かに動作）
+                    # Do not output detailed logs when normal (work silently)
                 elif status_type == "health_check_error":
-                    if time.time() - last_health_ok > 120:  # 2分以上異常が続く場合のみ警告
+                    if time.time() - last_health_ok > 120:  # Warn only if abnormal for more than 2 minutes
                         print(f"\n[{current_time}] WARNING: {message}")
                 elif status_type == "monitor_error":
                     print(f"\n[{current_time}] ERROR: {message}")
@@ -201,7 +201,7 @@ def print_status_updates(status_queue):
             except queue.Empty:
                 pass
             
-            # Interruptible sleep: 5秒を1秒刻みに分割
+            # Interruptible sleep: Divide 5 seconds into 1-second increments
             for _ in range(5):
                 if shutdown_requested:
                     break
@@ -216,13 +216,13 @@ def print_status_updates(status_queue):
                 time.sleep(1)
 
 def signal_handler(signum, frame):
-    """シグナルハンドラ: Ctrl+C対応"""
+    """Signal Handler: Handle Ctrl+C"""
     global shutdown_requested, server_process
     print(f"\nReceived signal {signum}")
     print("Shutdown requested...")
     shutdown_requested = True
     
-    # サーバープロセスを即座に終了
+    # Terminate server process immediately
     if server_process:
         print("Terminating server process...")
         server_process.terminate()
@@ -241,7 +241,7 @@ def main():
     print("CrystalNexus Startup Script")
     print("=" * 40)
     
-    # シグナルハンドラを設定
+    # Set signal handlers
     signal.signal(signal.SIGINT, signal_handler)
     if platform.system() != "Windows":
         signal.signal(signal.SIGTERM, signal_handler)
@@ -256,7 +256,7 @@ def main():
     
     # Try to start the backend
     process = start_backend()
-    server_process = process  # グローバル変数に保存
+    server_process = process  # Save to global variable
     
     if process is None:
         print("\nERROR Failed to start CrystalNexus backend")
@@ -274,17 +274,17 @@ def main():
     print("Press Ctrl+C to stop the server")
     print("=" * 40)
     
-    # 対策3: プロセス監視スレッドを開始
+    # Countermeasure 3: Start process monitoring thread
     status_queue = queue.Queue()
     
     # バックグラウンド監視スレッド
     monitor_thread = threading.Thread(target=monitor_process_health, args=(process, status_queue))
-    monitor_thread.daemon = True  # メインプロセス終了時に自動終了
+    monitor_thread.daemon = True  # Terminate on main process exit
     monitor_thread.start()
     
     # ステータス表示スレッド
     status_thread = threading.Thread(target=print_status_updates, args=(status_queue,))
-    status_thread.daemon = True  # メインプロセス終了時に自動終了
+    status_thread.daemon = True  # Terminate on main process exit
     status_thread.start()
     
     print("Background monitoring started...")
@@ -293,13 +293,13 @@ def main():
         # Keep the script running and wait for shutdown signal
         while not shutdown_requested:
             try:
-                # 短い間隔でプロセス状態をチェック
+                # Check process state at short intervals
                 if process.poll() is not None:
                     print("Server process terminated unexpectedly")
                     break
                 time.sleep(1)
             except KeyboardInterrupt:
-                # 念のため追加のCtrl+C処理
+                # Additional Ctrl+C handling just in case
                 shutdown_requested = True
                 break
                 

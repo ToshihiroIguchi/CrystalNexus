@@ -4,13 +4,13 @@ CrystalNexus is a comprehensive web-based application for crystal structure anal
 
 ## Key Features
 
-### 🔬 Crystal Structure Analysis
+###  Crystal Structure Analysis
 *   **Universal CIF Support**: Seamlessly load, parse, and visualizes standard Crystallographic Information Files (CIF) from any source.
 *   **Interactive 3D Visualization**: powered by **3Dmol.js**, allowing you to rotate, zoom, and inspect atomic structures, bonds, and unit cells in real-time.
 *   **Smart Supercell Generation**: Create custom supercells (e.g., 2x2x2) with a single click. The application automatically handles atomic positions and lattice vectors.
 *   **Materials Project Integration**: Quickly search for and download structures from the Materials Project database via a direct integrated link.
 
-### 🤖 Machine Learning Integration (CHGNet v0.4.0)
+###  Machine Learning Integration (CHGNet v0.4.0)
 *   **State-of-the-Art Model**: Utilizes the latest CHGNet pre-trained transformer model for accurate universal interatomic potential predictions.
 *   **One-Click Relaxation**: Automatically optimizes atomic positions and lattice parameters to find the ground-state structure.
 *   **Property Prediction**: Instantly calculates:
@@ -20,9 +20,9 @@ CrystalNexus is a comprehensive web-based application for crystal structure anal
 *   **Auto Mode Optimization**: An advanced AI-driven feature that iteratively substitutes, deletes, or inserts atoms to discover the most energetically favorable configuration.
 *   **Real-time Feedback**: Watch energy minimization progress live via dynamic sparkline charts.
 
-### 📊 Comprehensive Analysis Tools
+###  Comprehensive Analysis Tools
 *   **Local Analytics Dashboard**: A built-in SQLite database tracks your usage history and calculation statistics. **Data privacy is paramount**: all analytics are stored locally on your machine and are never uploaded to the cloud.
-*   **Detailed Metrics**: Inspect precise lattice parameters (a, b, c, α, β, γ), stress tensors, and atomic forces for every step of the relaxation.
+*   **Detailed Metrics**: Inspect precise lattice parameters (a, b, c, alpha, beta, gamma), stress tensors, and atomic forces for every step of the relaxation.
 *   **Full Data Export**: Download a comprehensive ZIP archive containing:
     *   The final relaxed structure (CIF)
     *   Property data (CSV/TXT)
@@ -32,14 +32,14 @@ CrystalNexus is a comprehensive web-based application for crystal structure anal
 
 ```
 CrystalNexus/
-├── main.py                 # Core FastAPI backend application
-├── start_crystalnexus.py   # robust server startup script with auto-recovery and health monitoring
-├── analytics_db.py         # Local analytics database manager (SQLite)
-├── sample_cif/            # Curated library of sample crystal structures (Oxides, Metals, etc.)
-├── templates/             # Jinja2 HTML templates for the frontend
-├── static/               # Static assets (CSS, JS, images)
-├── uploads/              # Temporary directory for user uploads (auto-cleaned)
-└── requirements.txt        # Detailed Python dependencies list
++--- main.py                 # Core FastAPI backend application
++--- start_crystalnexus.py   # robust server startup script with auto-recovery and health monitoring
++--- analytics_db.py         # Local analytics database manager (SQLite)
++--- sample_cif/            # Curated library of sample crystal structures (Oxides, Metals, etc.)
++--- templates/             # Jinja2 HTML templates for the frontend
++--- static/               # Static assets (CSS, JS, images)
++--- uploads/              # Temporary directory for user uploads (auto-cleaned)
++--- requirements.txt        # Detailed Python dependencies list
 ```
 
 ## Installation

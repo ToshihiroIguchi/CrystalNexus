@@ -741,8 +741,8 @@ async def apply_atomic_operations(request: dict):
         session_id = request.get("session_id")
         operations = request.get("operations", [])
 
-        logger.info(f"🔧 OPERATIONS: Starting atomic operations for session: {session_id[:8]}...")
-        logger.info(f"🔧 OPERATIONS: Received {len(operations)} operations: {operations}")
+        logger.info(f" OPERATIONS: Starting atomic operations for session: {session_id[:8]}...")
+        logger.info(f" OPERATIONS: Received {len(operations)} operations: {operations}")
 
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required")
@@ -765,16 +765,16 @@ async def apply_atomic_operations(request: dict):
 
         # Start with original structure and apply supercell + operations
         original_structure = session_info['original_structure']
-        logger.info(f"🧱 OPERATIONS: Original structure - Formula: {original_structure.formula}, Sites: {len(original_structure.sites)}")
+        logger.info(f" OPERATIONS: Original structure - Formula: {original_structure.formula}, Sites: {len(original_structure.sites)}")
 
         structure = original_structure.copy()
         supercell_size = session_info['supercell_size']
-        logger.info(f"🔧 OPERATIONS: Applying supercell {supercell_size}")
+        logger.info(f" OPERATIONS: Applying supercell {supercell_size}")
         structure.make_supercell(supercell_size)
         logger.info(f"✅ OPERATIONS: Supercell applied - Formula: {structure.formula}, Sites: {len(structure.sites)}")
         
         # Validate all operations using strict mode (fail-fast approach)
-        logger.info(f"🔍 OPERATIONS: Validating {len(operations)} operations against {len(structure.sites)} sites")
+        logger.info(f" OPERATIONS: Validating {len(operations)} operations against {len(structure.sites)} sites")
         try:
             valid_operations, invalid_operations = filter_valid_operations(
                 operations, len(structure.sites), strict_mode=True
@@ -791,12 +791,12 @@ async def apply_atomic_operations(request: dict):
             0 if x["action"] in ["delete", "substitute"] else 1, # Process delete/substitute first
             x.get("index", float('inf')) # Then by index descending for delete/substitute, insert last
         ), reverse=True)
-        logger.info(f"🔧 OPERATIONS: Processing {len(stable_operations)} validated operations in order: {[f'{op["action"]}@{op.get("index", "append")}' for op in stable_operations]}")
+        logger.info(f" OPERATIONS: Processing {len(stable_operations)} validated operations in order: {[f'{op["action"]}@{op.get("index", "append")}' for op in stable_operations]}")
 
         for i, operation in enumerate(stable_operations):
             action = operation["action"]
             site_index = operation.get("index")
-            logger.info(f"🔧 OPERATIONS: Step {i+1}/{len(stable_operations)} - {action} at site {site_index if site_index is not None else 'end'}")
+            logger.info(f" OPERATIONS: Step {i+1}/{len(stable_operations)} - {action} at site {site_index if site_index is not None else 'end'}")
 
             if action == "substitute":
                 # Already validated: element and index are valid
@@ -804,12 +804,12 @@ async def apply_atomic_operations(request: dict):
                 old_element = structure[site_index].specie
                 old_coords = structure[site_index].frac_coords
                 structure[site_index] = Element(new_element), old_coords
-                logger.info(f"✅ OPERATIONS: Substituted site {site_index}: {old_element} → {new_element}")
+                logger.info(f"✅ OPERATIONS: Substituted site {site_index}: {old_element} -> {new_element}")
 
             elif action == "delete":
                 # Already validated: index is valid
                 deleted_element = structure[site_index].specie
-                logger.info(f"🗑️ OPERATIONS: Deleting site {site_index} ({deleted_element}) - Structure before: {len(structure.sites)} sites")
+                logger.info(f" OPERATIONS: Deleting site {site_index} ({deleted_element}) - Structure before: {len(structure.sites)} sites")
                 structure.remove_sites([site_index])
                 logger.info(f"✅ OPERATIONS: Site {site_index} deleted - Structure after: {len(structure.sites)} sites")
                 
@@ -821,7 +821,7 @@ async def apply_atomic_operations(request: dict):
                 logger.info(f"✅ OPERATIONS: Insertion completed - Structure after: {len(structure.sites)} sites")
         
         # Update session with modified structure and operations
-        logger.info(f"💾 OPERATIONS: Updating session with final structure - Formula: {structure.formula}, Sites: {len(structure.sites)}")
+        logger.info(f" OPERATIONS: Updating session with final structure - Formula: {structure.formula}, Sites: {len(structure.sites)}")
         session_manager.update_structure(session_id, structure, operations=operations)
         logger.info(f"✅ OPERATIONS: Session updated successfully")
         
@@ -880,7 +880,7 @@ async def get_sample_cif_files():
 
 @app.post("/api/analyze-cif-sample")
 async def analyze_sample_cif(data: dict):
-    logger.info(f"🔍 ANALYZE_SAMPLE: Starting analysis of sample file: {data}")
+    logger.info(f" ANALYZE_SAMPLE: Starting analysis of sample file: {data}")
     try:
         filename = data.get("filename")
         if not filename:
@@ -936,7 +936,7 @@ async def analyze_sample_cif(data: dict):
 
 @app.post("/api/analyze-cif-upload")
 async def analyze_uploaded_cif(file: UploadFile = File(...)):
-    logger.info(f"🔍 ANALYZE_UPLOAD: Starting analysis of uploaded file: {file.filename}")
+    logger.info(f" ANALYZE_UPLOAD: Starting analysis of uploaded file: {file.filename}")
     try:
         # Filename and size validation
         if not file.filename or not file.filename.lower().endswith('.cif'):
@@ -968,18 +968,18 @@ async def analyze_uploaded_cif(file: UploadFile = File(...)):
         import uuid
         upload_dir = Path("uploads")
         upload_dir.mkdir(exist_ok=True)
-        logger.info(f"📂 UPLOAD: Created uploads directory: {upload_dir.absolute()}")
+        logger.info(f" UPLOAD: Created uploads directory: {upload_dir.absolute()}")
 
         unique_filename = f"{uuid.uuid4().hex}_{safe_filename(file.filename)}"
         temp_path = upload_dir / unique_filename
-        logger.info(f"📄 UPLOAD: Saving file to: {temp_path}")
+        logger.info(f" UPLOAD: Saving file to: {temp_path}")
 
         with open(temp_path, 'w', encoding='utf-8') as tmp_file:
             tmp_file.write(contents_str)
         logger.info(f"✅ UPLOAD: File saved successfully, size: {temp_path.stat().st_size} bytes")
         
         try:
-            logger.info(f"🔍 UPLOAD: Starting analysis of uploaded file: {temp_path}")
+            logger.info(f" UPLOAD: Starting analysis of uploaded file: {temp_path}")
             result = await analyze_cif_file(temp_path)
             safe_name = safe_filename(file.filename)
             result["filename"] = safe_name
@@ -1000,9 +1000,9 @@ async def analyze_uploaded_cif(file: UploadFile = File(...)):
             # Parse the structure and add it to the result
             try:
                 from pymatgen.core import Structure
-                logger.info(f"🧱 UPLOAD: Loading structure from file for storage")
+                logger.info(f" UPLOAD: Loading structure from file for storage")
                 structure = Structure.from_file(str(temp_path))
-                logger.info(f"🧱 UPLOAD: Structure loaded - Formula: {structure.formula}, Sites: {len(structure.sites)}")
+                logger.info(f" UPLOAD: Structure loaded - Formula: {structure.formula}, Sites: {len(structure.sites)}")
 
                 # Store structure as a dictionary for JSON serialization
                 structure_dict = structure.as_dict()
@@ -1016,7 +1016,7 @@ async def analyze_uploaded_cif(file: UploadFile = File(...)):
                 logger.error(f"❌ UPLOAD: Structure error traceback: {traceback.format_exc()}")
                 # Continue without structure data - fallback will handle this
 
-            logger.info(f"📤 UPLOAD: Returning result with keys: {list(result.keys())}")
+            logger.info(f" UPLOAD: Returning result with keys: {list(result.keys())}")
             return result
         finally:
             # Keep uploaded files like sample files - no deletion
@@ -1181,18 +1181,18 @@ async def create_supercell(data: dict):
             original_structure = None
             
             # Method 1: Try to load from stored structure_data (for uploaded files)
-            logger.info(f"🔬 SUPERCELL: Starting structure loading for: {filename}")
-            logger.info(f"🔬 SUPERCELL: Crystal data keys available: {list(crystal_data.keys())}")
+            logger.info(f" SUPERCELL: Starting structure loading for: {filename}")
+            logger.info(f" SUPERCELL: Crystal data keys available: {list(crystal_data.keys())}")
 
             if "structure_data" in crystal_data:
-                logger.info(f"🧱 SUPERCELL: Method 1 - Trying structure_data loading")
+                logger.info(f" SUPERCELL: Method 1 - Trying structure_data loading")
                 try:
                     from pymatgen.core import Structure
                     structure_data = crystal_data["structure_data"]
-                    logger.info(f"🧱 SUPERCELL: Structure data type: {type(structure_data)}")
+                    logger.info(f" SUPERCELL: Structure data type: {type(structure_data)}")
 
                     if structure_data and isinstance(structure_data, dict):
-                        logger.info(f"🧱 SUPERCELL: Structure data keys: {list(structure_data.keys())}")
+                        logger.info(f" SUPERCELL: Structure data keys: {list(structure_data.keys())}")
                         original_structure = Structure.from_dict(structure_data)
                         logger.info(f"✅ SUPERCELL: Structure loaded from structure_data - Formula: {original_structure.formula}, Sites: {len(original_structure.sites)}")
 
@@ -1211,15 +1211,15 @@ async def create_supercell(data: dict):
                     logger.error(f"❌ SUPERCELL: Full traceback: {traceback.format_exc()}")
                     original_structure = None
             else:
-                logger.info(f"🔍 SUPERCELL: No structure_data found, will try file loading")
+                logger.info(f" SUPERCELL: No structure_data found, will try file loading")
             
             # Method 2: Try to load from CIF file (for sample files and uploaded files)
             if original_structure is None and filename != "unknown.cif":
-                logger.info(f"📁 SUPERCELL: Method 2 - Trying file-based loading for: {filename}")
+                logger.info(f" SUPERCELL: Method 2 - Trying file-based loading for: {filename}")
 
                 # First try sample directory
                 cif_path = SAMPLE_CIF_DIR / filename
-                logger.info(f"📁 SUPERCELL: Checking sample path: {cif_path}")
+                logger.info(f" SUPERCELL: Checking sample path: {cif_path}")
 
                 if cif_path.exists():
                     logger.info(f"✅ SUPERCELL: Found sample file, parsing...")
@@ -1232,16 +1232,16 @@ async def create_supercell(data: dict):
                 else:
                     # Try uploads directory
                     upload_dir = Path("uploads")
-                    logger.info(f"📁 SUPERCELL: Sample file not found, checking uploads dir: {upload_dir}")
+                    logger.info(f" SUPERCELL: Sample file not found, checking uploads dir: {upload_dir}")
 
                     if upload_dir.exists():
                         upload_pattern = f"*_{filename}"
-                        logger.info(f"📁 SUPERCELL: Searching for pattern: {upload_pattern}")
+                        logger.info(f" SUPERCELL: Searching for pattern: {upload_pattern}")
                         uploaded_files = list(upload_dir.glob(upload_pattern))
-                        logger.info(f"📁 SUPERCELL: Found {len(uploaded_files)} matching files: {[f.name for f in uploaded_files]}")
+                        logger.info(f" SUPERCELL: Found {len(uploaded_files)} matching files: {[f.name for f in uploaded_files]}")
 
                         for uploaded_file in uploaded_files:
-                            logger.info(f"📄 SUPERCELL: Trying to parse: {uploaded_file}")
+                            logger.info(f" SUPERCELL: Trying to parse: {uploaded_file}")
                             try:
                                 parser = CifParser(str(uploaded_file))
                                 original_structure = parser.get_structures()[0]
@@ -1266,7 +1266,7 @@ async def create_supercell(data: dict):
                 raise HTTPException(status_code=500, detail=error_msg)
 
             # Create supercell
-            logger.info(f"🔧 SUPERCELL: Creating supercell {a_mult}×{b_mult}×{c_mult} from structure: {original_structure.formula}")
+            logger.info(f" SUPERCELL: Creating supercell {a_mult}×{b_mult}×{c_mult} from structure: {original_structure.formula}")
             supercell_structure = original_structure.copy()
             supercell_structure.make_supercell([a_mult, b_mult, c_mult])
             logger.info(f"✅ SUPERCELL: Supercell created - Formula: {supercell_structure.formula}, Sites: {len(supercell_structure.sites)}")
@@ -1388,7 +1388,7 @@ async def recalculate_density(request: dict):
     """
     try:
         formula = request.get("formula")
-        volume = request.get("volume")  # in Ų
+        volume = request.get("volume")  # in A^3
         lattice_parameters = request.get("lattice_parameters", {})
         
         if not all([formula, volume]):
@@ -1413,10 +1413,10 @@ async def recalculate_density(request: dict):
             atomic_mass = Element(element).atomic_mass
             total_mass += atomic_mass * amount
         
-        # Convert to g/cm³
-        # Density = mass (g/mol) / (volume (Ų) * N_A * 1e-24 (cm³/Ų))
+        # Convert to g/cm^3
+        # Density = mass (g/mol) / (volume (A^3) * N_A * 1e-24 (cm^3/A^3))
         avogadro = 6.02214076e23
-        volume_cm3 = volume * 1e-24  # Convert Ų to cm³
+        volume_cm3 = volume * 1e-24  # Convert A^3 to cm^3
         density = total_mass / (avogadro * volume_cm3)
         
         return {
@@ -1457,7 +1457,7 @@ async def generate_modified_structure_cif(request: dict):
 
         # First try sample directory
         sample_path = SAMPLE_CIF_DIR / safe_path(filename)
-        logger.info(f"🔍 MODIFIED: Checking sample path: {sample_path}")
+        logger.info(f" MODIFIED: Checking sample path: {sample_path}")
 
         if sample_path.exists():
             logger.info(f"✅ MODIFIED: Found sample file, parsing...")
@@ -1467,11 +1467,11 @@ async def generate_modified_structure_cif(request: dict):
         else:
             # Try uploads directory
             upload_dir = Path("uploads")
-            logger.info(f"🔍 MODIFIED: Sample not found, checking uploads: {upload_dir}")
+            logger.info(f" MODIFIED: Sample not found, checking uploads: {upload_dir}")
 
             if upload_dir.exists():
                 for uploaded_file in upload_dir.glob(f"*_{filename}"):
-                    logger.info(f"📄 MODIFIED: Trying uploaded file: {uploaded_file}")
+                    logger.info(f" MODIFIED: Trying uploaded file: {uploaded_file}")
                     try:
                         parser = CifParser(str(uploaded_file))
                         structure = parser.get_structures(primitive=False)[0]
@@ -1518,7 +1518,7 @@ async def generate_modified_structure_cif(request: dict):
                 # Replace the site with new element
                 structure[site_index] = Element(new_element), old_coords
                 
-                logger.info(f"CIF Generation: Substituted {old_element} → {new_element} at site {site_index}")
+                logger.info(f"CIF Generation: Substituted {old_element} -> {new_element} at site {site_index}")
                 operations_applied += 1
                         
             elif operation["action"] == "delete":
@@ -1559,7 +1559,7 @@ async def generate_modified_structure_cif(request: dict):
             f"# Operations: {operations_summary}",
             f"# Final formula: {structure.formula}",
             f"# Number of atoms: {len(structure.sites)}",
-            f"# Volume: {structure.volume:.2f} Ų",
+            f"# Volume: {structure.volume:.2f} A^3",
             ""
         ]
         
@@ -1654,7 +1654,7 @@ async def generate_supercell_cif_direct(request: dict):
             f"# Supercell size: {size_str}",
             f"# Formula: {supercell_structure.formula}",
             f"# Number of atoms: {len(supercell_structure.sites)}",
-            f"# Volume: {supercell_structure.volume:.2f} Ų",
+            f"# Volume: {supercell_structure.volume:.2f} A^3",
             ""
         ]
         
@@ -1739,7 +1739,7 @@ def evaluate_convergence(trajectory, fmax):
     max_force = np.linalg.norm(final_forces, axis=1).max()
     
     converged = max_force < fmax
-    logger.info(f"Convergence check: max_force={max_force:.4f} eV/Å, fmax={fmax}, converged={converged}")
+    logger.info(f"Convergence check: max_force={max_force:.4f} eV/A, fmax={fmax}, converged={converged}")
     
     return bool(converged)
 
@@ -1822,7 +1822,7 @@ async def chgnet_predict_structure(request: dict):
 
         # First try sample directory
         cif_path = SAMPLE_CIF_DIR / safe_path(filename)
-        logger.info(f"🔍 CHGNET: Checking sample path: {cif_path}")
+        logger.info(f" CHGNET: Checking sample path: {cif_path}")
 
         if cif_path.exists():
             logger.info(f"✅ CHGNET: Found sample file, parsing...")
@@ -1831,11 +1831,11 @@ async def chgnet_predict_structure(request: dict):
         else:
             # Try uploads directory
             upload_dir = Path("uploads")
-            logger.info(f"🔍 CHGNET: Sample not found, checking uploads: {upload_dir}")
+            logger.info(f" CHGNET: Sample not found, checking uploads: {upload_dir}")
 
             if upload_dir.exists():
                 for uploaded_file in upload_dir.glob(f"*_{filename}"):
-                    logger.info(f"📄 CHGNET: Trying uploaded file: {uploaded_file}")
+                    logger.info(f" CHGNET: Trying uploaded file: {uploaded_file}")
                     try:
                         parser = CifParser(str(uploaded_file))
                         structure = parser.get_structures(primitive=False)[0]
@@ -1850,7 +1850,7 @@ async def chgnet_predict_structure(request: dict):
             raise HTTPException(status_code=404, detail=f"CIF file not found: {filename}")
 
         # Parse and create supercell
-        logger.info(f"🧱 CHGNET: Creating supercell {supercell_size} from structure: {structure.formula}")
+        logger.info(f" CHGNET: Creating supercell {supercell_size} from structure: {structure.formula}")
         structure.make_supercell(supercell_size)
         logger.info(f"✅ CHGNET: Supercell created - Formula: {structure.formula}, Sites: {len(structure.sites)}")
         
@@ -2297,7 +2297,7 @@ async def generate_relaxed_structure_cif(request: dict):
             f"# CHGNet relaxation: fmax={fmax}, steps={steps}, converged={converged}",
             f"# Final formula: {final_formula_str}",
             f"# Number of atoms: {final_num_atoms}",
-            f"# Volume: {final_volume_val:.2f} Ų",
+            f"# Volume: {final_volume_val:.2f} A^3",
             ""
         ]
         
@@ -2373,7 +2373,7 @@ async def get_insertion_voids(data: dict):
             logger.error(f"Failed to find insertion sites for {element_symbol}: {e}")
             raise HTTPException(status_code=400, detail=f"Failed to find insertion voids: {str(e)}")
             
-        logger.info(f"🔍 Found {len(interstitials)} potential sites for {element_symbol}")
+        logger.info(f" Found {len(interstitials)} potential sites for {element_symbol}")
         
         voids = []
         for i, defect in enumerate(interstitials):
