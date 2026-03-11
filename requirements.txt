@@ -20,3 +20,9 @@ numpy>=1.26.0,<2.4.0
 requests>=2.32.0       # For startup script health checks
 scipy>=1.12.0          # Scientific computing (pymatgen dependency)
 pymatgen-analysis-defects>=2024.1.1
+
+# UPET (PET-MAD-DOS) integration
+upet
+metatomic
+metatrain
+ase

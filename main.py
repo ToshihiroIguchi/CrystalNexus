@@ -57,6 +57,17 @@ except Exception as e:
     else:
         logger.error(f"CHGNet loading error: {e}")
 
+try:
+    from upet.calculator import PETMADDOSCalculator
+    UPET_AVAILABLE = True
+    logger.info("UPET (PET-MAD-DOS) successfully loaded")
+except ImportError:
+    UPET_AVAILABLE = False
+    logger.warning("UPET not available. Install with: pip install upet")
+except Exception as e:
+    UPET_AVAILABLE = False
+    logger.error(f"UPET loading error: {e}")
+
 def get_chgnet_supported_elements() -> Set[str]:
     """
     Dynamically retrieve supported elements from CHGNet
@@ -349,6 +360,79 @@ class CHGNetModelManager:
             modified_structure.remove_sites([atom_index])
         return modified_structure
 
+class UPETModelManager:
+    """
+    Singleton pattern for UPET (PET-MAD-DOS) model management
+    Ensures only one model instance is loaded in memory
+    Thread-safe with asyncio.Lock
+    """
+    _instance: Optional['UPETModelManager'] = None
+    _calculator = None
+    _lock = asyncio.Lock()
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
+    async def get_calculator(self):
+        """Get PETMADDOSCalculator instance (lazy loading)"""
+        if self._calculator is None:
+            async with self._lock:
+                if self._calculator is None:  # Double-check locking
+                    await self._load_calculator()
+        return self._calculator
+    
+    async def _load_calculator(self):
+        """Internal method to load UPET calculator"""
+        if not UPET_AVAILABLE:
+            raise RuntimeError("UPET not available")
+        
+        try:
+            device = "cpu" if WINDOWS_PLATFORM else None
+            self._calculator = PETMADDOSCalculator(version="latest", device=device)
+            logger.info("UPET PETMADDOSCalculator loaded and cached")
+        except Exception as e:
+            raise RuntimeError(f"Failed to load UPET calculator: {e}")
+
+    async def predict_dos_bandgap(self, structure: Structure) -> Dict:
+        """
+        Calculate DOS and Band Gap for a given structure
+        """
+        calc = await self.get_calculator()
+        
+        from ase.spacegroup import crystal
+        from ase import Atoms
+        
+        # Convert pymatgen Structure to ase Atoms
+        atoms = Atoms(
+            symbols=[site.species_string for site in structure],
+            positions=structure.cart_coords,
+            cell=structure.lattice.matrix,
+            pbc=True
+        )
+        
+        # Calculate
+        energies, dos_vals = calc.calculate_dos(atoms)
+        bandgap = calc.calculate_bandgap(atoms, dos=dos_vals)
+        e_fermi = calc.calculate_efermi(atoms, dos=dos_vals)
+        
+        # Prepare arrays for JSON response
+        energies_np = energies.detach().cpu().numpy().tolist()
+        dos_vals_np = dos_vals.detach().cpu().numpy().flatten()
+        # Ensure no negative DOS values for physical correctness in display
+        import numpy as np
+        dos_vals_np = np.maximum(0, dos_vals_np).tolist()
+        
+        return {
+            "bandgap": float(bandgap.item()),
+            "dos_data": {
+                "energies": energies_np,
+                "dos": dos_vals_np,
+                "e_fermi": float(e_fermi.item())
+            }
+        }
+
 def validate_atomic_operation(operation, structure_size, operation_index=None):
     """
     Validate a single atomic operation
@@ -424,8 +508,9 @@ def filter_valid_operations(operations, structure_size, strict_mode=False):
     
     return valid_operations, invalid_operations
 
-# Global model manager instance
+# Global model manager instances
 chgnet_manager = CHGNetModelManager()
+upet_manager = UPETModelManager()
 
 # Background task for periodic cleanup
 async def periodic_cleanup_task():
@@ -1910,6 +1995,17 @@ async def chgnet_predict_structure(request: dict):
             "supercell_size": supercell_size
         })
         
+        # Calculate Band Gap and DOS using UPET (PET-MAD-DOS)
+        if UPET_AVAILABLE:
+            try:
+                upet_results = await upet_manager.predict_dos_bandgap(structure)
+                results.update(upet_results)
+                logger.info(f"UPET DOS/Band Gap prediction completed: {upet_results.get('bandgap', 'N/A')} eV")
+            except Exception as e:
+                logger.warning(f"UPET prediction failed: {e}")
+                results["bandgap"] = None
+                results["dos_data"] = None
+        
         logger.info(f"CHGNet prediction completed: {results.get('energy_eV_per_atom', 'N/A')} eV/atom")
         
         return {
@@ -2059,6 +2155,18 @@ async def chgnet_relax_structure(request: dict):
             "volume": final_volume,
             "density": final_density
         })
+        
+        # Calculate Band Gap and DOS using UPET (PET-MAD-DOS) for the relaxed structure
+        if UPET_AVAILABLE:
+            try:
+                logger.info("Starting UPET DOS/Band Gap prediction on relaxed structure...")
+                upet_results = await upet_manager.predict_dos_bandgap(final_structure)
+                final_results.update(upet_results)
+                logger.info(f"UPET prediction completed: {upet_results.get('bandgap', 'N/A')} eV")
+            except Exception as e:
+                logger.warning(f"UPET prediction failed: {e}")
+                final_results["bandgap"] = None
+                final_results["dos_data"] = None
         
         logger.info(f"CHGNet relaxation completed: {relaxation_info['steps']} steps, converged: {relaxation_info['converged']}")
         
@@ -2476,6 +2584,88 @@ if __name__ == "__main__":
             logger.error("Failed to start backend")
     else:
         uvicorn.run(app, host=HOST, port=PORT, reload=DEBUG)
+
+# --- xTB Band Gap & DOS Plotting Functions ---
+
+class RobustJSONLoader:
+    """Helper to load JSON with potential encoding/character issues."""
+    @staticmethod
+    def load(file_path):
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            # Handle some potential xTB output quirks (e.g. backslashes in paths)
+            content = content.replace('\\', '/')
+            return json.loads(content)
+        except Exception as e:
+            logger.error(f"Failed to load JSON {file_path}: {e}")
+            return None
+
+def run_xtb_calculation(structure: Structure, work_dir: str, calc_type: str = "opt") -> dict:
+    """Run an xTB calculation in the given directory."""
+    from pymatgen.io.vasp.inputs import Poscar
+    import shutil
+    
+    # Write input POSCAR
+    poscar_path = os.path.join(work_dir, "xtbopt.poscar" if calc_type == "dos" else "POSCAR")
+    Poscar(structure).write_file(poscar_path)
+    
+    # Build command using absolute path to bundled xTB or fallback to global
+    xtb_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xtb-6.7.1")
+    xtb_exe_name = "xtb.exe" if os.name == 'nt' else "xtb"
+    xtb_exe = os.path.join(xtb_dir, "bin", xtb_exe_name)
+    
+    # Validation
+    if not os.path.exists(xtb_exe):
+        # Final fallback to shutil.which for global install
+        xtb_exe = shutil.which("xtb")
+        if not xtb_exe:
+             return {"status": "error", "message": "xTB executable not found. Please ensure it is in your PATH or the bundled version exists."}
+
+    cmd = [xtb_exe, os.path.basename(poscar_path)]
+    if calc_type == "opt":
+        cmd.extend(["--opt"])
+    
+    cmd.extend(["--json", "--namespace", "xtb"])
+    
+    try:
+        # Inject necessary environment variables for Windows stability
+        env = os.environ.copy()
+        env["OMP_NUM_THREADS"] = "1"
+        if os.path.exists(xtb_dir):
+            env["XTBPATH"] = os.path.join(xtb_dir, "share", "xtb")
+
+        startupinfo = None
+        if os.name == 'nt':
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            
+        result = subprocess.run(
+            cmd,
+            cwd=work_dir,
+            capture_output=True,
+            text=True,
+            startupinfo=startupinfo,
+            env=env,
+            check=False
+        )
+        
+        json_path = os.path.join(work_dir, "xtbout.json")
+        if os.path.exists(json_path):
+            data = RobustJSONLoader.load(json_path)
+            if data:
+                return {"status": "success", "data": data, "stdout": result.stdout}
+        
+        # Specific capture for Windows DLL missing error (Exit code: 3221225781)
+        if result.returncode == 3221225781:
+             return {"status": "error", "message": "xTB executable is missing required DLLs (Intel MKL etc.). Please install VC++ Redistributable or ensure environment is set.", "stdout": result.stdout, "stderr": result.stderr}
+             
+        logger.error(f"xTB calculation failed (Code: {result.returncode}). Output: {result.stderr[:500]}")
+        return {"status": "error", "message": f"xTB calculation failed (Exit Code: {result.returncode})", "stdout": result.stdout, "stderr": result.stderr}
+        
+    except Exception as e:
+        logger.error(f"Error running xTB: {e}")
+        return {"status": "error", "message": str(e)}
 
 # --- Analytics API Routes ---
 

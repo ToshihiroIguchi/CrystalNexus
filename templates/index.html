@@ -472,6 +472,14 @@
                             </div>
                         </div>
 
+                        <!-- Band Gap Result Item -->
+                        <div class="result-item" id="bandgap-item" style="display: none;">
+                            <div class="result-summary">
+                                <span id="bandgap-summary">🌈 Band Gap: - eV</span>
+                                <button class="detail-btn" onclick="openDOSModal()" id="bandgap-detail-btn"
+                                    style="display: none;">DOS Detail 📊</button>
+                            </div>
+                        </div>
 
 
                         <!-- Structure Status Message -->
@@ -620,6 +628,22 @@
         </div>
     </div>
 
+    <!-- DOS Modal Window -->
+    <div id="dosModal" class="modal">
+        <div class="chgnet-info-content" style="max-width: 800px; padding: 20px;">
+            <span class="chgnet-info-close" onclick="closeDOSModal()">&times;</span>
+            <h2 style="margin-bottom: 10px; border-bottom: none; text-align: left;">Electronic Density of States (DOS)
+            </h2>
+            <p style="color: #666; font-size: 13px; margin-bottom: 20px;">Predicted by UPET (PET-MAD-DOS)</p>
+            <div style="width: 100%; height: 400px; position: relative;">
+                <canvas id="dosChart"></canvas>
+            </div>
+            <div style="margin-top: 15px; text-align: right;">
+                <button class="button" onclick="closeDOSModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         window.currentCrystalData = null;
         let supercellData = null;
@@ -653,6 +677,13 @@
                 value: null,
                 status: 'ready',
                 hasData: false
+            },
+            bandgap: {
+                calculated: false,
+                value: null,
+                dos_data: null,
+                status: 'ready',
+                hasData: false
             }
         };
 
@@ -684,41 +715,46 @@
 
             if (!summaryElement) return;
 
-            const icon = type === 'energy' ? '⚡' : '🧲';
-            const unit = type === 'energy' ? 'eV' : 'µB total';
+            // Type specific configurations
+            const config = {
+                'energy': { icon: '⚡', unit: 'eV', label: 'Energy', propName: 'Total Energy' },
+                'magnetic': { icon: '🧲', unit: 'µB total', label: 'Magnetic', propName: 'Total Magnetic Moment' },
+                'bandgap': { icon: '🌈', unit: 'eV', label: 'Band Gap', propName: 'Band Gap' }
+            };
+            const typeConfig = config[type] || { icon: '', unit: '', label: type, propName: type };
 
             if (statusObj.calculated && statusObj.value !== null) {
                 // Show calculated value with copy button
                 const copyBtnId = `copy-total-${type}`;
-                const copyFunction = type === 'energy' ? 'copyTotalEnergy()' : 'copyTotalMagnetic()';
-                const title = type === 'energy' ? 'Copy: Total Energy' : 'Copy: Total Magnetic Moment';
+                const copyFunction = type === 'energy' ? 'copyTotalEnergy()' : (type === 'magnetic' ? 'copyTotalMagnetic()' : 'copyBandGap()');
+                const title = `Copy: ${typeConfig.propName}`;
 
                 if (type === 'energy') {
                     const valueClass = statusObj.value < 0 ? 'energy-negative' : 'energy-positive';
-                    summaryElement.innerHTML = `${icon} Energy: <span class="${valueClass}">${statusObj.value.toFixed(2)} eV</span><button class="copy-btn" id="${copyBtnId}" onclick="${copyFunction}" title="${title}">📋</button>`;
-                } else {
-                    summaryElement.innerHTML = `${icon} Magnetic: <span class="magnetic-moment">${statusObj.value.toFixed(3)} µB total</span><button class="copy-btn" id="${copyBtnId}" onclick="${copyFunction}" title="${title}">📋</button>`;
+                    summaryElement.innerHTML = `${typeConfig.icon} Energy: <span class="${valueClass}">${statusObj.value.toFixed(2)} eV</span><button class="copy-btn" id="${copyBtnId}" onclick="${copyFunction}" title="${title}">📋</button>`;
+                } else if (type === 'magnetic') {
+                    summaryElement.innerHTML = `${typeConfig.icon} Magnetic: <span class="magnetic-moment">${statusObj.value.toFixed(3)} µB total</span><button class="copy-btn" id="${copyBtnId}" onclick="${copyFunction}" title="${title}">📋</button>`;
+                } else if (type === 'bandgap') {
+                    summaryElement.innerHTML = `${typeConfig.icon} Band Gap: <span class="bandgap-value">${statusObj.value.toFixed(3)} eV</span><button class="copy-btn" id="${copyBtnId}" onclick="${copyFunction}" title="${title}">📋</button>`;
                 }
 
                 if (detailBtn) detailBtn.style.display = 'inline-block';
-                if (item && type === 'magnetic') item.style.display = 'block';
+                // Only show magnetic and bandgap items when calculated
+                if (item && (type === 'magnetic' || type === 'bandgap')) item.style.display = 'block';
             } else {
                 // Show status message
                 let message;
-                if (statusObj.status === 'ready') {
-                    message = STATUS_MESSAGES.ready;
-                } else if (statusObj.status === 'calculating') {
-                    message = STATUS_MESSAGES.calculating;
-                } else if (statusObj.status === 'notCalculated') {
-                    message = STATUS_MESSAGES.notCalculated;
-                } else {
-                    message = STATUS_MESSAGES.error;
-                }
+                if (statusObj.status === 'ready') message = STATUS_MESSAGES.ready;
+                else if (statusObj.status === 'calculating') message = STATUS_MESSAGES.calculating;
+                else if (statusObj.status === 'notCalculated') message = STATUS_MESSAGES.notCalculated;
+                else message = STATUS_MESSAGES.error;
 
-                summaryElement.textContent = `${icon} ${type === 'energy' ? 'Energy' : 'Magnetic'}: ${message}`;
+                summaryElement.textContent = `${typeConfig.icon} ${typeConfig.label}: ${message}`;
                 if (detailBtn) detailBtn.style.display = 'none';
-                // Always show magnetic item to display status messages
+
+                // Keep magnetic item visible for status message, but hide bandgap until it is calculated
                 if (item && type === 'magnetic') item.style.display = 'block';
+                if (item && type === 'bandgap') item.style.display = 'none';
             }
         }
 
@@ -729,6 +765,7 @@
                 try {
                     updateStatusDisplay('energy', 'notCalculated');
                     updateStatusDisplay('magnetic', 'notCalculated');
+                    updateStatusDisplay('bandgap', 'notCalculated');
                 } catch (error) {
                     console.warn('Display initialization delayed:', error);
                     // Retry after another short delay
@@ -736,6 +773,7 @@
                         try {
                             updateStatusDisplay('energy', 'notCalculated');
                             updateStatusDisplay('magnetic', 'notCalculated');
+                            updateStatusDisplay('bandgap', 'notCalculated');
                         } catch (retryError) {
                             console.error('Failed to initialize displays:', retryError);
                         }
@@ -765,6 +803,7 @@
                     // Update status to ready for calculation when structure changes
                     updateStatusDisplay('energy', 'ready');
                     updateStatusDisplay('magnetic', 'ready');
+                    updateStatusDisplay('bandgap', 'ready');
                 } else {
                     console.error('❌ Failed to update session with operations');
                 }
@@ -1647,20 +1686,21 @@
 
             const initialPred = data.initial_prediction;
             const finalPred = isRelaxation ? data.final_prediction : data.prediction;
-            const prediction = finalPred || initialPred;
 
-            if (!prediction) {
-                console.warn('No prediction data available');
-                return;
+            // Final Predictions
+            if (data.final_prediction) {
+                displayEnergyResults(data.initial_prediction, data.final_prediction, true, data.energy_change_eV_per_atom);
+                displayMagneticResults(data.final_prediction);
+                displayBandGapResults(data.final_prediction);
+                displayForcesResults(data.final_prediction);
+                displayStressResults(data.final_prediction);
+            } else if (data.prediction) {
+                displayEnergyResults(null, data.prediction, isRelaxation);
+                displayMagneticResults(data.prediction);
+                displayBandGapResults(data.prediction);
+                displayForcesResults(data.prediction);
+                displayStressResults(data.prediction);
             }
-
-            // Display Energy Information
-            displayEnergyResults(initialPred, finalPred, isRelaxation);
-
-            // Display Magnetic Properties
-            displayMagneticResults(prediction);
-
-            // Site Energies are now displayed in Energy details
 
             // Store data for analysis modal
             if (isRelaxation) {
@@ -1768,6 +1808,7 @@
             // Reset using unified status display system
             updateStatusDisplay('energy', 'ready');
             updateStatusDisplay('magnetic', 'ready');
+            updateStatusDisplay('bandgap', 'ready');
 
             // Close energy details drawer if open
             const energyDetail = document.getElementById('energy-detail');
@@ -2200,6 +2241,27 @@
             }
         }
 
+        async function copyBandGap() {
+            const displayStatus = window.displayStatus;
+            if (!displayStatus || !displayStatus.bandgap || !displayStatus.bandgap.hasData) {
+                console.warn('No band gap data available to copy');
+                return;
+            }
+
+            const bandgapValue = displayStatus.bandgap.value;
+            const textToCopy = `Band Gap: ${bandgapValue.toFixed(4)} eV`;
+
+            console.log('Copying band gap:', textToCopy);
+            const result = await smartCopyToClipboard(textToCopy);
+
+            // Assuming there's a button with id 'copy-band-gap' or similar, we would show feedback here.
+            // But since the current button is rendered dynamically by refreshDisplay without an ID, we'll
+            // add it correctly.
+            // We use document.querySelector based on the onclick attribute.
+            const button = document.querySelector('[onclick="copyBandGap()"]');
+            if (button) showCopyFeedback(button, result.success);
+        }
+
         // Copy formula function
         async function copyFormula(buttonId = null) {
             const formula = getCurrentFormula();
@@ -2473,6 +2535,24 @@ Crystal system: ${data.crystal_system}`;
             currentStructureCif = null;
             console.log(`   State reset - UnitCell: ${displayUnitCell}, Axes: ${displayAxes}, Bonds: ${displayBonds}`);
             syncButtonStates();
+        }
+
+        function displayBandGapResults(prediction) {
+            const bandgapItem = document.getElementById('bandgap-item');
+
+            if (prediction.bandgap !== undefined && prediction.bandgap !== null) {
+                const bandgap = prediction.bandgap;
+                updateStatusDisplay('bandgap', 'calculated', bandgap, true);
+
+                // Store DOS data if available for the modal to use
+                if (prediction.dos_data) {
+                    window.currentDOSData = prediction.dos_data;
+                } else {
+                    window.currentDOSData = null;
+                }
+            } else {
+                bandgapItem.style.display = 'none';
+            }
         }
 
         function displayMagneticResults(prediction) {
@@ -6019,6 +6099,132 @@ Crystal system: ${data.crystal_system}`;
                     !e.target.classList.contains('expand-toggle')) {
                     toggleHandler();
                 }
+            });
+        }
+
+        // DOS Modal Functions
+        let dosChartInstance = null;
+
+        function openDOSModal() {
+            const modal = document.getElementById('dosModal');
+            modal.style.display = 'block';
+
+            // Add escape key listener
+            document.addEventListener('keydown', handleDOSModalKeydown);
+
+            // Render chart
+            setTimeout(() => {
+                renderDOSChart();
+            }, 50); // Small delay to ensure modal is visible
+        }
+
+        function closeDOSModal() {
+            const modal = document.getElementById('dosModal');
+            modal.style.display = 'none';
+            document.removeEventListener('keydown', handleDOSModalKeydown);
+        }
+
+        function handleDOSModalKeydown(event) {
+            if (event.key === 'Escape') {
+                closeDOSModal();
+            }
+        }
+
+        function renderDOSChart() {
+            const canvas = document.getElementById('dosChart');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            const dosData = window.currentDOSData;
+
+            if (!dosData || !dosData.energies || !dosData.dos) {
+                console.warn('No DOS data available to render');
+                return;
+            }
+
+            // Destroy existing chart if it exists
+            if (dosChartInstance) {
+                dosChartInstance.destroy();
+            }
+
+            const energies = dosData.energies;
+            const dosValues = dosData.dos;
+            const fermiEnergy = dosData.fermi_energy !== undefined ? dosData.fermi_energy : 0;
+
+            dosChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: [{
+                        label: 'Total DOS',
+                        data: energies.map((e, i) => ({ x: e, y: dosValues[i] })),
+                        borderColor: '#3498db',
+                        backgroundColor: 'rgba(52, 152, 219, 0.2)',
+                        borderWidth: 2,
+                        fill: true,
+                        pointRadius: 0,
+                        pointHitRadius: 5
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        mode: 'nearest',
+                        intersect: false,
+                        axis: 'x'
+                    },
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                title: (tooltipItems) => `Energy: ${tooltipItems[0].parsed.x.toFixed(4)} eV`,
+                                label: (context) => `DOS: ${context.parsed.y.toFixed(4)}`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'linear',
+                            title: {
+                                display: true,
+                                text: 'Energy (E - E_f) (eV)'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Density of States'
+                            },
+                            beginAtZero: true
+                        }
+                    }
+                },
+                plugins: [{
+                    id: 'fermiLineNum',
+                    beforeDraw: chart => {
+                        const xAxis = chart.scales.x;
+                        const yAxis = chart.scales.y;
+                        const ctx = chart.ctx;
+
+                        if (xAxis.min <= fermiEnergy && xAxis.max >= fermiEnergy) {
+                            const x = xAxis.getPixelForValue(fermiEnergy);
+
+                            ctx.save();
+                            ctx.beginPath();
+                            ctx.moveTo(x, yAxis.top);
+                            ctx.lineTo(x, yAxis.bottom);
+                            ctx.lineWidth = 2;
+                            ctx.strokeStyle = '#e74c3c';
+                            ctx.setLineDash([5, 5]);
+                            ctx.stroke();
+
+                            // Draw label
+                            ctx.fillStyle = '#e74c3c';
+                            ctx.textAlign = 'center';
+                            ctx.font = '12px Arial';
+                            ctx.fillText(`Fermi Level (${fermiEnergy.toFixed(2)} eV)`, x, yAxis.top - 5);
+                            ctx.restore();
+                        }
+                    }
+                }]
             });
         }
 
