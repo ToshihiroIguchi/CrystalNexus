@@ -513,7 +513,7 @@
     </div>
 
     <!-- Modal Window -->
-    <div id="cifModal" class="modal">
+    <div id="cifModal" class="modal" style="display: block;">
         <div class="modal-content">
             <div class="cif-modal-header" style="grid-area: header;">
                 Select CIF File
@@ -6148,14 +6148,14 @@ Crystal system: ${data.crystal_system}`;
 
             const energies = dosData.energies;
             const dosValues = dosData.dos;
-            const fermiEnergy = dosData.fermi_energy !== undefined ? dosData.fermi_energy : 0;
+            const fermiEnergy = dosData.e_fermi !== undefined ? dosData.e_fermi : 0;
 
             dosChartInstance = new Chart(ctx, {
                 type: 'line',
                 data: {
                     datasets: [{
                         label: 'Total DOS',
-                        data: energies.map((e, i) => ({ x: e, y: dosValues[i] })),
+                        data: energies.map((e, i) => ({ x: e - fermiEnergy, y: dosValues[i] })),
                         borderColor: '#3498db',
                         backgroundColor: 'rgba(52, 152, 219, 0.2)',
                         borderWidth: 2,
@@ -6204,8 +6204,10 @@ Crystal system: ${data.crystal_system}`;
                         const yAxis = chart.scales.y;
                         const ctx = chart.ctx;
 
-                        if (xAxis.min <= fermiEnergy && xAxis.max >= fermiEnergy) {
-                            const x = xAxis.getPixelForValue(fermiEnergy);
+                        // Draw Fermi line at 0 (since we shifted energies)
+                        const fermiX = 0;
+                        if (xAxis.min <= fermiX && xAxis.max >= fermiX) {
+                            const x = xAxis.getPixelForValue(fermiX);
 
                             ctx.save();
                             ctx.beginPath();
