@@ -404,13 +404,9 @@ class UPETModelManager:
         from ase.spacegroup import crystal
         from ase import Atoms
         
-        # Convert pymatgen Structure to ase Atoms
-        atoms = Atoms(
-            symbols=[site.species_string for site in structure],
-            positions=structure.cart_coords,
-            cell=structure.lattice.matrix,
-            pbc=True
-        )
+        # Convert pymatgen Structure to ase Atoms using the standard adaptor
+        from pymatgen.io.ase import AseAtomsAdaptor
+        atoms = AseAtomsAdaptor.get_atoms(structure)
         
         # Calculate
         energies, dos_vals = calc.calculate_dos(atoms)

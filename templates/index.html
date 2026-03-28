@@ -481,6 +481,34 @@
                             </div>
                         </div>
 
+                        <!-- Forces Result Item -->
+                        <div class="result-item" id="forces-item" style="display: none;">
+                            <div class="result-summary">
+                                <span id="forces-summary">💪 Forces: - eV/Å</span>
+                                <button class="detail-btn" onclick="toggleDetail('forces')" id="forces-detail-btn"
+                                    style="display: none;">Details ▼</button>
+                            </div>
+                            <div class="detail-drawer" id="forces-detail" style="display: none;">
+                                <div class="expandable-data" id="forces-table">
+                                    <!-- Forces details will be populated here -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Stress Result Item -->
+                        <div class="result-item" id="stress-item" style="display: none;">
+                            <div class="result-summary">
+                                <span id="stress-summary">🔧 Stress: - GPa</span>
+                                <button class="detail-btn" onclick="toggleDetail('stress')" id="stress-detail-btn"
+                                    style="display: none;">Details ▼</button>
+                            </div>
+                            <div class="detail-drawer" id="stress-detail" style="display: none;">
+                                <div class="expandable-data" id="stress-table">
+                                    <!-- Stress details will be populated here -->
+                                </div>
+                            </div>
+                        </div>
+
 
                         <!-- Structure Status Message -->
                         <div class="status-message" id="structure-status" style="display: none;">
@@ -664,6 +692,36 @@
         window.sessionId = 'session-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
         console.log('Session ID:', window.sessionId);
 
+        /**
+         * Systematic Modal Management System
+         * Centralizes opening and closing of all application modals to prevent z-index/backdrop issues.
+         */
+        window.Modals = {
+            ids: ['cifModal', 'analysisModal', 'dosModal', 'chgnet-info-modal'],
+            
+            closeAll: function() {
+                this.ids.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.style.display = 'none';
+                });
+                // Remove any leftover event listeners or scroll locks if any
+                document.removeEventListener('keydown', handleModalKeydown);
+                document.removeEventListener('keydown', handleDOSModalKeydown);
+                console.log('✓ All modals closed systematically');
+            },
+            
+            open: function(id) {
+                this.closeAll();
+                const el = document.getElementById(id);
+                if (el) {
+                    el.style.display = 'block';
+                    // Re-bind specific listeners based on ID
+                    if (id === 'analysisModal') document.addEventListener('keydown', handleModalKeydown);
+                    if (id === 'dosModal') document.addEventListener('keydown', handleDOSModalKeydown);
+                }
+            }
+        };
+
         // Unified status display system
         window.displayStatus = {
             energy: {
@@ -682,6 +740,18 @@
                 calculated: false,
                 value: null,
                 dos_data: null,
+                status: 'ready',
+                hasData: false
+            },
+            forces: {
+                calculated: false,
+                value: null,
+                status: 'ready',
+                hasData: false
+            },
+            stress: {
+                calculated: false,
+                value: null,
                 status: 'ready',
                 hasData: false
             }
@@ -706,6 +776,31 @@
             refreshDisplay(type);
         }
 
+        /**
+         * Generic helper to update a detailed result item (forces, stress, etc.)
+         * Follows DRY principle by abstracting DOM checks and rendering logic.
+         */
+        function updateDetailedResult(type, data, renderFunc) {
+            try {
+                const tableElement = document.getElementById(`${type}-table`);
+                if (!tableElement) {
+                    console.warn(`${type}-table element not found`);
+                    updateStatusDisplay(type, 'error');
+                    return;
+                }
+
+                if (data) {
+                    renderFunc(tableElement, data);
+                } else {
+                    updateStatusDisplay(type, 'notCalculated');
+                    tableElement.innerHTML = `<p>No ${type} data available</p>`;
+                }
+            } catch (err) {
+                console.error(`Error in updateDetailedResult for ${type}:`, err);
+                updateStatusDisplay(type, 'error');
+            }
+        }
+
         // Refresh the display for a specific type
         function refreshDisplay(type) {
             const statusObj = window.displayStatus[type];
@@ -719,7 +814,9 @@
             const config = {
                 'energy': { icon: '⚡', unit: 'eV', label: 'Energy', propName: 'Total Energy' },
                 'magnetic': { icon: '🧲', unit: 'µB total', label: 'Magnetic', propName: 'Total Magnetic Moment' },
-                'bandgap': { icon: '🌈', unit: 'eV', label: 'Band Gap', propName: 'Band Gap' }
+                'bandgap': { icon: '🌈', unit: 'eV', label: 'Band Gap', propName: 'Band Gap' },
+                'forces': { icon: '💪', unit: 'eV/Å', label: 'Forces', propName: 'Maximum Force' },
+                'stress': { icon: '🔧', unit: 'GPa', label: 'Stress', propName: 'Maximum Stress' }
             };
             const typeConfig = config[type] || { icon: '', unit: '', label: type, propName: type };
 
@@ -736,11 +833,15 @@
                     summaryElement.innerHTML = `${typeConfig.icon} Magnetic: <span class="magnetic-moment">${statusObj.value.toFixed(3)} µB total</span><button class="copy-btn" id="${copyBtnId}" onclick="${copyFunction}" title="${title}">📋</button>`;
                 } else if (type === 'bandgap') {
                     summaryElement.innerHTML = `${typeConfig.icon} Band Gap: <span class="bandgap-value">${statusObj.value.toFixed(3)} eV</span><button class="copy-btn" id="${copyBtnId}" onclick="${copyFunction}" title="${title}">📋</button>`;
+                } else if (type === 'forces') {
+                    summaryElement.innerHTML = `${typeConfig.icon} Forces: <span class="force-vector">Max ${statusObj.value.toFixed(4)} eV/Å</span>`;
+                } else if (type === 'stress') {
+                    summaryElement.innerHTML = `${typeConfig.icon} Stress: <span class="force-vector">Max ${statusObj.value.toFixed(4)} GPa</span>`;
                 }
 
                 if (detailBtn) detailBtn.style.display = 'inline-block';
-                // Only show magnetic and bandgap items when calculated
-                if (item && (type === 'magnetic' || type === 'bandgap')) item.style.display = 'block';
+                // Only show magnetic, bandgap, forces, and stress items when calculated
+                if (item && (type === 'magnetic' || type === 'bandgap' || type === 'forces' || type === 'stress')) item.style.display = 'block';
             } else {
                 // Show status message
                 let message;
@@ -752,9 +853,8 @@
                 summaryElement.textContent = `${typeConfig.icon} ${typeConfig.label}: ${message}`;
                 if (detailBtn) detailBtn.style.display = 'none';
 
-                // Keep magnetic item visible for status message, but hide bandgap until it is calculated
-                if (item && type === 'magnetic') item.style.display = 'block';
-                if (item && type === 'bandgap') item.style.display = 'none';
+                // Ensure item is visible if it has a status message to show (e.g. error or not calculated)
+                if (item) item.style.display = 'block';
             }
         }
 
@@ -766,6 +866,8 @@
                     updateStatusDisplay('energy', 'notCalculated');
                     updateStatusDisplay('magnetic', 'notCalculated');
                     updateStatusDisplay('bandgap', 'notCalculated');
+                    updateStatusDisplay('forces', 'notCalculated');
+                    updateStatusDisplay('stress', 'notCalculated');
                 } catch (error) {
                     console.warn('Display initialization delayed:', error);
                     // Retry after another short delay
@@ -774,6 +876,8 @@
                             updateStatusDisplay('energy', 'notCalculated');
                             updateStatusDisplay('magnetic', 'notCalculated');
                             updateStatusDisplay('bandgap', 'notCalculated');
+                            updateStatusDisplay('forces', 'notCalculated');
+                            updateStatusDisplay('stress', 'notCalculated');
                         } catch (retryError) {
                             console.error('Failed to initialize displays:', retryError);
                         }
@@ -965,6 +1069,15 @@
                 }
 
                 const data = await response.json();
+                
+                // Store filename variables for Analyze button and Reset dialog (CRITICAL FIX)
+                window.currentFilename = filename;
+                window.currentFullPath = filename;
+                
+                console.log('📁 SAMPLE LOAD: Set filename variables in analyzeSampleFile:');
+                console.log('  - currentFilename:', window.currentFilename);
+                console.log('  - currentFullPath:', window.currentFullPath);
+                
                 displayCrystalInfo(data);
             } catch (error) {
                 console.error('Error analyzing sample file:', error);
@@ -2547,8 +2660,10 @@ Crystal system: ${data.crystal_system}`;
                 // Store DOS data if available for the modal to use
                 if (prediction.dos_data) {
                     window.currentDOSData = prediction.dos_data;
+                    window.currentBandgap = bandgap;
                 } else {
                     window.currentDOSData = null;
+                    window.currentBandgap = 0;
                 }
             } else {
                 bandgapItem.style.display = 'none';
@@ -2592,13 +2707,9 @@ Crystal system: ${data.crystal_system}`;
         // displaySiteEnergiesResults function removed - Site Energies are now displayed in Energy details
 
         function displayForcesResults(prediction) {
-            const forcesSummary = document.getElementById('forces-summary');
-            const forcesTable = document.getElementById('forces-table');
-
-            if (prediction.forces_eV_per_A) {
-                const forces = prediction.forces_eV_per_A;
+            updateDetailedResult('forces', prediction ? prediction.forces_eV_per_A : null, (table, forces) => {
                 const maxForce = Math.max(...forces.flat().map(Math.abs));
-                forcesSummary.innerHTML = `💪 Forces: <span class="force-vector">Max ${maxForce.toFixed(4)} eV/Å</span>`;
+                updateStatusDisplay('forces', 'calculated', maxForce, true);
 
                 let tableHTML = '<table class="detail-table">';
                 forces.forEach((force, i) => {
@@ -2606,61 +2717,36 @@ Crystal system: ${data.crystal_system}`;
                     tableHTML += `<tr><td>Atom ${i + 1}:</td><td class="force-vector">[${force[0].toFixed(4)}, ${force[1].toFixed(4)}, ${force[2].toFixed(4)}] (|F|=${magnitude.toFixed(4)} eV/Å)</td></tr>`;
                 });
                 tableHTML += '</table>';
-                forcesTable.innerHTML = tableHTML;
-            } else {
-                forcesSummary.textContent = '💪 Forces: Not available';
-                forcesTable.innerHTML = 'Forces data not available';
-            }
+                table.innerHTML = tableHTML;
+            });
         }
 
         function displayStressResults(prediction) {
-            const stressSummary = document.getElementById('stress-summary');
-            const stressTable = document.getElementById('stress-table');
-
-            if (prediction.stress_GPa) {
-                const stress = prediction.stress_GPa;
+            updateDetailedResult('stress', prediction ? prediction.stress_GPa : null, (table, stress) => {
                 const maxStress = Math.max(...stress.flat().map(Math.abs));
-                stressSummary.innerHTML = `🔧 Stress: <span class="force-vector">Max ${maxStress.toFixed(4)} GPa</span>`;
+                updateStatusDisplay('stress', 'calculated', maxStress, true);
 
-                // Matrix display for stress tensor
                 let matrixHTML = `
                     <tr><td colspan="2"><strong>Stress Tensor Matrix (GPa):</strong></td></tr>
                     <tr><td colspan="2">
                         <div class="stress-matrix">
                             <table>
-                                <tr>
-                                    <td>${stress[0][0].toFixed(3)}</td>
-                                    <td>${stress[0][1].toFixed(3)}</td>
-                                    <td>${stress[0][2].toFixed(3)}</td>
-                                </tr>
-                                <tr>
-                                    <td>${stress[1][0].toFixed(3)}</td>
-                                    <td>${stress[1][1].toFixed(3)}</td>
-                                    <td>${stress[1][2].toFixed(3)}</td>
-                                </tr>
-                                <tr>
-                                    <td>${stress[2][0].toFixed(3)}</td>
-                                    <td>${stress[2][1].toFixed(3)}</td>
-                                    <td>${stress[2][2].toFixed(3)}</td>
-                                </tr>
+                                <tr><td>${stress[0][0].toFixed(3)}</td><td>${stress[0][1].toFixed(3)}</td><td>${stress[0][2].toFixed(3)}</td></tr>
+                                <tr><td>${stress[1][0].toFixed(3)}</td><td>${stress[1][1].toFixed(3)}</td><td>${stress[1][2].toFixed(3)}</td></tr>
+                                <tr><td>${stress[2][0].toFixed(3)}</td><td>${stress[2][1].toFixed(3)}</td><td>${stress[2][2].toFixed(3)}</td></tr>
                             </table>
                         </div>
                     </td></tr>
                     <tr><td colspan="2"><strong>Individual Components:</strong></td></tr>
                 `;
 
-                // Add individual components for reference
                 for (let i = 0; i < 3; i++) {
                     for (let j = 0; j < 3; j++) {
                         matrixHTML += `<tr><td>σ[${i + 1},${j + 1}]:</td><td class="force-vector">${stress[i][j].toFixed(4)} GPa</td></tr>`;
                     }
                 }
-
-                stressTable.innerHTML = matrixHTML;
-            } else {
-                stressSummary.textContent = '🔧 Stress: Not available';
-                stressTable.innerHTML = '<tr><td>Stress:</td><td>Not available</td></tr>';
-            }
+                table.innerHTML = `<table class="detail-table">${matrixHTML}</table>`;
+            });
         }
 
 
@@ -6141,7 +6227,6 @@ Crystal system: ${data.crystal_system}`;
                 return;
             }
 
-            // Destroy existing chart if it exists
             if (dosChartInstance) {
                 dosChartInstance.destroy();
             }
@@ -6149,28 +6234,58 @@ Crystal system: ${data.crystal_system}`;
             const energies = dosData.energies;
             const dosValues = dosData.dos;
             const fermiEnergy = dosData.e_fermi !== undefined ? dosData.e_fermi : 0;
+            const bandgap = window.currentBandgap !== undefined ? window.currentBandgap : (window.currentAnalysisData?.prediction?.final_structure_info?.bandgap || window.currentAnalysisData?.bandgap || 0);
+
+            // Shift energies relative to Fermi
+            const shiftedEnergies = energies.map(e => e - fermiEnergy);
+            
+            /**
+             * Data-driven range detection: Find min/max energy where DOS is significant
+             * Professional standard: Center on 0 eV and focus on +/- 10-15 eV
+             */
+            const maxDOS = Math.max(...dosValues);
+            const threshold = maxDOS * 0.005; // 0.5% of max
+            let minE = -10, maxE = 10;
+            
+            for (let i = 0; i < shiftedEnergies.length; i++) {
+                if (dosValues[i] > threshold) {
+                    minE = Math.min(minE, shiftedEnergies[i]);
+                    maxE = Math.max(maxE, shiftedEnergies[i]);
+                }
+            }
+            
+            // Add some padding and clamp to reasonable professional range
+            const padding = 2;
+            minE = Math.max(minE - padding, -20);
+            maxE = Math.min(maxE + padding, 20);
 
             dosChartInstance = new Chart(ctx, {
                 type: 'line',
                 data: {
                     datasets: [{
                         label: 'Total DOS',
-                        data: energies.map((e, i) => ({ x: e - fermiEnergy, y: dosValues[i] })),
+                        data: shiftedEnergies.map((e, i) => ({ x: e, y: dosValues[i] })),
                         borderColor: '#3498db',
                         backgroundColor: 'rgba(52, 152, 219, 0.2)',
                         borderWidth: 2,
                         fill: true,
-                        pointRadius: 0,
-                        pointHitRadius: 5
+                        pointRadius: 0
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    interaction: {
-                        mode: 'nearest',
-                        intersect: false,
-                        axis: 'x'
+                    scales: {
+                        x: {
+                            type: 'linear',
+                            min: minE,
+                            max: maxE,
+                            title: { display: true, text: 'Energy (E - E_f) (eV)' }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            title: { display: true, text: 'Density of States' }
+                        }
                     },
                     plugins: {
                         tooltip: {
@@ -6179,50 +6294,54 @@ Crystal system: ${data.crystal_system}`;
                                 label: (context) => `DOS: ${context.parsed.y.toFixed(4)}`
                             }
                         }
-                    },
-                    scales: {
-                        x: {
-                            type: 'linear',
-                            title: {
-                                display: true,
-                                text: 'Energy (E - E_f) (eV)'
-                            }
-                        },
-                        y: {
-                            title: {
-                                display: true,
-                                text: 'Density of States'
-                            },
-                            beginAtZero: true
-                        }
                     }
                 },
                 plugins: [{
-                    id: 'fermiLineNum',
-                    beforeDraw: chart => {
-                        const xAxis = chart.scales.x;
-                        const yAxis = chart.scales.y;
-                        const ctx = chart.ctx;
+                    id: 'fermiAndBandgap',
+                    afterDatasetsDraw: chart => {
+                        const {ctx, scales: {x, y}, chartArea: {top, bottom, left, right}} = chart;
+                        
+                        // 1. Draw Band Gap Highlighting (if applicable)
+                        if (bandgap > 0.01) {
+                            // Find approximated range for shading. 
+                            // Usually gap is around 0 for shifted energies.
+                            // For more accuracy in shading, we'd need CBM/VBM from backend.
+                            // Here we highlight +/- bandgap/2 as a visual cue if data is centered.
+                            const startX = x.getPixelForValue(-bandgap/2);
+                            const endX = x.getPixelForValue(bandgap/2);
+                            
+                            ctx.save();
+                            ctx.fillStyle = 'rgba(46, 204, 113, 0.4)'; // Vibrant Green Overlay
+                            ctx.fillRect(Math.max(left, startX), top, Math.min(right, endX) - Math.max(left, startX), bottom - top);
+                            
+                            // Add ML Smearing Disclaimer Note
+                            ctx.fillStyle = '#7f8c8d'; // Slate gray text
+                            ctx.textAlign = 'right';
+                            ctx.font = 'italic 11px Arial';
+                            ctx.fillText('*Note: ML Gaussian smearing may result in residual states within the highlighted band gap.', right - 5, bottom - 10);
+                            ctx.restore();
+                        }
 
-                        // Draw Fermi line at 0 (since we shifted energies)
-                        const fermiX = 0;
-                        if (xAxis.min <= fermiX && xAxis.max >= fermiX) {
-                            const x = xAxis.getPixelForValue(fermiX);
-
+                        // 2. Draw Fermi line at 0
+                        const fermiX = x.getPixelForValue(0);
+                        if (fermiX >= left && fermiX <= right) {
                             ctx.save();
                             ctx.beginPath();
-                            ctx.moveTo(x, yAxis.top);
-                            ctx.lineTo(x, yAxis.bottom);
-                            ctx.lineWidth = 2;
+                            ctx.moveTo(fermiX, top);
+                            ctx.lineTo(fermiX, bottom);
+                            ctx.lineWidth = 1.5;
                             ctx.strokeStyle = '#e74c3c';
                             ctx.setLineDash([5, 5]);
                             ctx.stroke();
 
-                            // Draw label
-                            ctx.fillStyle = '#e74c3c';
+                            ctx.fillStyle = '#c0392b';
                             ctx.textAlign = 'center';
-                            ctx.font = '12px Arial';
-                            ctx.fillText(`Fermi Level (${fermiEnergy.toFixed(2)} eV)`, x, yAxis.top - 5);
+                            ctx.font = 'bold 12px Arial';
+                            ctx.fillText(`Fermi Level (${fermiEnergy.toFixed(2)} eV)`, Math.min(Math.max(fermiX, left + 50), right - 50), top - 5);
+                            if (bandgap > 0.01) {
+                                ctx.font = 'bold italic 11px Arial';
+                                ctx.fillText(`Band Gap: ${bandgap.toFixed(3)} eV`, Math.min(Math.max(fermiX, left + 50), right - 50), top + 15);
+                            }
                             ctx.restore();
                         }
                     }
@@ -6235,8 +6354,7 @@ Crystal system: ${data.crystal_system}`;
 
         function openAnalysisModal() {
             console.log('=== openAnalysisModal called ===');
-            const modal = document.getElementById('analysisModal');
-            modal.style.display = 'block';
+            Modals.open('analysisModal');
 
             console.log('currentAnalysisData:', currentAnalysisData);
             if (currentAnalysisData) {
@@ -6250,15 +6368,11 @@ Crystal system: ${data.crystal_system}`;
             console.log('Switching to energy tab...');
             switchTab('energy');
 
-            // Add escape key listener
-            document.addEventListener('keydown', handleModalKeydown);
             console.log('=== openAnalysisModal completed ===');
         }
 
         function closeAnalysisModal() {
-            const modal = document.getElementById('analysisModal');
-            modal.style.display = 'none';
-            document.removeEventListener('keydown', handleModalKeydown);
+            Modals.closeAll();
         }
 
         function resetAndLoadNewCIF() {
@@ -6270,9 +6384,11 @@ Crystal system: ${data.crystal_system}`;
                 }
             }
 
-            // First show the modal, then safely reset state
-            const modal = document.getElementById('cifModal');
-            modal.style.display = 'block';
+            // Systematic reset: close all open modals first (Analysis, DOS, etc.)
+            Modals.closeAll();
+
+            // Then show the main file selection modal
+            Modals.open('cifModal');
 
             // Initialize crystal info state when modal opens
             hideCrystalInfoCompletely();
@@ -6299,7 +6415,15 @@ Crystal system: ${data.crystal_system}`;
             // Reset analysis state
             isStructureAnalyzed = false;
             currentStructureHash = null;
-            updateAnalyzeButtonState();
+            
+            // Systematically reset UI components and display buttons
+            if (typeof setCHGNetButtonState === 'function') {
+                setCHGNetButtonState('initial');
+            }
+            if (typeof resetRobustDisplayState === 'function') {
+                resetRobustDisplayState();
+            }
+            
             window.currentAnalysisData = null;
             window.currentStructureData = null;
             window.operationHistory = [];
