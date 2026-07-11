@@ -624,6 +624,8 @@
         window.currentCrystalData = null;
         let supercellData = null;
         let chgnetElements = [];
+        // Shared controller to abort an in-flight CIF analysis when a new file is selected
+        let analysisAbortController = null;
 
         // Immutable original data (never changes after modal closes) - GLOBAL for robust system
         window.originalSupercellData = null;
@@ -893,13 +895,18 @@
         }
 
         async function analyzeSampleFile(filename) {
+            // Cancel any in-flight analysis so a stale response cannot clobber globals
+            if (analysisAbortController) analysisAbortController.abort();
+            analysisAbortController = new AbortController();
+            const signal = analysisAbortController.signal;
             try {
                 const response = await fetch('/api/analyze-cif-sample', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ filename: filename })
+                    body: JSON.stringify({ filename: filename }),
+                    signal: signal
                 });
 
                 if (!response.ok) {
@@ -928,12 +935,18 @@
                 const data = await response.json();
                 displayCrystalInfo(data);
             } catch (error) {
+                // Superseded by a newer analysis request; exit silently
+                if (error.name === 'AbortError') return;
                 console.error('Error analyzing sample file:', error);
                 alert(`Error analyzing CIF file: ${error.message}`);
             }
         }
 
         async function analyzeUploadedFile(file) {
+            // Cancel any in-flight analysis so a stale response cannot clobber globals
+            if (analysisAbortController) analysisAbortController.abort();
+            analysisAbortController = new AbortController();
+            const signal = analysisAbortController.signal;
             try {
                 // Show loading status for drag & drop
                 showFileLoadingStatus();
@@ -944,6 +957,8 @@
                 // Add timeout to prevent infinite loading
                 const timeoutController = new AbortController();
                 const timeoutId = setTimeout(() => timeoutController.abort(), 30000); // 30 second timeout
+                // Propagate supersede-abort to the fetch controller (which also handles timeout)
+                signal.addEventListener('abort', () => timeoutController.abort());
 
                 const response = await fetch('/api/analyze-cif-upload', {
                     method: 'POST',
@@ -998,6 +1013,9 @@
                     updateAnalyzeButtonState();
                 }
             } catch (error) {
+                // Superseded by a newer analysis request; exit silently
+                // (checked via signal.aborted so a genuine timeout still reports below)
+                if (signal.aborted) return;
                 console.error('Error analyzing uploaded file:', error);
 
                 let errorMessage = error.message;
@@ -3626,6 +3644,9 @@ Crystal system: ${data.crystal_system}`;
                             // Update Current Best in status UI
                             const currentBest = [...window.insertionCandidates].sort((a, b) => a.energy - b.energy)[0];
                             updateCurrentBest(currentBest.energy, currentBest.label, `INSERT ${element}`);
+                        } else {
+                            // Prediction failed for this site; skip it but leave a trace
+                            console.warn(`Site ${i + 1} energy evaluation failed:`, energyData.detail || energyData);
                         }
                     } catch (err) {
                         if (err.name === 'AbortError') break;
@@ -3645,7 +3666,7 @@ Crystal system: ${data.crystal_system}`;
                     const bestE = sortedCandidates[0].energy;
 
                     window.insertionCandidates.forEach(c => {
-                        if (typeof c.energy === 'number' && c.energy < 99999) {
+                        if (typeof c.energy === 'number') {
                             c.rel_energy = (c.energy - bestE).toFixed(3);
                         } else {
                             c.rel_energy = "N/A";
@@ -4212,6 +4233,11 @@ Crystal system: ${data.crystal_system}`;
                             hideExecuteStatus();
                         }
                     }, 3000);
+                } else {
+                    // Prediction failed (status: 'error'); clear the pending indicator
+                    console.warn(`Energy evaluation failed for ${cand.label}:`, data.detail || data);
+                    if (energyElement) energyElement.textContent = 'Error';
+                    showExecuteStatus(`Energy evaluation failed for ${cand.label}.`, false, false);
                 }
             } catch (error) {
                 console.error('❌ Error evaluating specific site:', error);

@@ -1,10 +1,12 @@
 import os
 import json
 import asyncio
+import functools
 import tempfile
 import logging
 import hashlib
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Dict, Optional, Set
 
@@ -180,6 +182,10 @@ MIN_SUPPORTED_ELEMENTS = int(os.getenv('MIN_SUPPORTED_ELEMENTS', '50'))
 # Initialize once as global variable
 ALLOWED_ELEMENTS: Set[str] = get_chgnet_supported_elements()
 
+# Single worker: serializes CHGNet access (model is not thread-safe) while
+# keeping inference off the event loop.
+_inference_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="chgnet")
+
 # CHGNet Model Manager (Singleton Pattern)
 class CHGNetModelManager:
     """
@@ -263,7 +269,9 @@ class CHGNetModelManager:
             # CHGNet doesn't support native batch processing yet, so we optimize individual calls
             for structure in batch:
                 try:
-                    pred = model.predict_structure(structure, **kwargs)
+                    pred = await asyncio.get_running_loop().run_in_executor(
+                        _inference_executor,
+                        functools.partial(model.predict_structure, structure, **kwargs))
                     batch_results.append(pred)
                 except Exception as e:
                     logger.warning(f"Batch prediction failed for structure {len(results) + len(batch_results)}: {e}")
@@ -287,7 +295,9 @@ class CHGNetModelManager:
             logger.debug(f"Garbage collection performed for large structure ({len(structure)} atoms)")
             
         try:
-            pred = model.predict_structure(structure, **kwargs)
+            pred = await asyncio.get_running_loop().run_in_executor(
+                _inference_executor,
+                functools.partial(model.predict_structure, structure, **kwargs))
             return pred
         except Exception as e:
             logger.error(f"Optimized prediction failed: {e}")
@@ -436,7 +446,22 @@ async def periodic_cleanup_task():
             
             # Clean up old sessions
             session_manager.cleanup_old_sessions()
-            
+
+            # Clean up uploaded files older than the session TTL
+            upload_dir = Path("uploads")
+            if upload_dir.exists():
+                cutoff_time = time.time() - (SESSION_CLEANUP_HOURS * 3600)
+                removed_files = 0
+                for upload_file in upload_dir.iterdir():
+                    try:
+                        if upload_file.is_file() and upload_file.stat().st_mtime < cutoff_time:
+                            upload_file.unlink()
+                            removed_files += 1
+                    except OSError as file_error:
+                        logger.warning(f"Failed to delete uploaded file {upload_file}: {file_error}")
+                if removed_files > 0:
+                    logger.info(f"Cleaned up {removed_files} uploaded file(s) older than {SESSION_CLEANUP_HOURS}h")
+
             # Log session statistics and perform garbage collection
             log_session_statistics()
             
@@ -478,6 +503,10 @@ def safe_path(filepath: str) -> str:
     # Path traversal attack prevention
     if '..' in filepath or filepath.startswith('/') or filepath.startswith('\\'):
         raise ValueError("Invalid path: path traversal attempt detected")
+
+    # Reject absolute paths (including Windows drive-absolute forms like 'C:/...')
+    if ':' in filepath or Path(filepath).is_absolute():
+        raise ValueError("Invalid path: absolute paths are not allowed")
     
     # Normalize path separators
     normalized_path = filepath.replace('\\', '/')
@@ -740,11 +769,11 @@ async def apply_atomic_operations(request: dict):
         session_id = request.get("session_id")
         operations = request.get("operations", [])
 
-        logger.info(f" OPERATIONS: Starting atomic operations for session: {session_id[:8]}...")
-        logger.info(f" OPERATIONS: Received {len(operations)} operations: {operations}")
-
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required")
+
+        logger.info(f" OPERATIONS: Starting atomic operations for session: {session_id[:8]}...")
+        logger.info(f" OPERATIONS: Received {len(operations)} operations: {operations}")
 
         # Get current structure from session
         current_structure = session_manager.get_current_structure(session_id)
@@ -1021,8 +1050,8 @@ async def analyze_uploaded_cif(file: UploadFile = File(...)):
             logger.info(f" UPLOAD: Returning result with keys: {list(result.keys())}")
             return result
         finally:
-            # Keep uploaded files like sample files - no deletion
-            # Files will be cleaned up by periodic cleanup
+            # Keep uploaded files for later reuse; the periodic cleanup task
+            # deletes them once they are older than SESSION_CLEANUP_HOURS.
             pass
                 
     except ValueError as e:
@@ -1476,7 +1505,10 @@ async def generate_modified_structure_cif(request: dict):
         cif_path = None
 
         # First try sample directory
-        sample_path = SAMPLE_CIF_DIR / safe_path(filename)
+        try:
+            sample_path = SAMPLE_CIF_DIR / safe_path(filename)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid filename: {e}")
         logger.info(f" MODIFIED: Checking sample path: {sample_path}")
 
         if sample_path.exists():
@@ -2013,7 +2045,10 @@ async def chgnet_relax_structure(request: dict):
         
         # CHGNet structure relaxation
         logger.info(f"Starting CHGNet relaxation: fmax={fmax}, max_steps={max_steps}")
-        result = relaxer.relax(structure, fmax=fmax, steps=max_steps, verbose=True, relax_cell=True)
+        result = await asyncio.get_running_loop().run_in_executor(
+            _inference_executor,
+            functools.partial(relaxer.relax, structure, fmax=fmax, steps=max_steps,
+                              verbose=True, relax_cell=True))
         
         # Basic result validation
         logger.info(f"CHGNet result keys: {sorted(result.keys())}")
@@ -2411,7 +2446,8 @@ async def get_insertion_voids(data: dict):
         
         try:
             generator = VoronoiInterstitialGenerator()
-            interstitials = generator.get_defects(structure, insert_species=[element_symbol])
+            interstitials = await asyncio.to_thread(
+                generator.get_defects, structure, insert_species=[element_symbol])
         except Exception as e:
             logger.error(f"Failed to find insertion sites for {element_symbol}: {e}")
             raise HTTPException(status_code=400, detail=f"Failed to find insertion voids: {str(e)}")
@@ -2468,15 +2504,19 @@ async def evaluate_insertion_energy(data: dict):
         # Predict energy
         try:
             pred_result = await chgnet_manager.predict_single_optimized(cand_structure)
-            energy_val = pred_result.get("e", 100000.0) if isinstance(pred_result, dict) else 100000.0
-            energy = float(energy_val)
+            results = safe_get_prediction(pred_result, num_atoms=len(cand_structure))
+            per_atom_energy = results.get("energy_eV_per_atom")
+            if per_atom_energy is None:
+                raise ValueError("Prediction returned no energy value")
+            total_energy_eV = per_atom_energy * len(cand_structure)
         except Exception as e:
             logger.error(f"Energy prediction failed: {e}")
-            energy = 100000.0
-            
+            return {"status": "error", "energy": None, "detail": str(e)}
+
         return {
             "status": "success",
-            "energy": energy
+            "energy": total_energy_eV,           # total energy of the candidate structure in eV
+            "energy_eV_per_atom": per_atom_energy,
         }
     except HTTPException:
         # Re-raise HTTPExceptions without modification
