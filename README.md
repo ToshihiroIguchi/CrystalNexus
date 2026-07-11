@@ -35,11 +35,14 @@ CrystalNexus/
 +--- main.py                 # Core FastAPI backend application
 +--- start_crystalnexus.py   # robust server startup script with auto-recovery and health monitoring
 +--- analytics_db.py         # Local analytics database manager (SQLite)
-+--- sample_cif/            # Curated library of sample crystal structures (Oxides, Metals, etc.)
-+--- templates/             # Jinja2 HTML templates for the frontend
-+--- static/               # Static assets (CSS, JS, images)
++--- sample_cif/            # Curated library of sample crystal structures (Gases, Metals, Oxides)
++--- templates/             # Jinja2 HTML templates (index.html, analytics.html)
++--- static/               # Static assets (js/utils.js, js/analytics.js, js/auto_mode_chart.js)
++--- tests/                # Pytest test suite (conftest.py, test_main.py, test_security.py, test_endpoints.py)
 +--- uploads/              # Temporary directory for user uploads (auto-cleaned)
++--- pytest.ini             # Pytest configuration
 +--- requirements.txt        # Detailed Python dependencies list
++--- CLAUDE.md               # Claude Code project instructions
 ```
 
 ## Installation
@@ -112,6 +115,8 @@ python start_crystalnexus.py
     *   It monitors the server health continuously.
     *   Once ready, it will display: `CrystalNexus is ready! URL: http://localhost:8080`
 
+*Note: The server binds to `127.0.0.1` (loopback) by default, so it is only reachable from your own machine. To expose it on your network, set the `CRYSTALNEXUS_HOST` environment variable (e.g., `CRYSTALNEXUS_HOST=0.0.0.0`). The port can likewise be changed with `CRYSTALNEXUS_PORT`.*
+
 ### Workflow Guide
 
 #### 1. Loading a Structure
@@ -145,6 +150,29 @@ python start_crystalnexus.py
     *   Daily usage trends
     *   Most analyzed structures
     *   Recent calculation logs
+
+---
+
+## Running Tests
+
+The test suite lives in the `tests/` directory and uses **pytest** (included in `requirements.txt`).
+
+Run the full suite from the repository root:
+
+**For Windows:**
+```powershell
+venv\Scripts\python.exe -m pytest tests/ -v
+```
+
+**For macOS / Linux (with the virtual environment activated):**
+```bash
+python -m pytest tests/ -v
+```
+
+For a faster feedback loop, skip the slow tests:
+```bash
+python -m pytest tests/ -m "not slow"
+```
 
 ---
 
