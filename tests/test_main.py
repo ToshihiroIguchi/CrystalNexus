@@ -32,9 +32,17 @@ def test_sample_cif_files(client):
     response = client.get("/api/sample-cif-files")
     assert response.status_code == 200
     data = response.json()
-    assert "files" in data
-    assert isinstance(data["files"], list)
-    assert len(data["files"]) == 5  # Should have 5 sample files
+    assert "structure" in data
+    structure = data["structure"]
+    assert "Metals" in structure["subdirs"]
+
+    def count_cif_files(node):
+        total = len(node["files"])
+        for subdir in node["subdirs"].values():
+            total += count_cif_files(subdir)
+        return total
+
+    assert count_cif_files(structure) > 0
 
 def test_chgnet_elements(client):
     """Test CHGNet elements endpoint"""
@@ -66,7 +74,7 @@ def test_analyze_cif_sample_nonexistent_file(client):
 
 def test_analyze_cif_sample_valid(client):
     """Test analyze sample CIF with valid file"""
-    response = client.post("/api/analyze-cif-sample", json={"filename": "C.cif"})
+    response = client.post("/api/analyze-cif-sample", json={"filename": "Metals/Cu.cif"})
     assert response.status_code == 200
     data = response.json()
     assert "formula" in data
@@ -77,15 +85,11 @@ def test_analyze_cif_sample_valid(client):
 
 def test_create_supercell(client):
     """Test supercell creation"""
-    crystal_data = {
-        "formula": "C4",
-        "num_atoms": 4,
-        "density": 1.94,
-        "volume": 41.14,
-        "num_sites": 4,
-        "filename": "C.cif"
-    }
-    
+    # Analyze a real sample file to get consistent crystal data
+    analyze_response = client.post("/api/analyze-cif-sample", json={"filename": "Metals/Cu.cif"})
+    assert analyze_response.status_code == 200
+    crystal_data = analyze_response.json()
+
     response = client.post("/api/create-supercell", json={
         "crystal_data": crystal_data,
         "supercell_size": [2, 2, 2],
@@ -96,7 +100,11 @@ def test_create_supercell(client):
     assert "status" in data
     assert data["status"] == "supercell_created"
     assert "supercell_info" in data
-    assert data["supercell_info"]["scaling_factor"] == 8
+    supercell_info = data["supercell_info"]
+    assert supercell_info["scaling_factor"] == 8
+    assert supercell_info["size"] == [2, 2, 2]
+    assert supercell_info["num_sites"] == crystal_data["num_sites"] * 8
+    assert supercell_info["volume"] == pytest.approx(crystal_data["volume"] * 8)
 
 def test_security_validation():
     """Test security validation functions"""
@@ -134,7 +142,7 @@ def test_element_count():
 def test_chgnet_predict(client):
     """Test CHGNet prediction endpoint (only if CHGNet is available)"""
     response = client.post("/api/chgnet-predict", json={
-        "filename": "C.cif",
+        "filename": "Metals/Cu.cif",
         "operations": [],
         "supercell_size": [1, 1, 1]
     })

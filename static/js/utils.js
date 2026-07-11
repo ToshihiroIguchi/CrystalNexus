@@ -237,6 +237,17 @@ function safeJSONParse(jsonString, defaultValue = null) {
 }
 
 /**
+ * Escape HTML special characters to prevent DOM XSS when inserting via innerHTML
+ * @param {*} value - Value to escape
+ * @returns {string} HTML-escaped string
+ */
+function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (ch) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
+}
+
+/**
  * Copy text to clipboard with notification
  * @param {string} text - Text to copy
  * @param {string} message - Success message to show (optional)

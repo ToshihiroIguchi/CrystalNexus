@@ -1,7 +1,6 @@
 import os
 import json
 import asyncio
-import subprocess
 import tempfile
 import logging
 import hashlib
@@ -834,6 +833,9 @@ async def apply_atomic_operations(request: dict):
             "composition": str(structure.composition)
         }
         
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         logger.error(f"Error applying atomic operations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -893,7 +895,7 @@ async def analyze_sample_cif(data: dict):
         # Additional security check: ensure path is within sample_cif directory
         resolved_path = file_path.resolve()
         base_path = SAMPLE_CIF_DIR.resolve()
-        if not str(resolved_path).startswith(str(base_path)):
+        if not resolved_path.is_relative_to(base_path):
             raise ValueError("Path outside sample directory")
         
         if not file_path.exists():
@@ -1217,8 +1219,14 @@ async def create_supercell(data: dict):
             if original_structure is None and filename != "unknown.cif":
                 logger.info(f" SUPERCELL: Method 2 - Trying file-based loading for: {filename}")
 
+                # Secure path validation (supports subdirectories)
+                try:
+                    validated_filename = safe_path(filename)
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=f"Invalid filename: {e}")
+
                 # First try sample directory
-                cif_path = SAMPLE_CIF_DIR / filename
+                cif_path = SAMPLE_CIF_DIR / validated_filename
                 logger.info(f" SUPERCELL: Checking sample path: {cif_path}")
 
                 if cif_path.exists():
@@ -1235,7 +1243,7 @@ async def create_supercell(data: dict):
                     logger.info(f" SUPERCELL: Sample file not found, checking uploads dir: {upload_dir}")
 
                     if upload_dir.exists():
-                        upload_pattern = f"*_{filename}"
+                        upload_pattern = f"*_{Path(validated_filename).name}"
                         logger.info(f" SUPERCELL: Searching for pattern: {upload_pattern}")
                         uploaded_files = list(upload_dir.glob(upload_pattern))
                         logger.info(f" SUPERCELL: Found {len(uploaded_files)} matching files: {[f.name for f in uploaded_files]}")
@@ -1279,7 +1287,10 @@ async def create_supercell(data: dict):
             # Get structure dictionary for CIF generation
             structure_dict = supercell_structure.as_dict()
             logger.info(f"Successfully created supercell structure and session for {filename}")
-                
+
+        except HTTPException:
+            # Re-raise HTTPExceptions without modification
+            raise
         except Exception as e:
             logger.error(f"Could not create structure object: {e}")
             import traceback
@@ -1299,6 +1310,9 @@ async def create_supercell(data: dict):
             "structure_dict": structure_dict,  # Add structure_dict for 3D visualization
             "message": f"Supercell {a_mult}x{b_mult}x{c_mult} created successfully"
         }
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error creating supercell: {str(e)}")
 
@@ -1355,6 +1369,9 @@ async def get_element_labels(data: dict):
             "method": "structure_based"  # Indicate this is the reliable method
         }
         
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         logger.error(f"Error getting element labels: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting element labels: {str(e)}")
@@ -1428,6 +1445,9 @@ async def recalculate_density(request: dict):
             "calculation_method": "pymatgen_composition"
         }
         
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error recalculating density: {str(e)}")
 
@@ -1576,6 +1596,9 @@ async def generate_modified_structure_cif(request: dict):
             }
         )
         
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         error_msg = f"Failed to generate modified structure CIF: {str(e)}"
         logger.error(error_msg)
@@ -1614,7 +1637,12 @@ async def generate_supercell_cif_direct(request: dict):
         
         # Method 2: Try to load from CIF file (for sample files)
         if original_structure is None:
-            cif_path = SAMPLE_CIF_DIR / filename
+            # Secure path validation (supports subdirectories)
+            try:
+                validated_filename = safe_path(filename)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid filename: {e}")
+            cif_path = SAMPLE_CIF_DIR / validated_filename
             if cif_path.exists():
                 logger.debug(f"Reading CIF file: {cif_path}")
                 from pymatgen.io.cif import CifParser
@@ -1671,6 +1699,9 @@ async def generate_supercell_cif_direct(request: dict):
             }
         )
         
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         error_msg = f"Failed to generate supercell CIF: {str(e)}"
         logger.error(error_msg)
@@ -1925,6 +1956,9 @@ async def chgnet_predict_structure(request: dict):
     except ValueError as e:
         logger.error(f"CHGNet prediction validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         logger.error(f"CHGNet prediction error: {e}")
         import traceback
@@ -2158,6 +2192,9 @@ async def chgnet_relax_structure(request: dict):
     except ValueError as e:
         logger.error(f"CHGNet relaxation validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         logger.error(f"CHGNet relaxation error: {e}")
         import traceback
@@ -2222,6 +2259,9 @@ async def reset_session_structure(request: dict):
     except ValueError as e:
         logger.error(f"Session reset validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         logger.error(f"Session reset error: {e}")
         import traceback
@@ -2314,6 +2354,9 @@ async def generate_relaxed_structure_cif(request: dict):
             }
         )
         
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         error_msg = f"Failed to generate relaxed structure CIF: {str(e)}"
         logger.error(error_msg)
@@ -2393,6 +2436,9 @@ async def get_insertion_voids(data: dict):
             "element": element_symbol,
             "voids": voids
         }
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         logger.error(f"Error getting insertion voids: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -2432,50 +2478,12 @@ async def evaluate_insertion_energy(data: dict):
             "status": "success",
             "energy": energy
         }
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         logger.error(f"Error evaluating insertion energy: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-def check_backend_status():
-    try:
-        import requests
-        response = requests.get(f"http://localhost:{PORT}/health", timeout=5)
-        return response.status_code == 200
-    except Exception as e:
-        logger.warning(f"Backend status check failed: {e}")
-        return False
-
-def start_backend():
-    try:
-        cmd = [
-            "uvicorn", "main:app", 
-            "--host", HOST,
-            "--port", str(PORT)
-        ]
-        
-        if DEBUG:
-            cmd.append("--reload")
-        
-        # Windows対応: CREATE_NO_WINDOWフラグを設定
-        kwargs = {}
-        if WINDOWS_PLATFORM:
-            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-        
-        return subprocess.Popen(cmd, **kwargs)
-    except Exception as e:
-        logger.error(f"Error starting backend: {e}")
-        return None
-
-if __name__ == "__main__":
-    if not check_backend_status():
-        logger.info("Starting CrystalNexus backend...")
-        process = start_backend()
-        if process:
-            logger.info(f"Backend started on port {PORT}")
-        else:
-            logger.error("Failed to start backend")
-    else:
-        uvicorn.run(app, host=HOST, port=PORT, reload=DEBUG)
 
 # --- Analytics API Routes ---
 
@@ -2521,3 +2529,6 @@ async def get_analytics_recent():
     except Exception as e:
         logger.error(f"Failed to get recent events: {e}")
         raise HTTPException(status_code=500, detail="Failed to get recent events")
+
+if __name__ == "__main__":
+    uvicorn.run(app, host=HOST, port=PORT)

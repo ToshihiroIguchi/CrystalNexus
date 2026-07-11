@@ -1250,7 +1250,7 @@
             const statusHTML = `
                 <div class="file-status success">
                     <span class="status-icon">✅</span>
-                    <span>Successfully loaded: ${filename}</span>
+                    <span>Successfully loaded: ${escapeHtml(filename)}</span>
                 </div>
             `;
             statusArea.innerHTML = statusHTML;
@@ -1266,7 +1266,7 @@
             const statusHTML = `
                 <div class="file-status error">
                     <span class="status-icon">❌</span>
-                    <span>Error: ${message}</span>
+                    <span>Error: ${escapeHtml(message)}</span>
                 </div>
             `;
             statusArea.innerHTML = statusHTML;
@@ -4764,6 +4764,9 @@ Crystal system: ${data.crystal_system}`;
                     showCalculationReport(summary, successful, failed, bestResult, 'substitution');
                 }
 
+                // Show completion state instead of hiding
+                showExecutionComplete(`Substitution Completed. Best: ${bestResult.atom} -> ${newElement} (${bestResult.energy.toFixed(4)} eV)`, results);
+
             } else {
                 // All calculations failed
                 showExecuteStatus('No valid calculations completed', false);
@@ -4777,10 +4780,11 @@ Crystal system: ${data.crystal_system}`;
                 );
 
                 showFailureReport(summary, failed, 'substitution');
+
+                // Show completion state with a failure message so the button state is still restored
+                showExecutionComplete('Substitution completed: all candidate calculations failed', results);
             }
 
-            // Show completion state instead of hiding
-            showExecutionComplete(`Substitution Completed. Best: ${bestResult.atom} -> ${newElement} (${bestResult.energy.toFixed(4)} eV)`, results);
             setExecuteButtonState('complete');
         }
 
@@ -5066,6 +5070,9 @@ Crystal system: ${data.crystal_system}`;
                     showCalculationReport(summary, successful, failed, bestResult, 'deletion');
                 }
 
+                // Show completion state instead of hiding
+                showExecutionComplete(`Deletion Completed. Best: ${bestResult.atom} (${bestResult.energy.toFixed(4)} eV)`, results);
+
             } else {
                 // All calculations failed
                 showExecuteStatus('No valid calculations completed', false);
@@ -5079,10 +5086,11 @@ Crystal system: ${data.crystal_system}`;
                 );
 
                 showFailureReport(summary, failed, 'deletion');
+
+                // Show completion state with a failure message so the button state is still restored
+                showExecutionComplete('Deletion completed: all candidate calculations failed', results);
             }
 
-            // Show completion state instead of hiding
-            showExecutionComplete(`Deletion Completed. Best: ${bestResult.atom} (${bestResult.energy.toFixed(4)} eV)`, results);
             setExecuteButtonState('complete');
         }
 
