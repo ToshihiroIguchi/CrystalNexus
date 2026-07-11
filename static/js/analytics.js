@@ -8,9 +8,6 @@ function escapeHtml(value) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-    // Determine current page for navigation highlighting if needed
-    console.log("Analytics dashboard loaded");
-
     // Fetch and render data
     await loadSummaryData();
     await loadPopularSamples();

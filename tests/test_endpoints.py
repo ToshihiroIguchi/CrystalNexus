@@ -52,6 +52,28 @@ def test_analyze_cif_upload_valid_file(client, sample_cif_dir):
                 leftover.unlink(missing_ok=True)
 
 
+def test_analyze_cif_upload_windows_illegal_filename(client, sample_cif_dir):
+    """Filenames with Windows-illegal characters upload fine (regression: temp path fix)"""
+    cif_bytes = (sample_cif_dir / "Metals" / "Cu.cif").read_bytes()
+
+    uploads_dir = Path("uploads")
+    before = set(uploads_dir.glob("*")) if uploads_dir.exists() else set()
+    try:
+        response = client.post(
+            "/api/analyze-cif-upload",
+            files={"file": ("<img src=x onerror=alert(1)>.cif", cif_bytes, "chemical/x-cif")},
+        )
+        # Contract: 200 — the temp path is UUID-based, so the client filename never touches the filesystem
+        assert response.status_code == 200
+        data = response.json()
+        assert "Cu" in data["formula"]
+    finally:
+        # Remove the file the endpoint stored in uploads/ during this test
+        if uploads_dir.exists():
+            for leftover in set(uploads_dir.glob("*")) - before:
+                leftover.unlink(missing_ok=True)
+
+
 def test_analyze_cif_upload_rejects_non_cif_file(client):
     """Uploading a non-CIF file is rejected with 400"""
     response = client.post(

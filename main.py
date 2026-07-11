@@ -994,7 +994,11 @@ async def analyze_uploaded_cif(file: UploadFile = File(...)):
         upload_dir.mkdir(exist_ok=True)
         logger.info(f" UPLOAD: Created uploads directory: {upload_dir.absolute()}")
 
-        unique_filename = f"{uuid.uuid4().hex}_{safe_filename(file.filename)}"
+        # Build the temp filename from a UUID only: client filenames may contain
+        # characters that are illegal in Windows paths (< > : " | ? *), which
+        # would make open() raise OSError. The original filename is kept for
+        # display/session metadata below.
+        unique_filename = f"{uuid.uuid4().hex}.cif"
         temp_path = upload_dir / unique_filename
         logger.info(f" UPLOAD: Saving file to: {temp_path}")
 
