@@ -1,8 +1,13 @@
 
-document.addEventListener('DOMContentLoaded', async () => {
-    // Determine current page for navigation highlighting if needed
-    console.log("Analytics dashboard loaded");
+// Local helper (analytics.html does not load utils.js):
+// escape HTML special characters to prevent DOM XSS when inserting via innerHTML
+function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (ch) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
+}
 
+document.addEventListener('DOMContentLoaded', async () => {
     // Fetch and render data
     await loadSummaryData();
     await loadPopularSamples();
@@ -34,8 +39,8 @@ async function loadPopularSamples() {
         data.popular_samples.forEach(item => {
             const tr = document.createElement('tr');
             tr.innerHTML = `
-                <td>${item.name || 'Unknown'}</td>
-                <td>${item.count}</td>
+                <td>${escapeHtml(item.name || 'Unknown')}</td>
+                <td>${escapeHtml(item.count)}</td>
             `;
             tbody.appendChild(tr);
         });
@@ -75,10 +80,10 @@ async function loadRecentActivity() {
             }
 
             tr.innerHTML = `
-                <td>${date}</td>
-                <td><span class="status-badge status-success">${event.event_type}</span></td>
-                <td>${event.filename || event.formula || '-'}</td>
-                <td>${details}</td>
+                <td>${escapeHtml(date)}</td>
+                <td><span class="status-badge status-success">${escapeHtml(event.event_type)}</span></td>
+                <td>${escapeHtml(event.filename || event.formula || '-')}</td>
+                <td>${escapeHtml(details)}</td>
             `;
             tbody.appendChild(tr);
         });

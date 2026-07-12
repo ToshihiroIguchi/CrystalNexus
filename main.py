@@ -1,11 +1,9 @@
 import os
-import json
 import asyncio
-import subprocess
-import tempfile
+import functools
 import logging
-import hashlib
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Dict, Optional, Set
 
@@ -91,28 +89,22 @@ def get_chgnet_supported_elements() -> Set[str]:
     return _get_fallback_elements()
 
 def _get_elements_from_chgnet() -> Optional[Set[str]]:
-    """Get element list from CHGNet model"""
+    """Get element list supported by CHGNet (atomic-number range with exclusions)"""
     try:
-        from chgnet.model import CHGNet
-        
-        # Load CHGNet model
-        model = CHGNet.load(use_device="cpu")
-        
-        # Get element information from model configuration
-        if hasattr(model, 'atom_embedding'):
-            # 実際に使用されている原子番号を確認
-            supported_elements = set()
-            for z in range(1, MAX_ATOMIC_NUMBER + 1):
-                try:
-                    element = Element.from_Z(z)
-                    # Exclude noble gases and actinoids (based on CHGNet characteristics)
-                    if z not in [2, 10, 18, 36, 54, 86] and z <= 92:  # He, Ne, Ar, Kr, Xe, Rn, exclude U and beyond
-                        supported_elements.add(element.symbol)
-                except (ValueError, AttributeError):
-                    continue
-                    
-            return supported_elements if supported_elements else None
-            
+        # Note: no model load needed here; the supported set is derived from the
+        # known CHGNet atomic-number range, avoiding a redundant CHGNet.load().
+        supported_elements = set()
+        for z in range(1, MAX_ATOMIC_NUMBER + 1):
+            try:
+                element = Element.from_Z(z)
+                # Exclude noble gases and actinoids (based on CHGNet characteristics)
+                if z not in [2, 10, 18, 36, 54, 86] and z <= 92:  # He, Ne, Ar, Kr, Xe, Rn, exclude U and beyond
+                    supported_elements.add(element.symbol)
+            except (ValueError, AttributeError):
+                continue
+
+        return supported_elements if supported_elements else None
+
     except Exception as e:
         logger.debug(f"Direct CHGNet element extraction failed: {e}")
         return None
@@ -180,6 +172,10 @@ MIN_SUPPORTED_ELEMENTS = int(os.getenv('MIN_SUPPORTED_ELEMENTS', '50'))
 
 # Initialize once as global variable
 ALLOWED_ELEMENTS: Set[str] = get_chgnet_supported_elements()
+
+# Single worker: serializes CHGNet access (model is not thread-safe) while
+# keeping inference off the event loop.
+_inference_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="chgnet")
 
 # CHGNet Model Manager (Singleton Pattern)
 class CHGNetModelManager:
@@ -264,7 +260,9 @@ class CHGNetModelManager:
             # CHGNet doesn't support native batch processing yet, so we optimize individual calls
             for structure in batch:
                 try:
-                    pred = model.predict_structure(structure, **kwargs)
+                    pred = await asyncio.get_running_loop().run_in_executor(
+                        _inference_executor,
+                        functools.partial(model.predict_structure, structure, **kwargs))
                     batch_results.append(pred)
                 except Exception as e:
                     logger.warning(f"Batch prediction failed for structure {len(results) + len(batch_results)}: {e}")
@@ -288,7 +286,9 @@ class CHGNetModelManager:
             logger.debug(f"Garbage collection performed for large structure ({len(structure)} atoms)")
             
         try:
-            pred = model.predict_structure(structure, **kwargs)
+            pred = await asyncio.get_running_loop().run_in_executor(
+                _inference_executor,
+                functools.partial(model.predict_structure, structure, **kwargs))
             return pred
         except Exception as e:
             logger.error(f"Optimized prediction failed: {e}")
@@ -437,7 +437,22 @@ async def periodic_cleanup_task():
             
             # Clean up old sessions
             session_manager.cleanup_old_sessions()
-            
+
+            # Clean up uploaded files older than the session TTL
+            upload_dir = Path("uploads")
+            if upload_dir.exists():
+                cutoff_time = time.time() - (SESSION_CLEANUP_HOURS * 3600)
+                removed_files = 0
+                for upload_file in upload_dir.iterdir():
+                    try:
+                        if upload_file.is_file() and upload_file.stat().st_mtime < cutoff_time:
+                            upload_file.unlink()
+                            removed_files += 1
+                    except OSError as file_error:
+                        logger.warning(f"Failed to delete uploaded file {upload_file}: {file_error}")
+                if removed_files > 0:
+                    logger.info(f"Cleaned up {removed_files} uploaded file(s) older than {SESSION_CLEANUP_HOURS}h")
+
             # Log session statistics and perform garbage collection
             log_session_statistics()
             
@@ -479,6 +494,10 @@ def safe_path(filepath: str) -> str:
     # Path traversal attack prevention
     if '..' in filepath or filepath.startswith('/') or filepath.startswith('\\'):
         raise ValueError("Invalid path: path traversal attempt detected")
+
+    # Reject absolute paths (including Windows drive-absolute forms like 'C:/...')
+    if ':' in filepath or Path(filepath).is_absolute():
+        raise ValueError("Invalid path: absolute paths are not allowed")
     
     # Normalize path separators
     normalized_path = filepath.replace('\\', '/')
@@ -660,8 +679,8 @@ STATIC_DIR = os.getenv('CRYSTALNEXUS_STATIC_DIR', 'static')
 SAMPLE_CIF_DIR_NAME = os.getenv('CRYSTALNEXUS_SAMPLE_CIF_DIR', 'sample_cif')
 APP_NAME = os.getenv('CRYSTALNEXUS_APP_NAME', 'CrystalNexus')
 
-# Server configuration
-HOST = os.getenv('CRYSTALNEXUS_HOST', '0.0.0.0')
+# Server configuration (default to loopback; set CRYSTALNEXUS_HOST=0.0.0.0 to expose on the network)
+HOST = os.getenv('CRYSTALNEXUS_HOST', '127.0.0.1')
 PORT = int(os.getenv('CRYSTALNEXUS_PORT', '8080'))
 DEBUG = os.getenv('CRYSTALNEXUS_DEBUG', 'False').lower() == 'true'
 
@@ -708,7 +727,9 @@ async def analytics_middleware(request: Request, call_next):
         try:
             client_host = request.client.host if request.client else "unknown"
             user_agent = request.headers.get("user-agent", "unknown")
-            analytics_db.log_access(
+            # Run sqlite write in a thread so it doesn't block the event loop
+            await asyncio.to_thread(
+                analytics_db.log_access,
                 path=request.url.path,
                 method=request.method,
                 status_code=response.status_code,
@@ -741,11 +762,11 @@ async def apply_atomic_operations(request: dict):
         session_id = request.get("session_id")
         operations = request.get("operations", [])
 
-        logger.info(f" OPERATIONS: Starting atomic operations for session: {session_id[:8]}...")
-        logger.info(f" OPERATIONS: Received {len(operations)} operations: {operations}")
-
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required")
+
+        logger.info(f" OPERATIONS: Starting atomic operations for session: {session_id[:8]}...")
+        logger.info(f" OPERATIONS: Received {len(operations)} operations: {operations}")
 
         # Get current structure from session
         current_structure = session_manager.get_current_structure(session_id)
@@ -784,13 +805,13 @@ async def apply_atomic_operations(request: dict):
             logger.error(f"❌ OPERATIONS: Validation failed - Rejecting {len(operations)} operations: {e}")
             raise HTTPException(status_code=400, detail=str(e))
 
-        # All operations validated - process in descending order by index to avoid index shift issues
-        # For 'insert', we can run them first because appending doesn't shift existing indices
-        # Sort by action type first (delete/substitute before insert), then by index descending for delete/substitute
+        # Process delete/substitute first (in descending index order so earlier
+        # removals don't shift the indices of later operations), then inserts
+        # last (appending doesn't shift existing indices)
         stable_operations = sorted(valid_operations, key=lambda x: (
-            0 if x["action"] in ["delete", "substitute"] else 1, # Process delete/substitute first
-            x.get("index", float('inf')) # Then by index descending for delete/substitute, insert last
-        ), reverse=True)
+            0 if x["action"] in ["delete", "substitute"] else 1,  # delete/substitute before insert
+            -x.get("index", 0)  # descending index within delete/substitute
+        ))
         logger.info(f" OPERATIONS: Processing {len(stable_operations)} validated operations in order: {[f'{op["action"]}@{op.get("index", "append")}' for op in stable_operations]}")
 
         for i, operation in enumerate(stable_operations):
@@ -815,7 +836,7 @@ async def apply_atomic_operations(request: dict):
                 
             elif action == "insert":
                 new_element = operation["to"]
-                coords = operation["coords"]
+                coords = [float(c) % 1.0 for c in operation["coords"]]
                 logger.info(f"➕ OPERATIONS: Inserting {new_element} at {coords} - Structure before: {len(structure.sites)} sites")
                 structure.append(new_element, coords)
                 logger.info(f"✅ OPERATIONS: Insertion completed - Structure after: {len(structure.sites)} sites")
@@ -834,6 +855,9 @@ async def apply_atomic_operations(request: dict):
             "composition": str(structure.composition)
         }
         
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         logger.error(f"Error applying atomic operations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -893,7 +917,7 @@ async def analyze_sample_cif(data: dict):
         # Additional security check: ensure path is within sample_cif directory
         resolved_path = file_path.resolve()
         base_path = SAMPLE_CIF_DIR.resolve()
-        if not str(resolved_path).startswith(str(base_path)):
+        if not resolved_path.is_relative_to(base_path):
             raise ValueError("Path outside sample directory")
         
         if not file_path.exists():
@@ -970,7 +994,11 @@ async def analyze_uploaded_cif(file: UploadFile = File(...)):
         upload_dir.mkdir(exist_ok=True)
         logger.info(f" UPLOAD: Created uploads directory: {upload_dir.absolute()}")
 
-        unique_filename = f"{uuid.uuid4().hex}_{safe_filename(file.filename)}"
+        # Build the temp filename from a UUID only: client filenames may contain
+        # characters that are illegal in Windows paths (< > : " | ? *), which
+        # would make open() raise OSError. The original filename is kept for
+        # display/session metadata below.
+        unique_filename = f"{uuid.uuid4().hex}.cif"
         temp_path = upload_dir / unique_filename
         logger.info(f" UPLOAD: Saving file to: {temp_path}")
 
@@ -1019,8 +1047,8 @@ async def analyze_uploaded_cif(file: UploadFile = File(...)):
             logger.info(f" UPLOAD: Returning result with keys: {list(result.keys())}")
             return result
         finally:
-            # Keep uploaded files like sample files - no deletion
-            # Files will be cleaned up by periodic cleanup
+            # Keep uploaded files for later reuse; the periodic cleanup task
+            # deletes them once they are older than SESSION_CLEANUP_HOURS.
             pass
                 
     except ValueError as e:
@@ -1193,6 +1221,20 @@ async def create_supercell(data: dict):
 
                     if structure_data and isinstance(structure_data, dict):
                         logger.info(f" SUPERCELL: Structure data keys: {list(structure_data.keys())}")
+                        # Validate client-supplied dict before Structure.from_dict
+                        # (MontyDecoder performs dynamic @module/@class imports)
+                        if "@module" in structure_data or "@class" in structure_data:
+                            if (structure_data.get("@module") != "pymatgen.core.structure"
+                                    or structure_data.get("@class") != "Structure"):
+                                raise HTTPException(
+                                    status_code=400,
+                                    detail="Invalid structure_data: only pymatgen.core.structure.Structure is allowed"
+                                )
+                        if "lattice" not in structure_data or "sites" not in structure_data:
+                            raise HTTPException(
+                                status_code=400,
+                                detail="Invalid structure_data: 'lattice' and 'sites' keys are required"
+                            )
                         original_structure = Structure.from_dict(structure_data)
                         logger.info(f"✅ SUPERCELL: Structure loaded from structure_data - Formula: {original_structure.formula}, Sites: {len(original_structure.sites)}")
 
@@ -1204,6 +1246,9 @@ async def create_supercell(data: dict):
                             logger.info(f"✅ SUPERCELL: Structure validation passed for: {filename}")
                     else:
                         logger.warning(f"⚠️ SUPERCELL: Invalid structure_data format: {type(structure_data)}")
+                except HTTPException:
+                    # Propagate validation errors (400) to the client
+                    raise
                 except Exception as e:
                     logger.error(f"❌ SUPERCELL: Failed to load from structure_data: {e}")
                     logger.error(f"❌ SUPERCELL: Structure data content preview: {str(crystal_data.get('structure_data', 'None'))[:200]}...")
@@ -1217,8 +1262,14 @@ async def create_supercell(data: dict):
             if original_structure is None and filename != "unknown.cif":
                 logger.info(f" SUPERCELL: Method 2 - Trying file-based loading for: {filename}")
 
+                # Secure path validation (supports subdirectories)
+                try:
+                    validated_filename = safe_path(filename)
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=f"Invalid filename: {e}")
+
                 # First try sample directory
-                cif_path = SAMPLE_CIF_DIR / filename
+                cif_path = SAMPLE_CIF_DIR / validated_filename
                 logger.info(f" SUPERCELL: Checking sample path: {cif_path}")
 
                 if cif_path.exists():
@@ -1235,7 +1286,7 @@ async def create_supercell(data: dict):
                     logger.info(f" SUPERCELL: Sample file not found, checking uploads dir: {upload_dir}")
 
                     if upload_dir.exists():
-                        upload_pattern = f"*_{filename}"
+                        upload_pattern = f"*_{Path(validated_filename).name}"
                         logger.info(f" SUPERCELL: Searching for pattern: {upload_pattern}")
                         uploaded_files = list(upload_dir.glob(upload_pattern))
                         logger.info(f" SUPERCELL: Found {len(uploaded_files)} matching files: {[f.name for f in uploaded_files]}")
@@ -1279,7 +1330,10 @@ async def create_supercell(data: dict):
             # Get structure dictionary for CIF generation
             structure_dict = supercell_structure.as_dict()
             logger.info(f"Successfully created supercell structure and session for {filename}")
-                
+
+        except HTTPException:
+            # Re-raise HTTPExceptions without modification
+            raise
         except Exception as e:
             logger.error(f"Could not create structure object: {e}")
             import traceback
@@ -1299,6 +1353,9 @@ async def create_supercell(data: dict):
             "structure_dict": structure_dict,  # Add structure_dict for 3D visualization
             "message": f"Supercell {a_mult}x{b_mult}x{c_mult} created successfully"
         }
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error creating supercell: {str(e)}")
 
@@ -1355,6 +1412,9 @@ async def get_element_labels(data: dict):
             "method": "structure_based"  # Indicate this is the reliable method
         }
         
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         logger.error(f"Error getting element labels: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting element labels: {str(e)}")
@@ -1428,6 +1488,9 @@ async def recalculate_density(request: dict):
             "calculation_method": "pymatgen_composition"
         }
         
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error recalculating density: {str(e)}")
 
@@ -1456,7 +1519,10 @@ async def generate_modified_structure_cif(request: dict):
         cif_path = None
 
         # First try sample directory
-        sample_path = SAMPLE_CIF_DIR / safe_path(filename)
+        try:
+            sample_path = SAMPLE_CIF_DIR / safe_path(filename)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid filename: {e}")
         logger.info(f" MODIFIED: Checking sample path: {sample_path}")
 
         if sample_path.exists():
@@ -1500,12 +1566,13 @@ async def generate_modified_structure_cif(request: dict):
         if invalid_operations:
             logger.warning(f"Skipping {len(invalid_operations)} invalid operations during CIF generation: {invalid_operations}")
         
-        # Process valid operations in descending order by index for substitute and delete to eliminate index adjustment issues.
-        # Process insert operations last since they don't affect indices of existing sites being processed backward.
+        # Process delete/substitute first (in descending index order so earlier
+        # removals don't shift the indices of later operations), then inserts
+        # last (appending doesn't shift existing indices)
         stable_operations = sorted(valid_operations, key=lambda x: (
-            0 if x["action"] in ["delete", "substitute"] else 1,
-            x.get("index", float('inf'))
-        ), reverse=True)
+            0 if x["action"] in ["delete", "substitute"] else 1,  # delete/substitute before insert
+            -x.get("index", 0)  # descending index within delete/substitute
+        ))
         operations_applied = 0
         
         for operation in stable_operations:
@@ -1576,6 +1643,9 @@ async def generate_modified_structure_cif(request: dict):
             }
         )
         
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         error_msg = f"Failed to generate modified structure CIF: {str(e)}"
         logger.error(error_msg)
@@ -1614,7 +1684,12 @@ async def generate_supercell_cif_direct(request: dict):
         
         # Method 2: Try to load from CIF file (for sample files)
         if original_structure is None:
-            cif_path = SAMPLE_CIF_DIR / filename
+            # Secure path validation (supports subdirectories)
+            try:
+                validated_filename = safe_path(filename)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid filename: {e}")
+            cif_path = SAMPLE_CIF_DIR / validated_filename
             if cif_path.exists():
                 logger.debug(f"Reading CIF file: {cif_path}")
                 from pymatgen.io.cif import CifParser
@@ -1671,6 +1746,9 @@ async def generate_supercell_cif_direct(request: dict):
             }
         )
         
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         error_msg = f"Failed to generate supercell CIF: {str(e)}"
         logger.error(error_msg)
@@ -1731,7 +1809,8 @@ def evaluate_convergence(trajectory, fmax):
     """
     import numpy as np
     
-    if not trajectory or not hasattr(trajectory, 'forces') or not trajectory.forces:
+    # Use an explicit length check: numpy arrays raise on ambiguous truthiness
+    if trajectory is None or not hasattr(trajectory, 'forces') or trajectory.forces is None or len(trajectory.forces) == 0:
         return False
     
     # Check final step only - simplified approach
@@ -1880,7 +1959,8 @@ async def chgnet_predict_structure(request: dict):
                 
         # Process insertions after removals to avoid index mapping issues
         for operation in insert_operations:
-            structure.append(Element(operation["to"]), operation["coords"])
+            frac_coords = [float(c) % 1.0 for c in operation["coords"]]
+            structure.append(Element(operation["to"]), frac_coords)
         
         # Load CHGNet model (using singleton pattern)
         try:
@@ -1925,6 +2005,9 @@ async def chgnet_predict_structure(request: dict):
     except ValueError as e:
         logger.error(f"CHGNet prediction validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         logger.error(f"CHGNet prediction error: {e}")
         import traceback
@@ -1979,7 +2062,10 @@ async def chgnet_relax_structure(request: dict):
         
         # CHGNet structure relaxation
         logger.info(f"Starting CHGNet relaxation: fmax={fmax}, max_steps={max_steps}")
-        result = relaxer.relax(structure, fmax=fmax, steps=max_steps, verbose=True, relax_cell=True)
+        result = await asyncio.get_running_loop().run_in_executor(
+            _inference_executor,
+            functools.partial(relaxer.relax, structure, fmax=fmax, steps=max_steps,
+                              verbose=True, relax_cell=True))
         
         # Basic result validation
         logger.info(f"CHGNet result keys: {sorted(result.keys())}")
@@ -2158,6 +2244,9 @@ async def chgnet_relax_structure(request: dict):
     except ValueError as e:
         logger.error(f"CHGNet relaxation validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         logger.error(f"CHGNet relaxation error: {e}")
         import traceback
@@ -2222,6 +2311,9 @@ async def reset_session_structure(request: dict):
     except ValueError as e:
         logger.error(f"Session reset validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         logger.error(f"Session reset error: {e}")
         import traceback
@@ -2314,6 +2406,9 @@ async def generate_relaxed_structure_cif(request: dict):
             }
         )
         
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         error_msg = f"Failed to generate relaxed structure CIF: {str(e)}"
         logger.error(error_msg)
@@ -2368,7 +2463,8 @@ async def get_insertion_voids(data: dict):
         
         try:
             generator = VoronoiInterstitialGenerator()
-            interstitials = generator.get_defects(structure, insert_species=[element_symbol])
+            interstitials = await asyncio.to_thread(
+                generator.get_defects, structure, insert_species=[element_symbol])
         except Exception as e:
             logger.error(f"Failed to find insertion sites for {element_symbol}: {e}")
             raise HTTPException(status_code=400, detail=f"Failed to find insertion voids: {str(e)}")
@@ -2393,6 +2489,9 @@ async def get_insertion_voids(data: dict):
             "element": element_symbol,
             "voids": voids
         }
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         logger.error(f"Error getting insertion voids: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -2422,60 +2521,26 @@ async def evaluate_insertion_energy(data: dict):
         # Predict energy
         try:
             pred_result = await chgnet_manager.predict_single_optimized(cand_structure)
-            energy_val = pred_result.get("e", 100000.0) if isinstance(pred_result, dict) else 100000.0
-            energy = float(energy_val)
+            results = safe_get_prediction(pred_result, num_atoms=len(cand_structure))
+            per_atom_energy = results.get("energy_eV_per_atom")
+            if per_atom_energy is None:
+                raise ValueError("Prediction returned no energy value")
+            total_energy_eV = per_atom_energy * len(cand_structure)
         except Exception as e:
             logger.error(f"Energy prediction failed: {e}")
-            energy = 100000.0
-            
+            return {"status": "error", "energy": None, "detail": str(e)}
+
         return {
             "status": "success",
-            "energy": energy
+            "energy": total_energy_eV,           # total energy of the candidate structure in eV
+            "energy_eV_per_atom": per_atom_energy,
         }
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
     except Exception as e:
         logger.error(f"Error evaluating insertion energy: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-def check_backend_status():
-    try:
-        import requests
-        response = requests.get(f"http://localhost:{PORT}/health", timeout=5)
-        return response.status_code == 200
-    except Exception as e:
-        logger.warning(f"Backend status check failed: {e}")
-        return False
-
-def start_backend():
-    try:
-        cmd = [
-            "uvicorn", "main:app", 
-            "--host", HOST,
-            "--port", str(PORT)
-        ]
-        
-        if DEBUG:
-            cmd.append("--reload")
-        
-        # Windows対応: CREATE_NO_WINDOWフラグを設定
-        kwargs = {}
-        if WINDOWS_PLATFORM:
-            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-        
-        return subprocess.Popen(cmd, **kwargs)
-    except Exception as e:
-        logger.error(f"Error starting backend: {e}")
-        return None
-
-if __name__ == "__main__":
-    if not check_backend_status():
-        logger.info("Starting CrystalNexus backend...")
-        process = start_backend()
-        if process:
-            logger.info(f"Backend started on port {PORT}")
-        else:
-            logger.error("Failed to start backend")
-    else:
-        uvicorn.run(app, host=HOST, port=PORT, reload=DEBUG)
 
 # --- Analytics API Routes ---
 
@@ -2521,3 +2586,6 @@ async def get_analytics_recent():
     except Exception as e:
         logger.error(f"Failed to get recent events: {e}")
         raise HTTPException(status_code=500, detail="Failed to get recent events")
+
+if __name__ == "__main__":
+    uvicorn.run(app, host=HOST, port=PORT)

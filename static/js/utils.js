@@ -85,82 +85,6 @@ function showCopyFeedback(button, success) {
 }
 
 /**
- * Show notification toast message
- * @param {string} message - Message to display
- * @param {string} type - Notification type: 'success', 'error', 'warning', 'info'
- */
-function showNotification(message, type = 'info') {
-    // Remove existing notification if present
-    const existing = document.querySelector('.notification');
-    if (existing) {
-        existing.remove();
-    }
-    
-    // Create notification element
-    const notification = document.createElement('div');
-    notification.className = 'notification';
-    notification.textContent = message;
-    
-    // Set colors based on type
-    const colors = {
-        'success': { bg: '#2ecc71', text: 'white' },
-        'error': { bg: '#e74c3c', text: 'white' },
-        'warning': { bg: '#f39c12', text: 'white' },
-        'info': { bg: '#3498db', text: 'white' }
-    };
-    
-    const color = colors[type] || colors.info;
-    
-    // Style the notification
-    Object.assign(notification.style, {
-        position: 'fixed',
-        top: '20px',
-        right: '20px',
-        backgroundColor: color.bg,
-        color: color.text,
-        padding: '12px 20px',
-        borderRadius: '4px',
-        boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
-        zIndex: '10000',
-        fontSize: '14px',
-        maxWidth: '300px',
-        opacity: '0',
-        transform: 'translateY(-20px)',
-        transition: 'all 0.3s ease'
-    });
-    
-    // Add to page
-    document.body.appendChild(notification);
-    
-    // Animate in
-    setTimeout(() => {
-        notification.style.opacity = '1';
-        notification.style.transform = 'translateY(0)';
-    }, 10);
-    
-    // Remove after 3 seconds
-    setTimeout(() => {
-        notification.style.opacity = '0';
-        notification.style.transform = 'translateY(-20px)';
-        setTimeout(() => {
-            if (notification.parentNode) {
-                notification.parentNode.removeChild(notification);
-            }
-        }, 300);
-    }, 3000);
-}
-
-/**
- * Clear status messages from the interface
- */
-function clearStatusMessage() {
-    const statusElements = document.querySelectorAll('.status-message');
-    statusElements.forEach(element => {
-        element.style.display = 'none';
-    });
-}
-
-/**
  * Format execution time for display
  * @param {number} executionTime - Execution time in seconds
  * @returns {string} Formatted time string
@@ -234,6 +158,17 @@ function safeJSONParse(jsonString, defaultValue = null) {
         console.warn('JSON parse failed:', error);
         return defaultValue;
     }
+}
+
+/**
+ * Escape HTML special characters to prevent DOM XSS when inserting via innerHTML
+ * @param {*} value - Value to escape
+ * @returns {string} HTML-escaped string
+ */
+function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (ch) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
 }
 
 /**

@@ -3,7 +3,6 @@ fastapi==0.115.5
 uvicorn==0.35.0
 python-multipart==0.0.12
 jinja2==3.1.6
-aiofiles==24.1.0
 
 # Materials science libraries - LATEST VERSIONS
 # Updated to support latest features and improvements
@@ -17,6 +16,9 @@ torch>=2.4.0,<2.9.0
 numpy>=1.26.0,<2.4.0
 
 # Additional dependencies
-requests>=2.32.0       # For startup script health checks
-scipy>=1.12.0          # Scientific computing (pymatgen dependency)
-pymatgen-analysis-defects>=2024.1.1
+requests>=2.32.0,<3.0                    # For startup script health checks
+scipy>=1.12.0,<2.0                       # Scientific computing (pymatgen dependency)
+pymatgen-analysis-defects>=2024.1.1,<2026
+
+# Testing
+pytest>=9,<10

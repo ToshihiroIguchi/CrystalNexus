@@ -7,9 +7,12 @@
     <title>CrystalNexus</title>
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <link rel="stylesheet" href="/static/css/styles.css">
-    <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.0.4/3Dmol-min.js"
+        integrity="sha512-Rv1hloLY1O/z+XwWruWkqI1XeKwo8C0QdMTaptIiJTjjI2e+Hd8jl6aA6UVTtxWCZ+Otcthjmk8iik/XdH5Cjg=="
+        crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
+        integrity="sha512-XMVd28F1oH/O71fzwBnV7HucLxVwtxf26XV8P4wPk26EDxuGZ91N8bsOttmnomcCD3CS5ZMRL50H0GgOHvegtg=="
+        crossorigin="anonymous"></script>
     <script src="/static/js/utils.js"></script>
     <script src="/static/js/auto_mode_chart.js"></script>
     <style>
@@ -448,7 +451,7 @@
                         <div class="result-item" id="energy-item">
                             <div class="result-summary">
                                 <span id="energy-summary">⚡ Energy: - eV</span>
-                                <button class="detail-btn" onclick="toggleDetail('energy')" id="energy-detail-btn"
+                                <button class="detail-btn" onclick="toggleDetail(event, 'energy')" id="energy-detail-btn"
                                     style="display: none;">Details ▼</button>
                             </div>
                             <div class="detail-drawer" id="energy-detail" style="display: none;">
@@ -462,7 +465,7 @@
                         <div class="result-item" id="magnetic-item">
                             <div class="result-summary">
                                 <span id="magnetic-summary">🧲 Magnetic: - µB total</span>
-                                <button class="detail-btn" onclick="toggleDetail('magnetic')" id="magnetic-detail-btn"
+                                <button class="detail-btn" onclick="toggleDetail(event, 'magnetic')" id="magnetic-detail-btn"
                                     style="display: none;">Details ▼</button>
                             </div>
                             <div class="detail-drawer" id="magnetic-detail" style="display: none;">
@@ -621,9 +624,15 @@
     </div>
 
     <script>
+        // Debug logging gate: set DEBUG_UI = true to re-enable verbose console output
+        const DEBUG_UI = false;
+        const dlog = DEBUG_UI ? console.log.bind(console) : () => {};
+
         window.currentCrystalData = null;
         let supercellData = null;
         let chgnetElements = [];
+        // Shared controller to abort an in-flight CIF analysis when a new file is selected
+        let analysisAbortController = null;
 
         // Immutable original data (never changes after modal closes) - GLOBAL for robust system
         window.originalSupercellData = null;
@@ -638,7 +647,7 @@
 
         // Generate session ID
         window.sessionId = 'session-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
-        console.log('Session ID:', window.sessionId);
+        dlog('Session ID:', window.sessionId);
 
         // Unified status display system
         window.displayStatus = {
@@ -760,7 +769,7 @@
 
                 if (response.ok) {
                     const result = await response.json();
-                    console.log('✅ Session updated with operations:', result);
+                    dlog('✅ Session updated with operations:', result);
 
                     // Update status to ready for calculation when structure changes
                     updateStatusDisplay('energy', 'ready');
@@ -893,13 +902,18 @@
         }
 
         async function analyzeSampleFile(filename) {
+            // Cancel any in-flight analysis so a stale response cannot clobber globals
+            if (analysisAbortController) analysisAbortController.abort();
+            analysisAbortController = new AbortController();
+            const signal = analysisAbortController.signal;
             try {
                 const response = await fetch('/api/analyze-cif-sample', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ filename: filename })
+                    body: JSON.stringify({ filename: filename }),
+                    signal: signal
                 });
 
                 if (!response.ok) {
@@ -907,14 +921,14 @@
                     let errorMessage = 'An error occurred while analyzing the file.';
                     try {
                         const errorText = await response.text();
-                        console.log('Error response text:', errorText);
+                        dlog('Error response text:', errorText);
                         const errorData = JSON.parse(errorText);
                         if (errorData.detail) {
                             // Use server's detailed error message (user-friendly)
                             errorMessage = errorData.detail;
                         }
                     } catch (e) {
-                        console.log('Failed to parse error response:', e);
+                        dlog('Failed to parse error response:', e);
                         // If we can't parse JSON, provide generic user-friendly message
                         if (response.status === 400) {
                             errorMessage = 'Invalid file format or structure data.';
@@ -928,12 +942,18 @@
                 const data = await response.json();
                 displayCrystalInfo(data);
             } catch (error) {
+                // Superseded by a newer analysis request; exit silently
+                if (error.name === 'AbortError') return;
                 console.error('Error analyzing sample file:', error);
                 alert(`Error analyzing CIF file: ${error.message}`);
             }
         }
 
         async function analyzeUploadedFile(file) {
+            // Cancel any in-flight analysis so a stale response cannot clobber globals
+            if (analysisAbortController) analysisAbortController.abort();
+            analysisAbortController = new AbortController();
+            const signal = analysisAbortController.signal;
             try {
                 // Show loading status for drag & drop
                 showFileLoadingStatus();
@@ -944,6 +964,8 @@
                 // Add timeout to prevent infinite loading
                 const timeoutController = new AbortController();
                 const timeoutId = setTimeout(() => timeoutController.abort(), 30000); // 30 second timeout
+                // Propagate supersede-abort to the fetch controller (which also handles timeout)
+                signal.addEventListener('abort', () => timeoutController.abort());
 
                 const response = await fetch('/api/analyze-cif-upload', {
                     method: 'POST',
@@ -958,14 +980,14 @@
                     let errorMessage = 'An error occurred while analyzing the file.';
                     try {
                         const errorText = await response.text();
-                        console.log('Error response text:', errorText);
+                        dlog('Error response text:', errorText);
                         const errorData = JSON.parse(errorText);
                         if (errorData.detail) {
                             // Use server's detailed error message (user-friendly)
                             errorMessage = errorData.detail;
                         }
                     } catch (e) {
-                        console.log('Failed to parse error response:', e);
+                        dlog('Failed to parse error response:', e);
                         // If we can't parse JSON, provide generic user-friendly message
                         if (response.status === 400) {
                             errorMessage = 'Invalid file format or structure data.';
@@ -985,9 +1007,9 @@
                 window.currentFilename = file.name;
                 window.currentFullPath = file.name;
 
-                console.log('📁 UPLOAD: Set filename variables in analyzeUploadedFile:');
-                console.log('  - currentFilename:', window.currentFilename);
-                console.log('  - currentFullPath:', window.currentFullPath);
+                dlog('📁 UPLOAD: Set filename variables in analyzeUploadedFile:');
+                dlog('  - currentFilename:', window.currentFilename);
+                dlog('  - currentFullPath:', window.currentFullPath);
 
                 displayCrystalInfo(data);
 
@@ -998,6 +1020,9 @@
                     updateAnalyzeButtonState();
                 }
             } catch (error) {
+                // Superseded by a newer analysis request; exit silently
+                // (checked via signal.aborted so a genuine timeout still reports below)
+                if (signal.aborted) return;
                 console.error('Error analyzing uploaded file:', error);
 
                 let errorMessage = error.message;
@@ -1183,56 +1208,6 @@
             }
         }
 
-        function processCIFFile(file) {
-            const reader = new FileReader();
-
-            reader.onload = function (e) {
-                try {
-                    const formData = new FormData();
-                    formData.append('file', file);
-
-                    // Process the CIF file through existing upload logic
-                    fetch('/api/upload-cif', {
-                        method: 'POST',
-                        body: formData
-                    })
-                        .then(response => response.json())
-                        .then(data => {
-                            if (data.success) {
-                                showFileLoadSuccess(file.name);
-                                // Continue with existing processing logic
-                                // Store both full filename and base name for different API uses
-                                window.currentFilename = file.name; // For uploaded files, this is just basename
-                                window.currentFullPath = file.name; // Same as filename for uploads
-
-                                console.log('📁 UPLOAD: Set filename variables:');
-                                console.log('  - currentFilename:', window.currentFilename);
-                                console.log('  - currentFullPath:', window.currentFullPath);
-
-                                displayCrystalInfo(data);
-                                // Reset analysis state for new file
-                                isStructureAnalyzed = false;
-                                currentStructureHash = null;
-                                updateAnalyzeButtonState();
-                            } else {
-                                showFileLoadError(data.message || 'Failed to process CIF file');
-                            }
-                        })
-                        .catch(error => {
-                            showFileLoadError('Network error: ' + error.message);
-                        });
-                } catch (error) {
-                    showFileLoadError('Error reading file: ' + error.message);
-                }
-            };
-
-            reader.onerror = function () {
-                showFileLoadError('Error reading file');
-            };
-
-            reader.readAsText(file);
-        }
-
         // Visual Feedback Functions
         function showFileLoadingStatus() {
             const statusArea = document.getElementById('fileStatusArea');
@@ -1250,7 +1225,7 @@
             const statusHTML = `
                 <div class="file-status success">
                     <span class="status-icon">✅</span>
-                    <span>Successfully loaded: ${filename}</span>
+                    <span>Successfully loaded: ${escapeHtml(filename)}</span>
                 </div>
             `;
             statusArea.innerHTML = statusHTML;
@@ -1266,7 +1241,7 @@
             const statusHTML = `
                 <div class="file-status error">
                     <span class="status-icon">❌</span>
-                    <span>Error: ${message}</span>
+                    <span>Error: ${escapeHtml(message)}</span>
                 </div>
             `;
             statusArea.innerHTML = statusHTML;
@@ -1279,190 +1254,23 @@
             }
         }
 
-        // Enhanced Error Handling
-        function handleFileError(error, context = {}) {
-            let errorMessage = 'Unknown error occurred';
-            let suggestions = [];
-
-            switch (error.type) {
-                case 'FILE_TOO_LARGE':
-                    errorMessage = `File is too large (${error.size}MB). Maximum size is 50MB.`;
-                    suggestions = ['Try a smaller CIF file', 'Compress the file if possible'];
-                    break;
-
-                case 'FILE_READ_ERROR':
-                    errorMessage = 'Could not read the file. The file may be corrupted.';
-                    suggestions = ['Check if the file is accessible', 'Try uploading again'];
-                    break;
-
-                case 'NETWORK_ERROR':
-                    errorMessage = 'Network error occurred during upload.';
-                    suggestions = ['Check your internet connection', 'Try again in a moment'];
-                    break;
-
-                case 'SERVER_ERROR':
-                    errorMessage = 'Server error occurred while processing the file.';
-                    suggestions = ['Try again later', 'Contact system administrator if problem persists'];
-                    break;
-
-                case 'INVALID_FORMAT':
-                    errorMessage = 'Invalid CIF file format.';
-                    suggestions = ['Ensure the file is a valid CIF format', 'Check file contents in text editor'];
-                    break;
-
-                default:
-                    errorMessage = error.message || 'An unexpected error occurred';
-                    suggestions = ['Try uploading the file again'];
-            }
-
-            showDetailedErrorMessage(errorMessage, suggestions);
-        }
-
-        function showDetailedErrorMessage(message, suggestions) {
-            const statusArea = document.getElementById('fileStatusArea');
-            const suggestionsHTML = suggestions.map(s => `<li>${s}</li>`).join('');
-
-            const errorHTML = `
-                <div class="error-details">
-                    <div class="error-message">
-                        <span class="status-icon">⚠️</span>
-                        ${message}
-                    </div>
-                    <div class="error-suggestions">
-                        <strong>Try these solutions:</strong>
-                        <ul>${suggestionsHTML}</ul>
-                    </div>
-                </div>
-            `;
-
-            statusArea.innerHTML = errorHTML;
-        }
-
-        // Enhanced file processing with client-side handling
-        function processCIFFileEnhanced(file) {
-            // Basic file validation
-            if (file.size > 50 * 1024 * 1024) {
-                handleFileError({
-                    type: 'FILE_TOO_LARGE',
-                    size: (file.size / 1024 / 1024).toFixed(1)
-                });
-                return;
-            }
-
-            if (file.size === 0) {
-                handleFileError({
-                    type: 'FILE_READ_ERROR',
-                    message: 'File appears to be empty'
-                });
-                return;
-            }
-
-            if (!file.name.toLowerCase().endsWith('.cif')) {
-                handleFileError({
-                    type: 'INVALID_FORMAT',
-                    message: 'File must have .cif extension'
-                });
-                return;
-            }
-
-            const reader = new FileReader();
-
-            reader.onload = function (e) {
-                try {
-                    const cifContent = e.target.result;
-
-                    // Basic CIF content validation
-                    if (!cifContent.includes('data_') || cifContent.trim().length < 50) {
-                        handleFileError({
-                            type: 'INVALID_FORMAT',
-                            message: 'Invalid CIF format - missing data block'
-                        });
-                        return;
-                    }
-
-                    // Use existing sample processing endpoint with CIF content
-                    fetch('/api/analyze-cif-sample', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            filename: file.name,
-                            cif_content: cifContent
-                        })
-                    })
-                        .then(response => {
-                            if (!response.ok) {
-                                throw new Error(`Server error: ${response.status}`);
-                            }
-                            return response.json();
-                        })
-                        .then(data => {
-                            if (data.success) {
-                                showFileLoadSuccess(file.name);
-                                // Store both full filename and base name for different API uses
-                                window.currentFilename = file.name; // For uploaded files, this is just basename
-                                window.currentFullPath = file.name; // Same as filename for uploads
-                                displayCrystalInfo(data);
-                                // Reset analysis state for new file
-                                isStructureAnalyzed = false;
-                                currentStructureHash = null;
-                                updateAnalyzeButtonState();
-                            } else {
-                                handleFileError({
-                                    type: 'SERVER_ERROR',
-                                    message: data.message || 'Failed to process CIF file'
-                                });
-                            }
-                        })
-                        .catch(error => {
-                            if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
-                                handleFileError({
-                                    type: 'NETWORK_ERROR',
-                                    message: 'Cannot connect to server'
-                                });
-                            } else {
-                                handleFileError({
-                                    type: 'SERVER_ERROR',
-                                    message: error.message
-                                });
-                            }
-                        });
-                } catch (error) {
-                    handleFileError({
-                        type: 'FILE_READ_ERROR',
-                        message: error.message
-                    });
-                }
-            };
-
-            reader.onerror = function () {
-                handleFileError({
-                    type: 'FILE_READ_ERROR',
-                    message: 'Failed to read file'
-                });
-            };
-
-            reader.readAsText(file);
-        }
-
         function setupCHGNetEventListeners() {
             const analyzeBtn = document.getElementById('analyze-btn');
 
             if (analyzeBtn) {
                 analyzeBtn.addEventListener('click', async () => {
-                    console.log('🔬 ANALYZE: Button clicked');
-                    console.log('🔬 ANALYZE: supercellData available:', !!supercellData);
-                    console.log('🔬 ANALYZE: currentFilename:', window.currentFilename);
-                    console.log('🔬 ANALYZE: supercellData:', supercellData);
+                    dlog('🔬 ANALYZE: Button clicked');
+                    dlog('🔬 ANALYZE: supercellData available:', !!supercellData);
+                    dlog('🔬 ANALYZE: currentFilename:', window.currentFilename);
+                    dlog('🔬 ANALYZE: supercellData:', supercellData);
 
                     if (supercellData && window.currentFilename) {
-                        console.log('✅ ANALYZE: Conditions met, running analysis...');
+                        dlog('✅ ANALYZE: Conditions met, running analysis...');
                         await runCHGNetAnalysis();
                     } else {
-                        console.log('❌ ANALYZE: Conditions not met - cannot run analysis');
-                        if (!supercellData) console.log('  - Missing supercellData');
-                        if (!window.currentFilename) console.log('  - Missing currentFilename');
+                        dlog('❌ ANALYZE: Conditions not met - cannot run analysis');
+                        if (!supercellData) dlog('  - Missing supercellData');
+                        if (!window.currentFilename) dlog('  - Missing currentFilename');
                     }
                 });
             }
@@ -1610,7 +1418,7 @@
             statusDiv.style.display = 'none';
         }
 
-        function toggleDetail(section) {
+        function toggleDetail(event, section) {
             const detailDiv = document.getElementById(section + '-detail');
             const button = event.target;
 
@@ -1664,15 +1472,15 @@
 
             // Store data for analysis modal
             if (isRelaxation) {
-                console.log('=== Setting currentAnalysisData ===');
-                console.log('isRelaxation:', isRelaxation);
-                console.log('Data being stored:', data);
+                dlog('=== Setting currentAnalysisData ===');
+                dlog('isRelaxation:', isRelaxation);
+                dlog('Data being stored:', data);
                 window.currentAnalysisData = data;
-                console.log('currentAnalysisData set to:', window.currentAnalysisData);
+                dlog('currentAnalysisData set to:', window.currentAnalysisData);
                 document.getElementById('analysisActions').style.display = 'flex';
-                console.log('Analysis actions displayed');
+                dlog('Analysis actions displayed');
             } else {
-                console.log('Not a relaxation, skipping analysis data storage');
+                dlog('Not a relaxation, skipping analysis data storage');
             }
         }
 
@@ -1740,7 +1548,7 @@
                         numAtoms: numAtoms
                     }
                 };
-                console.log('Energy analysis data set:', window.energyAnalysisData);
+                dlog('Energy analysis data set:', window.energyAnalysisData);
 
                 // Add initial data if available (for relaxation)
                 if (isRelaxation && initialPred && initialPred.energy_eV_per_atom !== undefined) {
@@ -1830,7 +1638,7 @@
                 analyzeBtn.classList.add('needs-analysis');
             }
 
-            console.log('🔄 Physical properties reset - analysis required');
+            dlog('🔄 Physical properties reset - analysis required');
         }
 
         function clearStatusMessage() {
@@ -1864,14 +1672,14 @@
             // Toggle both together for simplicity
             displayUnitCell = !displayUnitCell;
             displayAxes = displayUnitCell; // Keep them synchronized
-            console.log(`🧊 ROBUST: Structure elements toggled to: ${displayUnitCell ? 'ON' : 'OFF'}`);
+            dlog(`🧊 ROBUST: Structure elements toggled to: ${displayUnitCell ? 'ON' : 'OFF'}`);
             performCompleteRebuild('STRUCTURE_ELEMENTS_TOGGLE');
         }
 
         // Independent bond toggle function
         function toggleBondsRobust() {
             displayBonds = !displayBonds;
-            console.log(`🔗 ROBUST: Bonds toggled to: ${displayBonds ? 'ON' : 'OFF'}`);
+            dlog(`🔗 ROBUST: Bonds toggled to: ${displayBonds ? 'ON' : 'OFF'}`);
             updateMoleculeStyleRobust();
         }
 
@@ -1886,16 +1694,16 @@
                 const style = { sphere: { scale: 0.3 } };
                 if (displayBonds) {
                     style.stick = { radius: 0.1 };
-                    console.log('🔗 ROBUST: Applying style with bonds');
+                    dlog('🔗 ROBUST: Applying style with bonds');
                 } else {
-                    console.log('🔗 ROBUST: Applying style without bonds');
+                    dlog('🔗 ROBUST: Applying style without bonds');
                 }
 
                 window.viewer3D.setStyle({}, style);
                 window.viewer3D.render();
                 syncBondButtonState();
 
-                console.log(`✅ ROBUST: Style updated - Bonds: ${displayBonds ? 'ON' : 'OFF'}`);
+                dlog(`✅ ROBUST: Style updated - Bonds: ${displayBonds ? 'ON' : 'OFF'}`);
 
             } catch (error) {
                 console.error('❌ ROBUST: Failed to update molecule style:', error);
@@ -1904,8 +1712,8 @@
 
         // Complete rebuild function - maximum robustness
         async function performCompleteRebuild(reason) {
-            console.log(`🔄 ROBUST: Starting complete rebuild due to: ${reason}`);
-            console.log(`   Target state - UnitCell: ${displayUnitCell}, Axes: ${displayAxes}`);
+            dlog(`🔄 ROBUST: Starting complete rebuild due to: ${reason}`);
+            dlog(`   Target state - UnitCell: ${displayUnitCell}, Axes: ${displayAxes}`);
 
             try {
                 // Step 1: Complete destruction with redundant operations
@@ -1925,7 +1733,7 @@
                 // Step 5: Sync button states
                 syncButtonStates();
 
-                console.log('✅ ROBUST: Complete rebuild finished successfully');
+                dlog('✅ ROBUST: Complete rebuild finished successfully');
 
             } catch (error) {
                 console.error('❌ ROBUST: Rebuild failed:', error);
@@ -1935,7 +1743,7 @@
 
         // Complete destruction with redundant operations
         async function performCompleteDestruction() {
-            console.log('🗑️ ROBUST: Performing complete destruction...');
+            dlog('🗑️ ROBUST: Performing complete destruction...');
 
             if (!window.viewer3D) {
                 console.warn('⚠️ ROBUST: No 3D viewer available');
@@ -1945,7 +1753,7 @@
             // Multiple attempts to clear everything
             for (let attempt = 0; attempt < 3; attempt++) {
                 try {
-                    console.log(`   Destruction attempt ${attempt + 1}/3`);
+                    dlog(`   Destruction attempt ${attempt + 1}/3`);
 
                     // Clear all content safely
                     const viewerElement = document.getElementById('3dmol-viewer');
@@ -1968,12 +1776,12 @@
                 }
             }
 
-            console.log('🧹 ROBUST: Complete destruction finished');
+            dlog('🧹 ROBUST: Complete destruction finished');
         }
 
         // Rebuild structure from scratch
         async function rebuildStructureFromScratch() {
-            console.log('🔧 ROBUST: Rebuilding structure from scratch...');
+            dlog('🔧 ROBUST: Rebuilding structure from scratch...');
 
             try {
                 // Get fresh structure data from server
@@ -1993,7 +1801,7 @@
 
                 window.viewer3D.zoomTo();
 
-                console.log('🏗️ ROBUST: Structure rebuilt successfully');
+                dlog('🏗️ ROBUST: Structure rebuilt successfully');
 
             } catch (error) {
                 console.error('❌ ROBUST: Structure rebuild failed:', error);
@@ -2003,7 +1811,7 @@
 
         // Fetch current structure data
         async function fetchCurrentStructureData() {
-            console.log('🌐 ROBUST: Fetching current structure data...');
+            dlog('🌐 ROBUST: Fetching current structure data...');
 
             try {
                 if (!window.currentFilename || !window.currentSupercellSize) {
@@ -2016,7 +1824,7 @@
                     operations: window.atomicOperations || []
                 };
 
-                console.log('   Parameters:', params);
+                dlog('   Parameters:', params);
 
                 const response = await fetch('/api/generate-modified-structure-cif', {
                     method: 'POST',
@@ -2029,7 +1837,7 @@
                 }
 
                 currentStructureCif = await response.text();
-                console.log(`📄 ROBUST: Structure data fetched (${currentStructureCif.length} chars)`);
+                dlog(`📄 ROBUST: Structure data fetched (${currentStructureCif.length} chars)`);
 
             } catch (error) {
                 console.error('❌ ROBUST: Failed to fetch structure data:', error);
@@ -2039,7 +1847,7 @@
 
         // Add unit cell with robust approach
         async function addUnitCellRobust() {
-            console.log('📦 ROBUST: Adding unit cell...');
+            dlog('📦 ROBUST: Adding unit cell...');
 
             try {
                 // Multiple attempts to ensure unit cell is added
@@ -2056,7 +1864,7 @@
                             scalingFactor: 1.0,  // Ensure 1:1 aspect ratio
                             keepAspectRatio: true  // Maintain proper cubic proportions
                         });
-                        console.log(`   Unit cell added successfully (attempt ${attempt + 1})`);
+                        dlog(`   Unit cell added successfully (attempt ${attempt + 1})`);
                         break;
                     } catch (error) {
                         console.warn(`   Unit cell attempt ${attempt + 1} failed:`, error);
@@ -2085,7 +1893,7 @@
             }
 
             const value = window.energyAnalysisData.final.totalEnergy;
-            console.log('Copying total energy (eV):', value);
+            dlog('Copying total energy (eV):', value);
             const result = await smartCopyToClipboard(value.toString());
 
             const button = document.getElementById('copy-total-energy');
@@ -2114,7 +1922,7 @@
             }
 
             const value = window.currentMagneticData.totalMagnetic;
-            console.log('Copying total magnetic moment (µB):', value);
+            dlog('Copying total magnetic moment (µB):', value);
             const result = await smartCopyToClipboard(value.toFixed(3));
 
             const button = document.getElementById('copy-total-magnetic');
@@ -2160,7 +1968,7 @@
                 energyText += `Sum of site energies: ${siteSum.toFixed(6)} eV\n`;
             }
 
-            console.log('Copying all energy data:', energyText);
+            dlog('Copying all energy data:', energyText);
             const result = await smartCopyToClipboard(energyText);
 
             // Show feedback on any visible energy copy button
@@ -2190,7 +1998,7 @@
                 });
             }
 
-            console.log('Copying all magnetic data:', magneticText);
+            dlog('Copying all magnetic data:', magneticText);
             const result = await smartCopyToClipboard(magneticText);
 
             // Show feedback on any visible magnetic copy button
@@ -2208,7 +2016,7 @@
                 return;
             }
 
-            console.log('Copying formula:', formula);
+            dlog('Copying formula:', formula);
             const result = await smartCopyToClipboard(formula);
 
             // Find the button that was clicked
@@ -2298,7 +2106,7 @@ Volume = ${relaxedInfo.volume.toFixed(5)} Ų
 ⚡ Structure relaxed with CHGNet
 Note: CHGNet may overestimate lattice constants and underestimate density`;
 
-                console.log('Copying relaxed crystal information');
+                dlog('Copying relaxed crystal information');
                 const result = await smartCopyToClipboard(crystalInfoText);
 
                 const button = document.getElementById('copy-main-crystal-info');
@@ -2351,7 +2159,7 @@ Volume = ${supercell.volume.toFixed(5)} Ų
 
 Note: Symmetry information excluded for supercell structure`;
 
-            console.log('Copying original crystal information');
+            dlog('Copying original crystal information');
             const result = await smartCopyToClipboard(crystalInfoText);
 
             const button = document.getElementById('copy-main-crystal-info');
@@ -2389,7 +2197,7 @@ Space group number: ${data.space_group_number}
 Point group: ${data.point_group}
 Crystal system: ${data.crystal_system}`;
 
-            console.log('Copying all crystal information');
+            dlog('Copying all crystal information');
             const result = await smartCopyToClipboard(crystalInfoText);
 
             const button = document.getElementById('copy-crystal-info');
@@ -2398,7 +2206,7 @@ Crystal system: ${data.crystal_system}`;
 
         // Sync button states with current display state
         function syncButtonStates() {
-            console.log('🔄 ROBUST: Syncing button states...');
+            dlog('🔄 ROBUST: Syncing button states...');
 
             const structureBtn = document.getElementById('structureBtn');
 
@@ -2417,7 +2225,7 @@ Crystal system: ${data.crystal_system}`;
             // Also sync bond button
             syncBondButtonState();
 
-            console.log(`   Button states synced - Structure: ${displayUnitCell ? 'ON' : 'OFF'}, Bonds: ${displayBonds ? 'ON' : 'OFF'}`);
+            dlog(`   Button states synced - Structure: ${displayUnitCell ? 'ON' : 'OFF'}, Bonds: ${displayBonds ? 'ON' : 'OFF'}`);
         }
 
         // Sync bond button state
@@ -2466,12 +2274,12 @@ Crystal system: ${data.crystal_system}`;
 
         // Reset robust display state
         function resetRobustDisplayState() {
-            console.log('🔄 ROBUST: Resetting display state...');
+            dlog('🔄 ROBUST: Resetting display state...');
             displayUnitCell = true;  // Initial state ON
             displayAxes = true;      // Initial state ON
             displayBonds = true;     // Initial state ON
             currentStructureCif = null;
-            console.log(`   State reset - UnitCell: ${displayUnitCell}, Axes: ${displayAxes}, Bonds: ${displayBonds}`);
+            dlog(`   State reset - UnitCell: ${displayUnitCell}, Axes: ${displayAxes}, Bonds: ${displayBonds}`);
             syncButtonStates();
         }
 
@@ -2511,81 +2319,6 @@ Crystal system: ${data.crystal_system}`;
 
         // displaySiteEnergiesResults function removed - Site Energies are now displayed in Energy details
 
-        function displayForcesResults(prediction) {
-            const forcesSummary = document.getElementById('forces-summary');
-            const forcesTable = document.getElementById('forces-table');
-
-            if (prediction.forces_eV_per_A) {
-                const forces = prediction.forces_eV_per_A;
-                const maxForce = Math.max(...forces.flat().map(Math.abs));
-                forcesSummary.innerHTML = `💪 Forces: <span class="force-vector">Max ${maxForce.toFixed(4)} eV/Å</span>`;
-
-                let tableHTML = '<table class="detail-table">';
-                forces.forEach((force, i) => {
-                    const magnitude = Math.sqrt(force[0] ** 2 + force[1] ** 2 + force[2] ** 2);
-                    tableHTML += `<tr><td>Atom ${i + 1}:</td><td class="force-vector">[${force[0].toFixed(4)}, ${force[1].toFixed(4)}, ${force[2].toFixed(4)}] (|F|=${magnitude.toFixed(4)} eV/Å)</td></tr>`;
-                });
-                tableHTML += '</table>';
-                forcesTable.innerHTML = tableHTML;
-            } else {
-                forcesSummary.textContent = '💪 Forces: Not available';
-                forcesTable.innerHTML = 'Forces data not available';
-            }
-        }
-
-        function displayStressResults(prediction) {
-            const stressSummary = document.getElementById('stress-summary');
-            const stressTable = document.getElementById('stress-table');
-
-            if (prediction.stress_GPa) {
-                const stress = prediction.stress_GPa;
-                const maxStress = Math.max(...stress.flat().map(Math.abs));
-                stressSummary.innerHTML = `🔧 Stress: <span class="force-vector">Max ${maxStress.toFixed(4)} GPa</span>`;
-
-                // Matrix display for stress tensor
-                let matrixHTML = `
-                    <tr><td colspan="2"><strong>Stress Tensor Matrix (GPa):</strong></td></tr>
-                    <tr><td colspan="2">
-                        <div class="stress-matrix">
-                            <table>
-                                <tr>
-                                    <td>${stress[0][0].toFixed(3)}</td>
-                                    <td>${stress[0][1].toFixed(3)}</td>
-                                    <td>${stress[0][2].toFixed(3)}</td>
-                                </tr>
-                                <tr>
-                                    <td>${stress[1][0].toFixed(3)}</td>
-                                    <td>${stress[1][1].toFixed(3)}</td>
-                                    <td>${stress[1][2].toFixed(3)}</td>
-                                </tr>
-                                <tr>
-                                    <td>${stress[2][0].toFixed(3)}</td>
-                                    <td>${stress[2][1].toFixed(3)}</td>
-                                    <td>${stress[2][2].toFixed(3)}</td>
-                                </tr>
-                            </table>
-                        </div>
-                    </td></tr>
-                    <tr><td colspan="2"><strong>Individual Components:</strong></td></tr>
-                `;
-
-                // Add individual components for reference
-                for (let i = 0; i < 3; i++) {
-                    for (let j = 0; j < 3; j++) {
-                        matrixHTML += `<tr><td>σ[${i + 1},${j + 1}]:</td><td class="force-vector">${stress[i][j].toFixed(4)} GPa</td></tr>`;
-                    }
-                }
-
-                stressTable.innerHTML = matrixHTML;
-            } else {
-                stressSummary.textContent = '🔧 Stress: Not available';
-                stressTable.innerHTML = '<tr><td>Stress:</td><td>Not available</td></tr>';
-            }
-        }
-
-
-
-
 
         async function runCHGNetAnalysis() {
             try {
@@ -2608,7 +2341,7 @@ Crystal system: ${data.crystal_system}`;
                     max_steps: maxSteps
                 };
 
-                console.log('🔬 Starting CHGNet analysis:', requestData);
+                dlog('🔬 Starting CHGNet analysis:', requestData);
 
                 const response = await fetch('/api/chgnet-relax', {
                     method: 'POST',
@@ -2640,7 +2373,7 @@ Crystal system: ${data.crystal_system}`;
                 setCHGNetButtonState('calculating_structure');
 
                 const data = await response.json();
-                console.log('✅ CHGNet analysis completed:', data);
+                dlog('✅ CHGNet analysis completed:', data);
 
                 // Properties calculation phase
                 setCHGNetButtonState('calculating_properties');
@@ -2730,48 +2463,19 @@ Crystal system: ${data.crystal_system}`;
             // Clear structure cache to force reload with new relaxed data
             currentStructureCif = null;
 
-            console.log('✅ Structure information updated with relaxed data');
+            dlog('✅ Structure information updated with relaxed data');
         }
 
         async function updateRelaxed3DVisualization() {
-            // Performance tracking
-            const debugStartTime = performance.now();
-            const debugTimestamp = new Date().toISOString();
-
-            console.log('════════════════════════════════════════');
-            console.log(`🚀 RELAXED 3D VISUALIZATION UPDATE START - ${debugTimestamp}`);
-            console.log('════════════════════════════════════════');
-
-            // System state validation
-            console.log('🔍 SYSTEM STATE VALIDATION:');
-            console.log(`  ├─ viewer3D exists: ${!!window.viewer3D}`);
-            console.log(`  ├─ currentFilename: ${window.currentFilename}`);
-            console.log(`  ├─ currentSupercellSize: ${JSON.stringify(window.currentSupercellSize)}`);
-            console.log(`  ├─ sessionId: ${window.sessionId}`);
-            console.log(`  ├─ atomicOperations count: ${window.atomicOperations?.length || 0}`);
-            console.log(`  └─ browser: ${navigator.userAgent}`);
-
             if (!window.viewer3D || !window.currentFilename || !window.currentSupercellSize) {
-                console.warn('⚠️ VALIDATION FAILED: Missing required parameters');
-                console.log('  └─ Aborting relaxed structure update');
+                console.warn('Relaxed 3D update skipped: missing viewer, filename, or supercell size');
                 return;
             }
 
             try {
-                console.log('🔄 STARTING 3D VISUALIZATION UPDATE PROCESS');
-
-                // Prepare request data with validation
                 const requestData = {
                     session_id: window.sessionId
                 };
-                console.log('📋 REQUEST DATA PREPARED:');
-                console.log(`  └─ ${JSON.stringify(requestData, null, 2)}`);
-
-                // Network request timing
-                const apiStartTime = performance.now();
-                console.log('📡 INITIATING API CALL TO /api/generate-relaxed-structure-cif');
-                console.log(`  ├─ Timestamp: ${new Date().toISOString()}`);
-                console.log(`  └─ Payload size: ${JSON.stringify(requestData).length} bytes`);
 
                 const response = await fetch('/api/generate-relaxed-structure-cif', {
                     method: 'POST',
@@ -2779,20 +2483,8 @@ Crystal system: ${data.crystal_system}`;
                     body: JSON.stringify(requestData)
                 });
 
-                const apiDuration = performance.now() - apiStartTime;
-                console.log('📡 API RESPONSE RECEIVED:');
-                console.log(`  ├─ Status: ${response.status} ${response.statusText}`);
-                console.log(`  ├─ Response time: ${apiDuration.toFixed(2)}ms`);
-                console.log(`  ├─ Content-Type: ${response.headers.get('content-type')}`);
-                console.log(`  ├─ Content-Length: ${response.headers.get('content-length') || 'unknown'}`);
-                console.log(`  └─ Headers: ${JSON.stringify(Object.fromEntries(response.headers))}`);
-
                 if (!response.ok) {
-                    console.error('❌ API ERROR DETECTED:');
                     const errorText = await response.text();
-                    console.error(`  ├─ Error text length: ${errorText.length}`);
-                    console.error(`  ├─ Error text preview: ${errorText.substring(0, 500)}`);
-                    console.error(`  └─ Full error text: ${errorText}`);
 
                     let errorMessage = 'Error occurred while fetching structure data.';
                     try {
@@ -2810,118 +2502,31 @@ Crystal system: ${data.crystal_system}`;
                     throw new Error(errorMessage);
                 }
 
-                // CIF data processing
-                const cifProcessStart = performance.now();
-                console.log('📄 PROCESSING CIF DATA:');
                 const cifData = await response.text();
-                const cifProcessDuration = performance.now() - cifProcessStart;
 
-                console.log(`  ├─ CIF data length: ${cifData.length} characters`);
-                console.log(`  ├─ Processing time: ${cifProcessDuration.toFixed(2)}ms`);
-                console.log(`  ├─ First 300 chars: ${cifData.substring(0, 300)}`);
-                console.log(`  ├─ Contains "data_": ${cifData.includes('data_')}`);
-                console.log(`  ├─ Contains "loop_": ${cifData.includes('loop_')}`);
-                console.log(`  ├─ Contains "_atom_site": ${cifData.includes('_atom_site')}`);
-                console.log(`  └─ Line count: ${cifData.split('\n').length}`);
-
-                // Enhanced CIF validation
                 if (!cifData || cifData.length < 100) {
-                    console.error('❌ CIF VALIDATION FAILED:');
-                    console.error(`  ├─ Data length: ${cifData?.length || 0}`);
-                    console.error(`  ├─ Is null/undefined: ${!cifData}`);
-                    console.error(`  └─ Content preview: "${cifData?.substring(0, 100) || 'EMPTY'}"`);
                     throw new Error(`Invalid CIF data: ${cifData?.length || 0} characters`);
                 }
-
-                // 3Dmol processing with detailed logging
-                console.log('🎮 3DMOL PROCESSING:');
-                console.log('  ├─ Step 1: Clearing existing models');
-                const clearStart = performance.now();
-
-                // Check current state before clearing with compatibility layer
-                const modelsBeforeClear = getViewerModelCount(window.viewer3D);
-                console.log(`  │   ├─ Models before clear: ${modelsBeforeClear}`);
 
                 // Clear viewer safely
                 const viewerElement = document.getElementById('3dmol-viewer');
                 if (viewerElement && viewerElement.offsetWidth > 0 && viewerElement.offsetHeight > 0) {
                     window.viewer3D.clear();
                 } else {
-                    console.warn('⚠️ Skipping viewer clear - element has zero dimensions');
-                }
-                const clearDuration = performance.now() - clearStart;
-
-                const modelsAfterClear = getViewerModelCount(window.viewer3D);
-                console.log(`  │   ├─ Models after clear: ${modelsAfterClear}`);
-                console.log(`  │   └─ Clear duration: ${clearDuration.toFixed(2)}ms`);
-
-                console.log('  ├─ Step 2: Adding CIF model');
-                const addModelStart = performance.now();
-                try {
-                    const modelResult = window.viewer3D.addModel(cifData, 'cif');
-                    const addModelDuration = performance.now() - addModelStart;
-
-                    // Safe logging of modelResult (avoid circular reference)
-                    let modelResultInfo = 'unknown';
-                    try {
-                        if (modelResult === null) {
-                            modelResultInfo = 'null';
-                        } else if (modelResult === undefined) {
-                            modelResultInfo = 'undefined';
-                        } else if (typeof modelResult === 'object') {
-                            // Get basic info without circular reference
-                            const keys = Object.keys(modelResult || {});
-                            const type = modelResult.constructor ? modelResult.constructor.name : 'Object';
-                            modelResultInfo = `${type} with ${keys.length} properties: [${keys.slice(0, 5).join(', ')}${keys.length > 5 ? '...' : ''}]`;
-                        } else {
-                            modelResultInfo = String(modelResult);
-                        }
-                    } catch (e) {
-                        modelResultInfo = `[object - unable to serialize: ${e.message}]`;
-                    }
-
-                    console.log(`  │   ├─ addModel result: ${modelResultInfo}`);
-                    console.log(`  │   ├─ Add model duration: ${addModelDuration.toFixed(2)}ms`);
-                    const modelsAfterAdd = getViewerModelCount(window.viewer3D);
-                    console.log(`  │   └─ Models after add: ${modelsAfterAdd}`);
-
-                    if (modelsAfterAdd === 0) {
-                        console.error('❌ NO MODELS ADDED TO VIEWER:');
-                        console.error(`  ├─ Current model count: ${modelsAfterAdd}`);
-                        console.error(`  ├─ addModel return value: ${modelResultInfo}`);
-                        console.error(`  ├─ CIF data valid: ${!!cifData && cifData.length > 100}`);
-                        console.error(`  └─ Viewer3D methods: ${Object.getOwnPropertyNames(Object.getPrototypeOf(window.viewer3D)).slice(0, 10).join(', ')}`);
-                        throw new Error('Failed to add CIF model to 3Dmol viewer');
-                    }
-                } catch (addModelError) {
-                    console.error('❌ ERROR IN addModel:');
-                    console.error(`  ├─ Error message: ${addModelError.message}`);
-                    console.error(`  ├─ Error stack: ${addModelError.stack}`);
-                    console.error(`  └─ CIF data starts with: ${cifData.substring(0, 100)}`);
-                    throw addModelError;
+                    console.warn('Skipping viewer clear - element has zero dimensions');
                 }
 
-                console.log('  ├─ Step 3: Setting visual style');
-                const styleStart = performance.now();
-                try {
-                    // Apply styling with bond state consideration
-                    console.log('  │   ├─ About to call updateMoleculeStyleRobust()');
-                    updateMoleculeStyleRobust();
-                    console.log('  │   ├─ updateMoleculeStyleRobust() completed successfully');
-                } catch (styleError) {
-                    console.error('❌ ERROR in updateMoleculeStyleRobust():');
-                    console.error(`  │   ├─ Error: ${styleError.message}`);
-                    console.error(`  │   └─ Stack: ${styleError.stack}`);
-                    throw styleError;
+                window.viewer3D.addModel(cifData, 'cif');
+                if (getViewerModelCount(window.viewer3D) === 0) {
+                    throw new Error('Failed to add CIF model to 3Dmol viewer');
                 }
-                const styleDuration = performance.now() - styleStart;
-                console.log(`  │   └─ Style duration: ${styleDuration.toFixed(2)}ms`);
 
-                console.log('  ├─ Step 4: Adding unit cell (conditional)');
-                const unitCellStart = performance.now();
+                // Apply styling with bond state consideration
+                updateMoleculeStyleRobust();
+
+                // Add unit cell (conditional, non-critical)
                 try {
                     if (displayUnitCell) {
-                        console.log('  │   ├─ About to call addUnitCell()');
                         window.viewer3D.addUnitCell({
                             box: {
                                 color: 'black',
@@ -2930,101 +2535,35 @@ Crystal system: ${data.crystal_system}`;
                             },
                             axes: displayAxes  // Include axes based on state
                         });
-                        console.log(`  │   ├─ addUnitCell() completed successfully`);
-                        console.log(`  │   └─ Unit cell added (state: ON)`);
-                    } else {
-                        console.log(`  │   └─ Unit cell skipped (state: OFF)`);
                     }
                 } catch (unitCellError) {
-                    console.error('❌ ERROR in addUnitCell():');
-                    console.error(`  │   ├─ Error: ${unitCellError.message}`);
-                    console.error(`  │   └─ Stack: ${unitCellError.stack}`);
-                    console.log('  │   └─ Continuing without unit cell...');
-                    // Don't throw, continue with rendering
+                    console.error('Error adding unit cell, continuing without it:', unitCellError);
                 }
-                const unitCellDuration = performance.now() - unitCellStart;
-                console.log(`  │   └─ Unit cell duration: ${unitCellDuration.toFixed(2)}ms`);
 
-                console.log('  ├─ Step 5: Zooming and rendering');
-                const renderStart = performance.now();
-                try {
-                    console.log('  │   ├─ About to call zoomTo()');
-                    window.viewer3D.zoomTo();
-                    console.log('  │   ├─ zoomTo() completed successfully');
-                    console.log('  │   ├─ About to call render()');
-                    window.viewer3D.render();
-                    console.log('  │   ├─ render() completed successfully');
-                } catch (renderError) {
-                    console.error('❌ ERROR in rendering:');
-                    console.error(`  │   ├─ Error: ${renderError.message}`);
-                    console.error(`  │   └─ Stack: ${renderError.stack}`);
-                    throw renderError;
-                }
-                const renderDuration = performance.now() - renderStart;
-                console.log(`  │   └─ Render duration: ${renderDuration.toFixed(2)}ms`);
+                window.viewer3D.zoomTo();
+                window.viewer3D.render();
 
-                console.log('  └─ Step 6: Adding status label');
+                // Add status label (non-critical)
                 try {
-                    console.log('  │   ├─ About to call addStructureStatusLabel()');
                     addStructureStatusLabel('relaxed', 'Relaxed Structure');
-                    console.log('  │   └─ addStructureStatusLabel() completed successfully');
                 } catch (labelError) {
-                    console.error('❌ ERROR in addStructureStatusLabel():');
-                    console.error(`  │   ├─ Error: ${labelError.message}`);
-                    console.error(`  │   └─ Stack: ${labelError.stack}`);
-                    console.log('  │   └─ Continuing without status label...');
-                    // Don't throw, this is not critical
+                    console.error('Error adding structure status label:', labelError);
                 }
-
-                // Final validation
-                const finalModelCount = getViewerModelCount(window.viewer3D);
-                const totalDuration = performance.now() - debugStartTime;
-
-                console.log('✅ 3D VISUALIZATION UPDATE COMPLETED SUCCESSFULLY:');
-                console.log(`  ├─ Final model count: ${finalModelCount}`);
-                console.log(`  ├─ Total duration: ${totalDuration.toFixed(2)}ms`);
-                console.log(`  ├─ API call: ${apiDuration.toFixed(2)}ms`);
-                console.log(`  ├─ CIF processing: ${cifProcessDuration.toFixed(2)}ms`);
-                console.log(`  └─ 3Dmol operations: ${(totalDuration - apiDuration - cifProcessDuration).toFixed(2)}ms`);
-                console.log('════════════════════════════════════════');
 
             } catch (error) {
-                const errorDuration = performance.now() - debugStartTime;
-                console.error('════════════════════════════════════════');
-                console.error('❌ RELAXED 3D VISUALIZATION UPDATE FAILED');
-                console.error('════════════════════════════════════════');
-                console.error('🔍 ERROR ANALYSIS:');
-                console.error(`  ├─ Error type: ${error.constructor.name}`);
-                console.error(`  ├─ Error message: ${error.message}`);
-                console.error(`  ├─ Error stack: ${error.stack}`);
-                console.error(`  ├─ Time to failure: ${errorDuration.toFixed(2)}ms`);
-                console.error(`  └─ Timestamp: ${new Date().toISOString()}`);
-
-                console.error('🖥️ SYSTEM STATE AT ERROR:');
-                console.error(`  ├─ viewer3D exists: ${!!window.viewer3D}`);
-                console.error(`  ├─ viewer3D models: ${window.viewer3D ? getViewerModelCount(window.viewer3D) : 'N/A'}`);
-                console.error(`  ├─ sessionId: ${window.sessionId}`);
-                console.error(`  ├─ currentFilename: ${window.currentFilename}`);
-                console.error(`  ├─ currentSupercellSize: ${JSON.stringify(window.currentSupercellSize)}`);
-                console.error(`  ├─ DOM container exists: ${!!document.getElementById('3dmol-viewer')}`);
-                console.error(`  ├─ Network status: ${navigator.onLine ? 'online' : 'offline'}`);
-                console.error(`  └─ Memory usage: ${performance.memory ? `${(performance.memory.usedJSHeapSize / 1048576).toFixed(2)}MB` : 'N/A'}`);
+                console.error('Relaxed 3D visualization update failed:', error);
 
                 // Clear 3D display to avoid showing incorrect structure
                 if (window.viewer3D) {
-                    console.warn('🧹 CLEANING UP 3D VIEWER');
                     // Clear viewer safely
                     const viewerElement = document.getElementById('3dmol-viewer');
                     if (viewerElement && viewerElement.offsetWidth > 0 && viewerElement.offsetHeight > 0) {
                         window.viewer3D.clear();
-                    } else {
-                        console.warn('⚠️ Skipping viewer clear - element has zero dimensions');
                     }
 
                     // Show clear error message in 3D viewer
                     const container = document.getElementById('3dmol-viewer');
                     if (container) {
-                        console.warn('📺 DISPLAYING ERROR MESSAGE IN 3D CONTAINER');
                         container.innerHTML = `
                             <div style="display: flex; align-items: center; justify-content: center; height: 100%; background: #f8f9fa; border: 2px dashed #dc3545;">
                                 <div style="text-align: center; color: #dc3545; font-size: 14px;">
@@ -3039,7 +2578,6 @@ Crystal system: ${data.crystal_system}`;
                 }
 
                 showNotification('Failed to display relaxed structure. Calculation data is valid.', 'warning');
-                console.error('════════════════════════════════════════');
             }
         }
 
@@ -3125,16 +2663,16 @@ Crystal system: ${data.crystal_system}`;
                 completeDataDeletion();
 
                 // Debug: Check what filename variables we have
-                console.log('🔍 SUPERCELL: Checking filename variables:');
-                console.log('  - window.currentFilename:', window.currentFilename);
-                console.log('  - window.currentFullPath:', window.currentFullPath);
+                dlog('🔍 SUPERCELL: Checking filename variables:');
+                dlog('  - window.currentFilename:', window.currentFilename);
+                dlog('  - window.currentFullPath:', window.currentFullPath);
 
                 // Restore filename for uploaded files (needed for Analyze button)
                 if (window.currentFullPath) {
                     window.currentFilename = window.currentFullPath;
-                    console.log('✅ SUPERCELL: Restored currentFilename:', window.currentFilename);
+                    dlog('✅ SUPERCELL: Restored currentFilename:', window.currentFilename);
                 } else {
-                    console.log('❌ SUPERCELL: No currentFullPath to restore from');
+                    dlog('❌ SUPERCELL: No currentFullPath to restore from');
                 }
 
                 displaySupercellInfo();
@@ -3164,9 +2702,9 @@ Crystal system: ${data.crystal_system}`;
         }
 
         function completeDataDeletion() {
-            console.log('🗑️ DATA_DELETION: Before deletion:');
-            console.log('  - currentFilename:', window.currentFilename);
-            console.log('  - currentFullPath:', window.currentFullPath);
+            dlog('🗑️ DATA_DELETION: Before deletion:');
+            dlog('  - currentFilename:', window.currentFilename);
+            dlog('  - currentFullPath:', window.currentFullPath);
 
             // Complete deletion of original crystal data
             window.currentCrystalData = null;
@@ -3191,16 +2729,16 @@ Crystal system: ${data.crystal_system}`;
                 window.gc();
             }
 
-            console.log('🗑️ DATA_DELETION: After deletion:');
-            console.log('  - currentFilename:', window.currentFilename);
-            console.log('  - currentFullPath:', window.currentFullPath);
+            dlog('🗑️ DATA_DELETION: After deletion:');
+            dlog('  - currentFilename:', window.currentFilename);
+            dlog('  - currentFullPath:', window.currentFullPath);
 
-            console.log('✓ Complete data deletion performed:');
-            console.log('  - window.currentCrystalData set to null');
-            console.log('  - Modal content cleared');
-            console.log('  - Form inputs reset');
-            console.log('  - Temporary variables deleted');
-            console.log('  - Memory cleanup suggested');
+            dlog('✓ Complete data deletion performed:');
+            dlog('  - window.currentCrystalData set to null');
+            dlog('  - Modal content cleared');
+            dlog('  - Form inputs reset');
+            dlog('  - Temporary variables deleted');
+            dlog('  - Memory cleanup suggested');
         }
 
         function displaySupercellInfo() {
@@ -3267,7 +2805,7 @@ Crystal system: ${data.crystal_system}`;
                 const response = await fetch('/api/chgnet-elements');
                 const data = await response.json();
                 chgnetElements = data.elements || [];
-                console.log(`Loaded ${chgnetElements.length} CHGnet supported elements`);
+                dlog(`Loaded ${chgnetElements.length} CHGnet supported elements`);
             } catch (error) {
                 console.error('Error loading CHGnet elements:', error);
                 chgnetElements = [];
@@ -3477,7 +3015,7 @@ Crystal system: ${data.crystal_system}`;
             if (window.autoModeChart) {
                 // If the chart's canvas is different from the one currently in the DOM, it's stale
                 if (window.autoModeChart.canvas !== chartCanvas) {
-                    console.log('♻️ Re-initializing chart (canvas mismatch)');
+                    dlog('♻️ Re-initializing chart (canvas mismatch)');
                     if (typeof window.autoModeChart.destroy === 'function') {
                         window.autoModeChart.destroy();
                     }
@@ -3626,6 +3164,9 @@ Crystal system: ${data.crystal_system}`;
                             // Update Current Best in status UI
                             const currentBest = [...window.insertionCandidates].sort((a, b) => a.energy - b.energy)[0];
                             updateCurrentBest(currentBest.energy, currentBest.label, `INSERT ${element}`);
+                        } else {
+                            // Prediction failed for this site; skip it but leave a trace
+                            console.warn(`Site ${i + 1} energy evaluation failed:`, energyData.detail || energyData);
                         }
                     } catch (err) {
                         if (err.name === 'AbortError') break;
@@ -3645,7 +3186,7 @@ Crystal system: ${data.crystal_system}`;
                     const bestE = sortedCandidates[0].energy;
 
                     window.insertionCandidates.forEach(c => {
-                        if (typeof c.energy === 'number' && c.energy < 99999) {
+                        if (typeof c.energy === 'number') {
                             c.rel_energy = (c.energy - bestE).toFixed(3);
                         } else {
                             c.rel_energy = "N/A";
@@ -3995,7 +3536,7 @@ Crystal system: ${data.crystal_system}`;
                 label: elementLabel
             });
 
-            console.log(`📝 Recorded substitution: ${elementLabel} → ${newElement} (operation #${window.atomicOperations.length})`);
+            dlog(`📝 Recorded substitution: ${elementLabel} → ${newElement} (operation #${window.atomicOperations.length})`);
 
             // Update the structure data
             await updateStructureForSubstitution(atomIndex, elementLabel, newElement);
@@ -4006,7 +3547,7 @@ Crystal system: ${data.crystal_system}`;
             // Reset physical properties after structure modification
             resetPhysicalProperties();
 
-            console.log(`✓ Substituted ${elementLabel} → ${newElement}`);
+            dlog(`✓ Substituted ${elementLabel} → ${newElement}`);
             showNotification(`Successfully substituted ${elementLabel} → ${newElement}`, 'success');
         }
 
@@ -4033,7 +3574,7 @@ Crystal system: ${data.crystal_system}`;
                 label: elementLabel
             });
 
-            console.log(`📝 Recorded deletion: ${elementLabel} (operation #${window.atomicOperations.length})`);
+            dlog(`📝 Recorded deletion: ${elementLabel} (operation #${window.atomicOperations.length})`);
 
             // Update the structure data
             await updateStructureForDeletion(atomIndex, elementLabel);
@@ -4044,7 +3585,7 @@ Crystal system: ${data.crystal_system}`;
             // Reset physical properties after structure modification
             resetPhysicalProperties();
 
-            console.log(`✓ Deleted ${elementLabel}`);
+            dlog(`✓ Deleted ${elementLabel}`);
             showNotification(`Successfully deleted ${elementLabel}`, 'success');
         }
 
@@ -4125,7 +3666,7 @@ Crystal system: ${data.crystal_system}`;
                 label: newLabel
             });
 
-            console.log(`📝 Recorded insertion: ${newLabel} at ${cand.frac_coords} (operation #${window.atomicOperations.length})`);
+            dlog(`📝 Recorded insertion: ${newLabel} at ${cand.frac_coords} (operation #${window.atomicOperations.length})`);
 
             // Update the structure data in UI side
             window.currentLabels.push(newLabel);
@@ -4155,7 +3696,7 @@ Crystal system: ${data.crystal_system}`;
             updateStructureVisualization();
             resetPhysicalProperties();
 
-            console.log(`✓ Inserted ${elementToInsert}`);
+            dlog(`✓ Inserted ${elementToInsert}`);
             showNotification(`Successfully inserted ${elementToInsert}`, 'success');
             if (typeof clearGhostAtom === 'function') clearGhostAtom();
             hideCurrentBest();
@@ -4166,7 +3707,7 @@ Crystal system: ${data.crystal_system}`;
             const cand = window.insertionCandidates.find(c => c.id.toString() === candId.toString());
             if (!cand) return;
 
-            console.log(`🧪 Evaluating specific candidate: ${cand.label} for ${element}`);
+            dlog(`🧪 Evaluating specific candidate: ${cand.label} for ${element}`);
             showExecuteStatus(`Evaluating energy for ${cand.label}...`, true, false);
 
             // Show loading state in current-best box
@@ -4193,7 +3734,7 @@ Crystal system: ${data.crystal_system}`;
 
                 if (data.status === 'success') {
                     cand.energy = data.energy;
-                    console.log(`✅ Energy for ${cand.label}: ${cand.energy}`);
+                    dlog(`✅ Energy for ${cand.label}: ${cand.energy}`);
                     if (energyElement) energyElement.textContent = `${cand.energy.toFixed(3)} eV`;
 
                     // Update dropdown text to include energy
@@ -4212,6 +3753,11 @@ Crystal system: ${data.crystal_system}`;
                             hideExecuteStatus();
                         }
                     }, 3000);
+                } else {
+                    // Prediction failed (status: 'error'); clear the pending indicator
+                    console.warn(`Energy evaluation failed for ${cand.label}:`, data.detail || data);
+                    if (energyElement) energyElement.textContent = 'Error';
+                    showExecuteStatus(`Energy evaluation failed for ${cand.label}.`, false, false);
                 }
             } catch (error) {
                 console.error('❌ Error evaluating specific site:', error);
@@ -4240,7 +3786,7 @@ Crystal system: ${data.crystal_system}`;
 
             if (newDensity !== null) {
                 window.currentStructureData.supercell_info.density = newDensity;
-                console.log(`Updated density: ${newDensity.toFixed(4)} g/cm³`);
+                dlog(`Updated density: ${newDensity.toFixed(4)} g/cm³`);
             } else {
                 console.warn('Failed to recalculate density, keeping previous value');
             }
@@ -4253,7 +3799,7 @@ Crystal system: ${data.crystal_system}`;
             // Update 3D visualization
             updateStructureVisualization();
 
-            console.log(`Updated formula: ${newFormula}`);
+            dlog(`Updated formula: ${newFormula}`);
         }
 
         async function updateStructureForDeletion(atomIndex, deletedLabel) {
@@ -4282,7 +3828,7 @@ Crystal system: ${data.crystal_system}`;
 
             if (newDensity !== null) {
                 window.currentStructureData.supercell_info.density = newDensity;
-                console.log(`Updated density: ${newDensity.toFixed(4)} g/cm³`);
+                dlog(`Updated density: ${newDensity.toFixed(4)} g/cm³`);
             } else {
                 console.warn('Failed to recalculate density, keeping previous value');
             }
@@ -4295,8 +3841,8 @@ Crystal system: ${data.crystal_system}`;
             // Update 3D visualization
             updateStructureVisualization();
 
-            console.log(`Updated formula: ${newFormula}`);
-            console.log(`Updated atom count: ${window.currentLabels.length}`);
+            dlog(`Updated formula: ${newFormula}`);
+            dlog(`Updated atom count: ${window.currentLabels.length}`);
         }
 
         function calculateNewFormula(oldElement, newElement) {
@@ -4682,7 +4228,7 @@ Crystal system: ${data.crystal_system}`;
                             updateCurrentBest(energy, atom.label, newElement);
                         }
 
-                        console.log(`${atom.label} → ${newElement}: ${energy.toFixed(6)} eV/atom`);
+                        dlog(`${atom.label} → ${newElement}: ${energy.toFixed(6)} eV/atom`);
 
                     } catch (error) {
                         // Failure path
@@ -4739,7 +4285,7 @@ Crystal system: ${data.crystal_system}`;
                     .map((r, i) => `${i + 1}. ${r.atom}: ${r.energy.toFixed(6)} eV/atom (${r.attempts} attempts)`)
                     .join('\n');
 
-                console.log(`Energy comparison results (${successful.length}/${totalProcessed} successful):\n${resultSummary}`);
+                dlog(`Energy comparison results (${successful.length}/${totalProcessed} successful):\n${resultSummary}`);
 
                 if (failed.length > 0) {
                     console.warn(`Failed calculations (${failed.length}):`, failed.map(f => `${f.atom}: ${f.finalError}`));
@@ -4764,6 +4310,9 @@ Crystal system: ${data.crystal_system}`;
                     showCalculationReport(summary, successful, failed, bestResult, 'substitution');
                 }
 
+                // Show completion state instead of hiding
+                showExecutionComplete(`Substitution Completed. Best: ${bestResult.atom} -> ${newElement} (${bestResult.energy.toFixed(4)} eV)`, results);
+
             } else {
                 // All calculations failed
                 showExecuteStatus('No valid calculations completed', false);
@@ -4777,10 +4326,11 @@ Crystal system: ${data.crystal_system}`;
                 );
 
                 showFailureReport(summary, failed, 'substitution');
+
+                // Show completion state with a failure message so the button state is still restored
+                showExecutionComplete('Substitution completed: all candidate calculations failed', results);
             }
 
-            // Show completion state instead of hiding
-            showExecutionComplete(`Substitution Completed. Best: ${bestResult.atom} -> ${newElement} (${bestResult.energy.toFixed(4)} eV)`, results);
             setExecuteButtonState('complete');
         }
 
@@ -4987,7 +4537,7 @@ Crystal system: ${data.crystal_system}`;
                             updateCurrentBest(result.energy, atom.label, 'DELETE');
                         }
 
-                        console.log(`Delete ${atom.label}: ${result.energy.toFixed(6)} eV/atom (${result.attempts} attempts)`);
+                        dlog(`Delete ${atom.label}: ${result.energy.toFixed(6)} eV/atom (${result.attempts} attempts)`);
 
                     } else {
                         calculationResults.failed.push({
@@ -5041,7 +4591,7 @@ Crystal system: ${data.crystal_system}`;
                     .map((r, i) => `${i + 1}. Delete ${r.atom}: ${r.energy.toFixed(6)} eV/atom (${r.attempts} attempts)`)
                     .join('\n');
 
-                console.log(`Energy comparison results (${successful.length}/${totalProcessed} successful):\n${resultSummary}`);
+                dlog(`Energy comparison results (${successful.length}/${totalProcessed} successful):\n${resultSummary}`);
 
                 if (failed.length > 0) {
                     console.warn(`Failed calculations (${failed.length}):`, failed.map(f => `${f.atom}: ${f.finalError}`));
@@ -5066,6 +4616,9 @@ Crystal system: ${data.crystal_system}`;
                     showCalculationReport(summary, successful, failed, bestResult, 'deletion');
                 }
 
+                // Show completion state instead of hiding
+                showExecutionComplete(`Deletion Completed. Best: ${bestResult.atom} (${bestResult.energy.toFixed(4)} eV)`, results);
+
             } else {
                 // All calculations failed
                 showExecuteStatus('No valid calculations completed', false);
@@ -5079,10 +4632,11 @@ Crystal system: ${data.crystal_system}`;
                 );
 
                 showFailureReport(summary, failed, 'deletion');
+
+                // Show completion state with a failure message so the button state is still restored
+                showExecutionComplete('Deletion completed: all candidate calculations failed', results);
             }
 
-            // Show completion state instead of hiding
-            showExecutionComplete(`Deletion Completed. Best: ${bestResult.atom} (${bestResult.energy.toFixed(4)} eV)`, results);
             setExecuteButtonState('complete');
         }
 
@@ -5247,15 +4801,6 @@ Crystal system: ${data.crystal_system}`;
             }
         }
 
-        async function calculateSubstitutionEnergy(atomLabel, newElement, signal) {
-            try {
-                return await performSubstitutionCalculation(atomLabel, newElement, signal);
-            } catch (error) {
-                console.error('Error calculating substitution energy:', error);
-                return null;
-            }
-        }
-
         async function performDeletionCalculation(atomLabel, signal) {
             try {
                 const atomIndex = window.currentLabels.indexOf(atomLabel);
@@ -5311,15 +4856,6 @@ Crystal system: ${data.crystal_system}`;
             }
         }
 
-        async function calculateDeletionEnergy(atomLabel, signal) {
-            try {
-                return await performDeletionCalculation(atomLabel, signal);
-            } catch (error) {
-                console.error('Error calculating deletion energy:', error);
-                return null;
-            }
-        }
-
         async function resetToOriginalStructure() {
             if (!window.originalSupercellData || window.originalLabels.length === 0) {
                 showNotification('No original data to reset to', 'warning');
@@ -5334,7 +4870,7 @@ Crystal system: ${data.crystal_system}`;
             try {
                 // Show reset in progress
                 showNotification('Resetting structure...', 'info');
-                console.log('🔄 Starting structure reset...');
+                dlog('🔄 Starting structure reset...');
 
                 // Reset backend session state first
                 const response = await fetch('/api/reset-session-structure', {
@@ -5365,11 +4901,11 @@ Crystal system: ${data.crystal_system}`;
                 }
 
                 const result = await response.json();
-                console.log('✅ Backend session reset successful:', result);
+                dlog('✅ Backend session reset successful:', result);
 
                 // Clear frontend operation history
                 window.atomicOperations = [];
-                console.log('📝 Cleared frontend operation history');
+                dlog('📝 Cleared frontend operation history');
 
                 // Restore frontend working data from immutable original data
                 window.currentStructureData = JSON.parse(JSON.stringify(window.originalSupercellData));
@@ -5386,11 +4922,11 @@ Crystal system: ${data.crystal_system}`;
                 // Clear any previous CHGNet analysis results
                 resetPhysicalProperties();
 
-                console.log('✓ Complete structure reset successful');
-                console.log(`  - Frontend Formula: ${window.currentStructureData.supercell_info.formula}`);
-                console.log(`  - Frontend Atoms: ${window.currentLabels.length}`);
-                console.log(`  - Backend Formula: ${result.structure_info.formula}`);
-                console.log(`  - Backend Atoms: ${result.structure_info.num_sites}`);
+                dlog('✓ Complete structure reset successful');
+                dlog(`  - Frontend Formula: ${window.currentStructureData.supercell_info.formula}`);
+                dlog(`  - Frontend Atoms: ${window.currentLabels.length}`);
+                dlog(`  - Backend Formula: ${result.structure_info.formula}`);
+                dlog(`  - Backend Atoms: ${result.structure_info.num_sites}`);
 
                 // Verify frontend-backend consistency
                 const frontendFormula = window.currentStructureData.supercell_info.formula;
@@ -5418,7 +4954,7 @@ Crystal system: ${data.crystal_system}`;
                     displaySupercellInfo();
                     displayStructureOperations(window.currentLabels);
                     updateStructureVisualization();
-                    console.log('⚠️ Performed frontend-only fallback reset');
+                    dlog('⚠️ Performed frontend-only fallback reset');
                     // フォールバックリセット後も構造変更を通知
                     markStructureAsChanged();
                 } catch (fallbackError) {
@@ -5428,7 +4964,7 @@ Crystal system: ${data.crystal_system}`;
         }
 
         function initializeViewer() {
-            console.log('🔄 Initializing 3D viewer...');
+            dlog('🔄 Initializing 3D viewer...');
 
             const container = document.getElementById('viewer-container');
             if (!container) {
@@ -5456,7 +4992,7 @@ Crystal system: ${data.crystal_system}`;
                 </div>
             `;
 
-            console.log('✅ 3D viewer container created');
+            dlog('✅ 3D viewer container created');
 
             // Use already loaded 3Dmol.js from HTML script tag
             if (typeof $3Dmol === 'undefined') {
@@ -5464,7 +5000,7 @@ Crystal system: ${data.crystal_system}`;
                 return;
             }
 
-            console.log('✅ 3Dmol.js already loaded via script tag');
+            dlog('✅ 3Dmol.js already loaded via script tag');
 
             const element = document.getElementById('3dmol-viewer');
             if (!element) {
@@ -5484,8 +5020,8 @@ Crystal system: ${data.crystal_system}`;
                 };
                 window.viewer3D = $3Dmol.createViewer(element, config);
 
-                console.log('✅ 3Dmol.js viewer initialized with delay');
-                console.log(`✅ Available methods: ${Object.getOwnPropertyNames(window.viewer3D).filter(m => typeof window.viewer3D[m] === 'function').slice(0, 10).join(', ')}`);
+                dlog('✅ 3Dmol.js viewer initialized with delay');
+                dlog(`✅ Available methods: ${Object.getOwnPropertyNames(window.viewer3D).filter(m => typeof window.viewer3D[m] === 'function').slice(0, 10).join(', ')}`);
 
                 // Load supercell visualization after viewer is ready
                 loadSupercellVisualization();
@@ -5515,7 +5051,7 @@ Crystal system: ${data.crystal_system}`;
                 // Fallback: check internal structure
                 console.warn('⚠️ Unknown 3Dmol.js API version, using fallback method');
                 const methods = Object.getOwnPropertyNames(viewer);
-                console.log(`📋 Available viewer properties/methods: ${methods.slice(0, 20).join(', ')}`);
+                dlog(`📋 Available viewer properties/methods: ${methods.slice(0, 20).join(', ')}`);
 
                 // Return 1 if viewer exists and has been initialized, 0 otherwise
                 return viewer ? 1 : 0;
@@ -5526,22 +5062,8 @@ Crystal system: ${data.crystal_system}`;
             }
         }
 
-        function loadScript(src, callback) {
-            const script = document.createElement('script');
-            script.src = src;
-            script.onload = function () {
-                console.log(`✓ Script loaded successfully: ${src}`);
-                callback();
-            };
-            script.onerror = function () {
-                console.error(`✗ Failed to load script: ${src}`);
-            };
-            document.head.appendChild(script);
-        }
-
-
         async function loadSupercellVisualization() {
-            console.log('🔄 Loading supercell structure for 3D visualization');
+            dlog('🔄 Loading supercell structure for 3D visualization');
 
             if (!window.viewer3D) {
                 console.warn('❌ 3D viewer not initialized yet');
@@ -5554,9 +5076,9 @@ Crystal system: ${data.crystal_system}`;
             }
 
             try {
-                console.log(`📊 Using direct CIF generation approach`);
-                console.log(`📄 Filename: ${window.currentFilename}`);
-                console.log(`📐 Supercell size: ${window.currentSupercellSize}`);
+                dlog(`📊 Using direct CIF generation approach`);
+                dlog(`📄 Filename: ${window.currentFilename}`);
+                dlog(`📐 Supercell size: ${window.currentSupercellSize}`);
 
                 // Use new direct CIF generation API
                 const requestData = {
@@ -5565,7 +5087,7 @@ Crystal system: ${data.crystal_system}`;
                     session_id: window.sessionId
                 };
 
-                console.log('📡 Requesting supercell CIF from direct API...');
+                dlog('📡 Requesting supercell CIF from direct API...');
                 const response = await fetch('/api/generate-supercell-cif-direct', {
                     method: 'POST',
                     headers: {
@@ -5574,7 +5096,7 @@ Crystal system: ${data.crystal_system}`;
                     body: JSON.stringify(requestData)
                 });
 
-                console.log(`📡 Response status: ${response.status} ${response.statusText}`);
+                dlog(`📡 Response status: ${response.status} ${response.statusText}`);
 
                 if (!response.ok) {
                     let errorMessage = 'Error occurred during supercell generation.';
@@ -5595,10 +5117,10 @@ Crystal system: ${data.crystal_system}`;
                 }
 
                 const cifData = await response.text();
-                console.log(`📄 Generated supercell CIF data: ${cifData.length} characters`);
+                dlog(`📄 Generated supercell CIF data: ${cifData.length} characters`);
 
                 // Display structure using fastapiBT.py approach
-                console.log('🗑️ Clearing existing models');
+                dlog('🗑️ Clearing existing models');
                 // Clear viewer safely
                 const viewerElement = document.getElementById('3dmol-viewer');
                 if (viewerElement && viewerElement.offsetWidth > 0 && viewerElement.offsetHeight > 0) {
@@ -5608,14 +5130,14 @@ Crystal system: ${data.crystal_system}`;
                     return;
                 }
 
-                console.log('➕ Adding supercell CIF model');
+                dlog('➕ Adding supercell CIF model');
                 window.viewer3D.addModel(cifData, 'cif');
 
-                console.log('🎨 Setting molecular style with bond state');
+                dlog('🎨 Setting molecular style with bond state');
                 // Apply styling with bond state consideration
                 updateMoleculeStyleRobust();
 
-                console.log('📦 Adding unit cell (conditional)');
+                dlog('📦 Adding unit cell (conditional)');
                 if (displayUnitCell) {
                     window.viewer3D.addUnitCell({
                         box: {
@@ -5625,12 +5147,12 @@ Crystal system: ${data.crystal_system}`;
                         },
                         axes: displayAxes  // Include axes based on state
                     });
-                    console.log('   Unit cell added (state: ON)');
+                    dlog('   Unit cell added (state: ON)');
                 } else {
-                    console.log('   Unit cell skipped (state: OFF)');
+                    dlog('   Unit cell skipped (state: OFF)');
                 }
 
-                console.log('🔍 Zooming and rendering');
+                dlog('🔍 Zooming and rendering');
                 window.viewer3D.zoomTo();
                 window.viewer3D.render();
 
@@ -5638,7 +5160,7 @@ Crystal system: ${data.crystal_system}`;
                 const sizeStr = window.currentSupercellSize.join('x');
                 addStructureStatusLabel('supercell', `Supercell (${sizeStr})`);
 
-                console.log('✅ Successfully loaded 3D supercell visualization');
+                dlog('✅ Successfully loaded 3D supercell visualization');
 
             } catch (error) {
                 console.error('❌ Error loading supercell 3D structure:', error);
@@ -5744,13 +5266,13 @@ Crystal system: ${data.crystal_system}`;
 
         async function updateStructureVisualization() {
             if (!window.viewer3D || !window.currentFilename || !window.currentSupercellSize) {
-                console.log('3D viewer or structure parameters not available, skipping update');
+                dlog('3D viewer or structure parameters not available, skipping update');
                 return;
             }
 
             try {
-                console.log('🔄 Updating 3D visualization with operation history');
-                console.log(`📋 Operations to apply: ${window.atomicOperations.length}`);
+                dlog('🔄 Updating 3D visualization with operation history');
+                dlog(`📋 Operations to apply: ${window.atomicOperations.length}`);
 
                 // Use operation history to regenerate complete structure
                 const requestData = {
@@ -5759,14 +5281,14 @@ Crystal system: ${data.crystal_system}`;
                     operations: window.atomicOperations
                 };
 
-                console.log('📡 Requesting structure with operations from API...');
+                dlog('📡 Requesting structure with operations from API...');
                 const response = await fetch('/api/generate-modified-structure-cif', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(requestData)
                 });
 
-                console.log(`📡 Response status: ${response.status} ${response.statusText}`);
+                dlog(`📡 Response status: ${response.status} ${response.statusText}`);
 
                 if (!response.ok) {
                     let errorMessage = 'Error occurred during structure modification.';
@@ -5787,10 +5309,10 @@ Crystal system: ${data.crystal_system}`;
                 }
 
                 const cifData = await response.text();
-                console.log(`📄 Generated modified CIF data: ${cifData.length} characters`);
+                dlog(`📄 Generated modified CIF data: ${cifData.length} characters`);
 
                 // Update 3D viewer with modified structure
-                console.log('🗑️ Clearing existing models');
+                dlog('🗑️ Clearing existing models');
                 // Clear viewer safely
                 const viewerElement = document.getElementById('3dmol-viewer');
                 if (viewerElement && viewerElement.offsetWidth > 0 && viewerElement.offsetHeight > 0) {
@@ -5800,14 +5322,14 @@ Crystal system: ${data.crystal_system}`;
                     return;
                 }
 
-                console.log('➕ Adding modified structure CIF model');
+                dlog('➕ Adding modified structure CIF model');
                 window.viewer3D.addModel(cifData, 'cif');
 
-                console.log('🎨 Setting molecular style with bond state');
+                dlog('🎨 Setting molecular style with bond state');
                 // Apply styling with bond state consideration
                 updateMoleculeStyleRobust();
 
-                console.log('📦 Adding unit cell (conditional)');
+                dlog('📦 Adding unit cell (conditional)');
                 if (displayUnitCell) {
                     window.viewer3D.addUnitCell({
                         box: {
@@ -5817,12 +5339,12 @@ Crystal system: ${data.crystal_system}`;
                         },
                         axes: displayAxes  // Include axes based on state
                     });
-                    console.log('   Unit cell added (state: ON)');
+                    dlog('   Unit cell added (state: ON)');
                 } else {
-                    console.log('   Unit cell skipped (state: OFF)');
+                    dlog('   Unit cell skipped (state: OFF)');
                 }
 
-                console.log('🔍 Zooming and rendering');
+                dlog('🔍 Zooming and rendering');
                 window.viewer3D.zoomTo();
                 window.viewer3D.render();
 
@@ -5832,7 +5354,7 @@ Crystal system: ${data.crystal_system}`;
                     : 'Original Structure';
                 addStructureStatusLabel('modified', operationsText);
 
-                console.log(`✅ 3D structure updated with ${window.atomicOperations.length} operations`);
+                dlog(`✅ 3D structure updated with ${window.atomicOperations.length} operations`);
 
             } catch (error) {
                 console.error('❌ Error updating 3D visualization:', error);
@@ -6026,25 +5548,25 @@ Crystal system: ${data.crystal_system}`;
         window.currentAnalysisData = null;
 
         function openAnalysisModal() {
-            console.log('=== openAnalysisModal called ===');
+            dlog('=== openAnalysisModal called ===');
             const modal = document.getElementById('analysisModal');
             modal.style.display = 'block';
 
-            console.log('currentAnalysisData:', currentAnalysisData);
+            dlog('currentAnalysisData:', currentAnalysisData);
             if (currentAnalysisData) {
-                console.log('Populating modal with data...');
+                dlog('Populating modal with data...');
                 populateAnalysisModal(currentAnalysisData);
             } else {
                 console.warn('No currentAnalysisData available!');
             }
 
             // Set default active tab to energy (Relaxation)
-            console.log('Switching to energy tab...');
-            switchTab('energy');
+            dlog('Switching to energy tab...');
+            switchTab(null, 'energy');
 
             // Add escape key listener
             document.addEventListener('keydown', handleModalKeydown);
-            console.log('=== openAnalysisModal completed ===');
+            dlog('=== openAnalysisModal completed ===');
         }
 
         function closeAnalysisModal() {
@@ -6073,11 +5595,6 @@ Crystal system: ${data.crystal_system}`;
             setTimeout(() => {
                 resetApplicationState();
             }, 100);
-        }
-
-        function openCifSelectionModal() {
-            // Keep the original function for backwards compatibility
-            resetAndLoadNewCIF();
         }
 
         function resetApplicationState() {
@@ -6149,20 +5666,15 @@ Crystal system: ${data.crystal_system}`;
                 resetBtn.disabled = true;
             }
 
-            const chgnetBtn = document.getElementById('chgnet-analyze-btn');
-            if (chgnetBtn) {
-                chgnetBtn.disabled = true;
-                chgnetBtn.textContent = '🧠 Run CHGNet Analysis';
+            const analyzeBtn = document.getElementById('analyze-btn');
+            if (analyzeBtn) {
+                analyzeBtn.disabled = true;
+                analyzeBtn.textContent = '🔬 Analyze Structure';
             }
 
-            const detailBtn = document.getElementById('detail-analysis-btn');
-            if (detailBtn) {
-                detailBtn.style.display = 'none';
-            }
-
-            const downloadBtn = document.getElementById('download-analysis-btn');
-            if (downloadBtn) {
-                downloadBtn.style.display = 'none';
+            const analysisActions = document.getElementById('analysisActions');
+            if (analysisActions) {
+                analysisActions.style.display = 'none';
             }
 
             // Reset supercell inputs
@@ -6170,7 +5682,7 @@ Crystal system: ${data.crystal_system}`;
             document.getElementById('supercell-b').value = '1';
             document.getElementById('supercell-c').value = '1';
 
-            console.log('✓ Application state completely reset for new CIF loading');
+            dlog('✓ Application state completely reset for new CIF loading');
         }
 
         function handleModalKeydown(event) {
@@ -6179,10 +5691,10 @@ Crystal system: ${data.crystal_system}`;
             }
         }
 
-        function switchTab(tabName) {
-            console.log('=== switchTab called ===');
-            console.log('Tab name:', tabName);
-            console.log('currentAnalysisData:', currentAnalysisData);
+        function switchTab(event, tabName) {
+            dlog('=== switchTab called ===');
+            dlog('Tab name:', tabName);
+            dlog('currentAnalysisData:', currentAnalysisData);
 
             // Update tab buttons
             document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
@@ -6190,7 +5702,7 @@ Crystal system: ${data.crystal_system}`;
                 event.target.classList.add('active');
             } else {
                 // Fallback when called programmatically
-                document.querySelector(`[onclick="switchTab('${tabName}')"]`)?.classList.add('active');
+                document.querySelector(`[onclick="switchTab(event, '${tabName}')"]`)?.classList.add('active');
             }
 
             // Update tab content
@@ -6210,44 +5722,44 @@ Crystal system: ${data.crystal_system}`;
         }
 
         function populateAnalysisModal(data) {
-            console.log('=== populateAnalysisModal called ===');
-            console.log('Data received:', data);
+            dlog('=== populateAnalysisModal called ===');
+            dlog('Data received:', data);
 
             // Summary Tab (now moved to Relaxation tab)
-            console.log('Calling populateSummaryTab...');
+            dlog('Calling populateSummaryTab...');
             populateSummaryTab(data);
 
             // Data Tab
-            console.log('Calling populateDataTab...');
+            dlog('Calling populateDataTab...');
             populateDataTab(data);
 
             // Energy Analysis Tab (Relaxation tab)
-            console.log('Calling populateEnergyAnalysisTab...');
+            dlog('Calling populateEnergyAnalysisTab...');
             populateEnergyAnalysisTab(data);
 
-            console.log('=== populateAnalysisModal completed ===');
+            dlog('=== populateAnalysisModal completed ===');
             // Charts will be drawn when tab is selected
         }
 
         function populateEnergyAnalysisTab(data) {
-            console.log('=== populateEnergyAnalysisTab called ===');
-            console.log('Data received:', data);
+            dlog('=== populateEnergyAnalysisTab called ===');
+            dlog('Data received:', data);
 
             const energyTableBody = document.getElementById('energy-analysis-body');
             const energyInsights = document.getElementById('energy-insights');
 
-            console.log('Elements found:');
-            console.log('- energyTableBody:', energyTableBody);
-            console.log('- energyInsights:', energyInsights);
+            dlog('Elements found:');
+            dlog('- energyTableBody:', energyTableBody);
+            dlog('- energyInsights:', energyInsights);
 
             if (!data || !data.initial_prediction || !data.final_prediction) {
-                console.log('No energy data available');
+                dlog('No energy data available');
                 energyTableBody.innerHTML = '<tr><td colspan="4">No energy data available</td></tr>';
                 energyInsights.innerHTML = '<p>Energy analysis requires completed relaxation calculation.</p>';
                 return;
             }
 
-            console.log('Populating energy analysis table...');
+            dlog('Populating energy analysis table...');
 
             // Generate table HTML using passed data
             let tableHTML = '';
@@ -6291,26 +5803,23 @@ Crystal system: ${data.crystal_system}`;
             // Generate insights
             let insights = '<h4>Energy Analysis Insights:</h4><ul>';
 
-            if (data.final) {
-                const stability = data.final.energyPerAtom < 0 ? 'stable' : 'unstable';
-                insights += `<li><strong>Stability:</strong> The final structure is ${stability} with ${data.final.energyPerAtom.toFixed(3)} eV/atom.</li>`;
+            if (finalPred && finalPred.energy_eV_per_atom !== undefined) {
+                const stability = finalPred.energy_eV_per_atom < 0 ? 'stable' : 'unstable';
+                insights += `<li><strong>Stability:</strong> The final structure is ${stability} with ${finalPred.energy_eV_per_atom.toFixed(3)} eV/atom.</li>`;
 
-                insights += `<li><strong>System Size:</strong> Calculation performed on ${data.final.numAtoms} atoms.</li>`;
+                const insightNumAtoms = data.structure_info?.num_atoms || finalPred.forces_eV_per_A?.length || 0;
+                if (insightNumAtoms) {
+                    insights += `<li><strong>System Size:</strong> Calculation performed on ${insightNumAtoms} atoms.</li>`;
+                }
             }
 
             insights += '</ul>';
             energyInsights.innerHTML = insights;
         }
 
-        function getChangeDisplay(change) {
-            const sign = change >= 0 ? '+' : '';
-            const colorClass = change < 0 ? 'energy-negative' : 'energy-positive';
-            return `<span class="${colorClass}">${sign}${change.toFixed(6)}</span>`;
-        }
-
         function populateSummaryTab(data) {
-            console.log('=== populateSummaryTab called ===');
-            console.log('Data received:', data);
+            dlog('=== populateSummaryTab called ===');
+            dlog('Data received:', data);
 
             const convergenceEl = document.getElementById('summary-convergence');
             const energyEl = document.getElementById('summary-energy');
@@ -6318,12 +5827,12 @@ Crystal system: ${data.crystal_system}`;
             const stressEl = document.getElementById('summary-stress');
             const settingsEl = document.getElementById('relaxation-settings');
 
-            console.log('Elements found:');
-            console.log('- convergenceEl:', convergenceEl);
-            console.log('- energyEl:', energyEl);
-            console.log('- forcesEl:', forcesEl);
-            console.log('- stressEl:', stressEl);
-            console.log('- settingsEl:', settingsEl);
+            dlog('Elements found:');
+            dlog('- convergenceEl:', convergenceEl);
+            dlog('- energyEl:', energyEl);
+            dlog('- forcesEl:', forcesEl);
+            dlog('- stressEl:', stressEl);
+            dlog('- settingsEl:', settingsEl);
 
             // Convergence Status
             const converged = data.relaxation_info?.converged;
@@ -6389,21 +5898,21 @@ Crystal system: ${data.crystal_system}`;
         }
 
         function populateDataTab(data) {
-            console.log('=== populateDataTab called ===');
-            console.log('Data received:', data);
+            dlog('=== populateDataTab called ===');
+            dlog('Data received:', data);
 
             const tableBody = document.getElementById('trajectoryTableBody');
-            console.log('trajectoryTableBody element:', tableBody);
+            dlog('trajectoryTableBody element:', tableBody);
 
             tableBody.innerHTML = '';
 
             if (!data.trajectory_data?.energies?.length) {
-                console.log('No trajectory data available');
+                dlog('No trajectory data available');
                 tableBody.innerHTML = '<tr><td colspan="4">Trajectory data not available</td></tr>';
                 return;
             }
 
-            console.log('Trajectory data found:', data.trajectory_data);
+            dlog('Trajectory data found:', data.trajectory_data);
 
             const energies = data.trajectory_data.energies;
             const forceMagnitudes = data.trajectory_data.force_magnitudes;
@@ -6437,19 +5946,19 @@ Crystal system: ${data.crystal_system}`;
         }
 
         function populateAtomicPropertiesTable(data) {
-            console.log('=== populateAtomicPropertiesTable called ===');
-            console.log('Data received:', data);
+            dlog('=== populateAtomicPropertiesTable called ===');
+            dlog('Data received:', data);
 
             const tableBody = document.getElementById('atomicPropertiesTableBody');
-            console.log('atomicPropertiesTableBody element:', tableBody);
+            dlog('atomicPropertiesTableBody element:', tableBody);
 
             tableBody.innerHTML = '';
 
             const finalPred = data.final_prediction;
-            console.log('Final prediction data:', finalPred);
+            dlog('Final prediction data:', finalPred);
 
             if (!finalPred) {
-                console.log('No final prediction data available');
+                dlog('No final prediction data available');
                 tableBody.innerHTML = '<tr><td colspan="7">Final prediction data not available</td></tr>';
                 return;
             }
@@ -6459,17 +5968,17 @@ Crystal system: ${data.crystal_system}`;
             const siteEnergies = finalPred.site_energies_eV || [];
             const magmoms = finalPred.magmoms_muB || [];
 
-            console.log('Data arrays:');
-            console.log('- forces:', forces);
-            console.log('- siteEnergies:', siteEnergies);
-            console.log('- magmoms:', magmoms);
+            dlog('Data arrays:');
+            dlog('- forces:', forces);
+            dlog('- siteEnergies:', siteEnergies);
+            dlog('- magmoms:', magmoms);
 
             // Determine number of atoms
             const numAtoms = Math.max(forces.length, siteEnergies.length, magmoms.length);
-            console.log('Number of atoms:', numAtoms);
+            dlog('Number of atoms:', numAtoms);
 
             if (numAtoms === 0) {
-                console.log('No atomic data available');
+                dlog('No atomic data available');
                 tableBody.innerHTML = '<tr><td colspan="7">No atomic data available</td></tr>';
                 return;
             }
@@ -6509,21 +6018,21 @@ Crystal system: ${data.crystal_system}`;
         }
 
         function populateStressDetailTable(data) {
-            console.log('=== populateStressDetailTable called ===');
-            console.log('Data received:', data);
+            dlog('=== populateStressDetailTable called ===');
+            dlog('Data received:', data);
 
             const tableBody = document.getElementById('stressDetailTableBody');
-            console.log('stressDetailTableBody element:', tableBody);
+            dlog('stressDetailTableBody element:', tableBody);
 
             tableBody.innerHTML = '';
 
             if (!data.final_prediction?.stress_GPa) {
-                console.log('No stress data available');
+                dlog('No stress data available');
                 tableBody.innerHTML = '<tr><td colspan="2">Stress data not available</td></tr>';
                 return;
             }
 
-            console.log('Stress data found:', data.final_prediction.stress_GPa);
+            dlog('Stress data found:', data.final_prediction.stress_GPa);
 
             const stress = data.final_prediction.stress_GPa;
             const components = [
@@ -6889,8 +6398,8 @@ Crystal system: ${data.crystal_system}`;
             </div>
 
             <div class="tab-container">
-                <button class="tab-button active" onclick="switchTab('energy')">Relaxation</button>
-                <button class="tab-button" onclick="switchTab('data')">Data</button>
+                <button class="tab-button active" onclick="switchTab(event, 'energy')">Relaxation</button>
+                <button class="tab-button" onclick="switchTab(event, 'data')">Data</button>
             </div>
 
             <div class="tab-content">
@@ -7094,7 +6603,7 @@ Crystal system: ${data.crystal_system}`;
                     return;
                 }
 
-                console.log('Generating CIF file for current structure...');
+                dlog('Generating CIF file for current structure...');
 
                 // Generate CIF content using existing function
                 const cifContent = await generateCIFFile();
@@ -7118,7 +6627,7 @@ Crystal system: ${data.crystal_system}`;
                 document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
 
-                console.log(`CIF file downloaded: ${filename}`);
+                dlog(`CIF file downloaded: ${filename}`);
 
                 // Show success notification
                 showNotification(`CIF file downloaded: ${filename}`, 'success');
@@ -7140,7 +6649,7 @@ Crystal system: ${data.crystal_system}`;
                 const data = window.currentAnalysisData;
 
                 // Extract key values for spreadsheet
-                console.log('Raw data structure:', data);
+                dlog('Raw data structure:', data);
 
                 // Try multiple possible paths for formula
                 const formula = data.relaxed_structure_info?.formula ||
@@ -7161,14 +6670,14 @@ Crystal system: ${data.crystal_system}`;
 
                 // Try multiple possible paths for magnetic moment (preserve full precision)
                 let magnetic = 'N/A';
-                if (data.final_prediction?.magmoms !== undefined && Array.isArray(data.final_prediction.magmoms)) {
-                    const totalMag = data.final_prediction.magmoms.reduce((sum, mag) => sum + Math.abs(mag), 0);
+                if (data.final_prediction?.magmoms_muB !== undefined && Array.isArray(data.final_prediction.magmoms_muB)) {
+                    const totalMag = data.final_prediction.magmoms_muB.reduce((sum, mag) => sum + Math.abs(mag), 0);
                     magnetic = totalMag.toString();
                 } else if (window.currentMagneticData?.totalMagnetic !== undefined) {
                     magnetic = window.currentMagneticData.totalMagnetic.toString();
                 }
 
-                console.log('Extracted values:', { formula, energy, magnetic });
+                dlog('Extracted values:', { formula, energy, magnetic });
 
                 // Generate tab-separated values
                 const tabSeparatedData = `${formula}\t${energy}\t${magnetic}`;
@@ -7188,7 +6697,7 @@ Crystal system: ${data.crystal_system}`;
                     showNotification('Data copied to clipboard', 'success');
                 }
 
-                console.log('Copied to clipboard:', tabSeparatedData);
+                dlog('Copied to clipboard:', tabSeparatedData);
 
             } catch (error) {
                 console.error('Error copying to clipboard:', error);
@@ -7197,7 +6706,7 @@ Crystal system: ${data.crystal_system}`;
         }
 
         async function downloadAnalysisData() {
-            console.log('Download analysis data called');
+            dlog('Download analysis data called');
 
             if (typeof JSZip === 'undefined') {
                 console.error('JSZip not loaded');
@@ -7209,43 +6718,43 @@ Crystal system: ${data.crystal_system}`;
 
             try {
                 // 1. CIF file with P1 space group
-                console.log('Generating CIF file...');
+                dlog('Generating CIF file...');
                 const cifContent = await generateCIFFile();
                 zip.file('structure_P1.cif', cifContent);
 
                 // 2. Crystal Information CSV
-                console.log('Generating Crystal Information CSV...');
+                dlog('Generating Crystal Information CSV...');
                 const crystalInfoCSV = generateCrystalInfoCSV();
                 zip.file('crystal_information.csv', crystalInfoCSV);
 
                 // 3. Energy and Magnetic text file
-                console.log('Generating Energy and Magnetic text...');
+                dlog('Generating Energy and Magnetic text...');
                 const energyMagneticText = generateEnergyMagneticText();
                 zip.file('energy_magnetic.txt', energyMagneticText);
 
                 // 4. Final Atomic Properties CSV
-                console.log('Generating Final Atomic Properties CSV...');
+                dlog('Generating Final Atomic Properties CSV...');
                 const atomicPropsCSV = generateFinalAtomicPropertiesCSV();
                 zip.file('final_atomic_properties.csv', atomicPropsCSV);
 
                 // 5. Stress Tensor CSV
-                console.log('Generating Stress Tensor CSV...');
+                dlog('Generating Stress Tensor CSV...');
                 const stressCSV = generateStressTensorCSV();
                 zip.file('stress_tensor.csv', stressCSV);
 
                 // 6. Step-by-Step Trajectory CSV
-                console.log('Generating Step-by-Step Trajectory CSV...');
+                dlog('Generating Step-by-Step Trajectory CSV...');
                 const trajectoryCSV = generateTrajectoryCSV();
                 zip.file('trajectory_data.csv', trajectoryCSV);
 
                 // Generate and download ZIP file
-                console.log('Generating ZIP file...');
+                dlog('Generating ZIP file...');
                 const content = await zip.generateAsync({ type: 'blob' });
-                console.log('ZIP file generated, starting download...');
+                dlog('ZIP file generated, starting download...');
 
                 // Generate descriptive filename
                 const fileName = generateZipFileName();
-                console.log('Generated ZIP filename:', fileName);
+                dlog('Generated ZIP filename:', fileName);
 
                 const link = document.createElement('a');
                 link.href = URL.createObjectURL(content);
@@ -7253,7 +6762,7 @@ Crystal system: ${data.crystal_system}`;
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
-                console.log('Download completed');
+                dlog('Download completed');
 
             } catch (error) {
                 console.error('Error generating ZIP file:', error);
@@ -7263,15 +6772,15 @@ Crystal system: ${data.crystal_system}`;
 
         // Generate CIF file with P1 space group
         async function generateCIFFile() {
-            console.log('=== GENERATING CIF FILE WITH P1 SPACE GROUP ===');
-            console.log('Current filename:', window.currentFilename);
-            console.log('Current analysis data:', window.currentAnalysisData);
+            dlog('=== GENERATING CIF FILE WITH P1 SPACE GROUP ===');
+            dlog('Current filename:', window.currentFilename);
+            dlog('Current analysis data:', window.currentAnalysisData);
 
             // Try to get the current CIF file from backend
             if (window.currentFilename) {
                 try {
                     const url = `/api/generate-relaxed-structure-cif`;
-                    console.log('Fetching CIF from URL:', url);
+                    dlog('Fetching CIF from URL:', url);
                     const response = await fetch(url, {
                         method: 'POST',
                         headers: {
@@ -7281,12 +6790,12 @@ Crystal system: ${data.crystal_system}`;
                             session_id: window.sessionId || `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
                         })
                     });
-                    console.log('Response status:', response.status);
+                    dlog('Response status:', response.status);
 
                     if (response.ok) {
                         let cifContent = await response.text();
-                        console.log('Original CIF content length:', cifContent.length);
-                        console.log('Original CIF first 500 chars:', cifContent.substring(0, 500));
+                        dlog('Original CIF content length:', cifContent.length);
+                        dlog('Original CIF first 500 chars:', cifContent.substring(0, 500));
 
                         // Modify to P1 space group
                         cifContent = cifContent.replace(
@@ -7312,8 +6821,8 @@ Crystal system: ${data.crystal_system}`;
                             );
                         }
 
-                        console.log('CIF modified to P1 space group');
-                        console.log('Modified CIF first 500 chars:', cifContent.substring(0, 500));
+                        dlog('CIF modified to P1 space group');
+                        dlog('Modified CIF first 500 chars:', cifContent.substring(0, 500));
                         return cifContent;
                     } else {
                         console.warn('Failed to fetch CIF, status:', response.status);
@@ -7324,7 +6833,7 @@ Crystal system: ${data.crystal_system}`;
             }
 
             // Fallback: generate CIF using current analysis data
-            console.log('Using fallback CIF generation with current analysis data');
+            dlog('Using fallback CIF generation with current analysis data');
             let cif = 'data_relaxed_structure_P1\n';
             cif += '_symmetry_space_group_name_H-M    P1\n';
             cif += '_space_group_IT_number           1\n\n';
@@ -7332,7 +6841,7 @@ Crystal system: ${data.crystal_system}`;
             // Use direct data access instead of HTML parsing
             let latticeParams = null;
             if (window.currentStructureInfo?.lattice_parameters) {
-                console.log('Using lattice parameters from currentStructureInfo');
+                dlog('Using lattice parameters from currentStructureInfo');
                 const lp = window.currentStructureInfo.lattice_parameters;
                 latticeParams = {
                     a: lp.a,
@@ -7343,7 +6852,7 @@ Crystal system: ${data.crystal_system}`;
                     gamma: lp.gamma
                 };
             } else if (window.currentAnalysisData?.relaxed_structure_info?.lattice_parameters) {
-                console.log('Using lattice parameters from analysis data');
+                dlog('Using lattice parameters from analysis data');
                 const lp = window.currentAnalysisData.relaxed_structure_info.lattice_parameters;
                 latticeParams = {
                     a: lp.a,
@@ -7354,14 +6863,14 @@ Crystal system: ${data.crystal_system}`;
                     gamma: lp.gamma
                 };
             } else {
-                console.log('Fallback: trying to extract from display');
+                dlog('Fallback: trying to extract from display');
                 const crystalInfo = extractCrystalInfoFromDisplay();
                 if (crystalInfo && crystalInfo.a) {
                     latticeParams = crystalInfo;
                 }
             }
 
-            console.log('Using lattice parameters:', latticeParams);
+            dlog('Using lattice parameters:', latticeParams);
 
             if (latticeParams) {
                 cif += `_cell_length_a    ${latticeParams.a.toFixed(6)}\n`;
@@ -7391,7 +6900,7 @@ Crystal system: ${data.crystal_system}`;
 
             // Try to get positions from analysis data
             if (window.currentAnalysisData?.final_positions && window.currentAnalysisData?.elements) {
-                console.log('Using atomic positions from analysis data');
+                dlog('Using atomic positions from analysis data');
                 const positions = window.currentAnalysisData.final_positions;
                 const elements = window.currentAnalysisData.elements;
 
@@ -7405,16 +6914,16 @@ Crystal system: ${data.crystal_system}`;
                 cif += 'X1 X 0.000000 0.000000 0.000000 1.000\n';
             }
 
-            console.log('Generated CIF content:', cif);
+            dlog('Generated CIF content:', cif);
             return cif;
         }
 
         // Generate Crystal Information CSV
         function generateCrystalInfoCSV() {
-            console.log('=== GENERATING CRYSTAL INFORMATION CSV ===');
-            console.log('Available data sources:');
-            console.log('- window.currentStructureInfo:', window.currentStructureInfo);
-            console.log('- window.currentAnalysisData:', window.currentAnalysisData);
+            dlog('=== GENERATING CRYSTAL INFORMATION CSV ===');
+            dlog('Available data sources:');
+            dlog('- window.currentStructureInfo:', window.currentStructureInfo);
+            dlog('- window.currentAnalysisData:', window.currentAnalysisData);
 
             let csv = 'Property,Value\n';
             csv += 'Space Group,P1\n';
@@ -7424,13 +6933,13 @@ Crystal system: ${data.crystal_system}`;
             let structureInfo = null;
             if (window.currentStructureInfo) {
                 structureInfo = window.currentStructureInfo;
-                console.log('Using currentStructureInfo');
+                dlog('Using currentStructureInfo');
             } else if (window.currentAnalysisData?.relaxed_structure_info) {
                 structureInfo = window.currentAnalysisData.relaxed_structure_info;
-                console.log('Using currentAnalysisData.relaxed_structure_info');
+                dlog('Using currentAnalysisData.relaxed_structure_info');
             }
 
-            console.log('Structure info being used:', structureInfo);
+            dlog('Structure info being used:', structureInfo);
 
             if (structureInfo) {
                 // Direct data access - no regex parsing needed
@@ -7474,16 +6983,16 @@ Crystal system: ${data.crystal_system}`;
                 }
             }
 
-            console.log('Generated Crystal Information CSV:', csv);
+            dlog('Generated Crystal Information CSV:', csv);
             return csv;
         }
 
         // Generate Energy and Magnetic text file
         function generateEnergyMagneticText() {
-            console.log('=== GENERATING ENERGY AND MAGNETIC TEXT ===');
-            console.log('Available data sources:');
-            console.log('- window.currentAnalysisData:', window.currentAnalysisData);
-            console.log('- window.currentStructureInfo:', window.currentStructureInfo);
+            dlog('=== GENERATING ENERGY AND MAGNETIC TEXT ===');
+            dlog('Available data sources:');
+            dlog('- window.currentAnalysisData:', window.currentAnalysisData);
+            dlog('- window.currentStructureInfo:', window.currentStructureInfo);
 
             let text = 'Energy and Magnetic Properties\n';
             text += '================================\n\n';
@@ -7495,7 +7004,7 @@ Crystal system: ${data.crystal_system}`;
 
             if (window.currentAnalysisData) {
                 const analysisData = window.currentAnalysisData;
-                console.log('Using analysis data for energy/magnetic calculation');
+                dlog('Using analysis data for energy/magnetic calculation');
 
                 // Get number of atoms
                 if (window.currentStructureInfo?.num_sites) {
@@ -7506,7 +7015,7 @@ Crystal system: ${data.crystal_system}`;
                     numAtoms = analysisData.final_prediction.magmoms_muB.length;
                 }
 
-                console.log('Number of atoms:', numAtoms);
+                dlog('Number of atoms:', numAtoms);
 
                 // Extract energy data from direct calculation
                 if (analysisData.final_prediction?.energy_eV_per_atom !== undefined) {
@@ -7518,7 +7027,7 @@ Crystal system: ${data.crystal_system}`;
                         perAtom: energyPerAtom,
                         numAtoms: numAtoms
                     };
-                    console.log('Calculated energy data:', energyData);
+                    dlog('Calculated energy data:', energyData);
                 }
 
                 // Extract magnetic data from direct calculation
@@ -7536,9 +7045,9 @@ Crystal system: ${data.crystal_system}`;
                         net: netMagmom,         // Physical net moment
                         individual: magmoms
                     };
-                    console.log('Calculated magnetic data:', magneticData);
-                    console.log('- Total |magnetic moment|:', totalMagmomAbs);
-                    console.log('- Net magnetic moment:', netMagmom);
+                    dlog('Calculated magnetic data:', magneticData);
+                    dlog('- Total |magnetic moment|:', totalMagmomAbs);
+                    dlog('- Net magnetic moment:', netMagmom);
                 }
             }
 
@@ -7603,13 +7112,13 @@ Crystal system: ${data.crystal_system}`;
             }
             text += 'Model: CHGNet\n';
 
-            console.log('Generated Energy and Magnetic text:', text);
+            dlog('Generated Energy and Magnetic text:', text);
             return text;
         }
 
         // Helper function to extract crystal info from display
         function extractCrystalInfoFromDisplay() {
-            console.log('=== EXTRACTING CRYSTAL INFO FROM DISPLAY ===');
+            dlog('=== EXTRACTING CRYSTAL INFO FROM DISPLAY ===');
 
             // Try both main crystal info and modal
             const sources = [
@@ -7620,8 +7129,8 @@ Crystal system: ${data.crystal_system}`;
             for (const source of sources) {
                 if (source && source.innerHTML.trim()) {
                     const html = source.innerHTML;
-                    console.log(`Found crystal info in ${source.id}:`);
-                    console.log('Raw HTML:', html);
+                    dlog(`Found crystal info in ${source.id}:`);
+                    dlog('Raw HTML:', html);
 
                     const info = {};
 
@@ -7636,7 +7145,7 @@ Crystal system: ${data.crystal_system}`;
                     const volumeMatch = html.match(/Volume\s*=\s*([\d.]+)\s*Ų/i);
                     const densityMatch = html.match(/<strong>Density:<\/strong>\s*([\d.]+)\s*g\/cm³/i);
 
-                    console.log('Regex extraction results:', {
+                    dlog('Regex extraction results:', {
                         formulaMatch, aMatch, bMatch, cMatch, alphaMatch, betaMatch, gammaMatch, volumeMatch, densityMatch
                     });
 
@@ -7650,7 +7159,7 @@ Crystal system: ${data.crystal_system}`;
                     if (volumeMatch) info.volume = parseFloat(volumeMatch[1]);
                     if (densityMatch) info.density = parseFloat(densityMatch[1]);
 
-                    console.log('Final extracted crystal info:', info);
+                    dlog('Final extracted crystal info:', info);
 
                     if (Object.keys(info).length > 0) {
                         return info;
@@ -7658,18 +7167,18 @@ Crystal system: ${data.crystal_system}`;
                 }
             }
 
-            console.log('No crystal info found in display');
+            dlog('No crystal info found in display');
             return null;
         }
 
         // Helper function to extract energy from display
         function extractEnergyFromDisplay() {
-            console.log('Extracting energy from display');
+            dlog('Extracting energy from display');
 
             const energySummary = document.getElementById('energy-summary');
             if (energySummary) {
                 const text = energySummary.textContent;
-                console.log('Energy summary text:', text);
+                dlog('Energy summary text:', text);
 
                 // Pattern: "⚡ Energy: -42.07 eV (-8.415 eV/atom, 5 atoms)"
                 const totalMatch = text.match(/Energy:\s*([-\d.]+)\s*eV/);
@@ -7682,23 +7191,23 @@ Crystal system: ${data.crystal_system}`;
                         perAtom: perAtomMatch ? parseFloat(perAtomMatch[1]) : null,
                         numAtoms: atomsMatch ? parseInt(atomsMatch[1]) : null
                     };
-                    console.log('Extracted energy data:', result);
+                    dlog('Extracted energy data:', result);
                     return result;
                 }
             }
 
-            console.log('No energy data found in display');
+            dlog('No energy data found in display');
             return null;
         }
 
         // Helper function to extract magnetic from display
         function extractMagneticFromDisplay() {
-            console.log('Extracting magnetic from display');
+            dlog('Extracting magnetic from display');
 
             const magneticSummary = document.getElementById('magnetic-summary');
             if (magneticSummary) {
                 const text = magneticSummary.textContent;
-                console.log('Magnetic summary text:', text);
+                dlog('Magnetic summary text:', text);
 
                 // Pattern: "🧲 Magnetic: 0.102 µB total"
                 const totalMatch = text.match(/Magnetic:\s*([-\d.]+)\s*µB\s*total/);
@@ -7707,19 +7216,19 @@ Crystal system: ${data.crystal_system}`;
                     const result = {
                         total: parseFloat(totalMatch[1])
                     };
-                    console.log('Extracted magnetic data:', result);
+                    dlog('Extracted magnetic data:', result);
                     return result;
                 }
             }
 
-            console.log('No magnetic data found in display');
+            dlog('No magnetic data found in display');
             return null;
         }
 
         // Generate Final Atomic Properties CSV
         function generateFinalAtomicPropertiesCSV() {
-            console.log('=== GENERATING FINAL ATOMIC PROPERTIES CSV ===');
-            console.log('Using same logic as populateAtomicPropertiesTable');
+            dlog('=== GENERATING FINAL ATOMIC PROPERTIES CSV ===');
+            dlog('Using same logic as populateAtomicPropertiesTable');
 
             let csv = 'Atom,Site Energy (eV),Magnetic (μB),Fx (eV/Å),Fy (eV/Å),Fz (eV/Å),|F| (eV/Å)\n';
 
@@ -7730,21 +7239,21 @@ Crystal system: ${data.crystal_system}`;
             }
 
             const finalPred = window.currentAnalysisData.final_prediction;
-            console.log('Final prediction data:', finalPred);
+            dlog('Final prediction data:', finalPred);
 
             // Get data arrays (same as populateAtomicPropertiesTable)
             const forces = finalPred.forces_eV_per_A || [];
             const siteEnergies = finalPred.site_energies_eV || [];
             const magmoms = finalPred.magmoms_muB || [];
 
-            console.log('Data arrays:');
-            console.log('- forces:', forces);
-            console.log('- siteEnergies:', siteEnergies);
-            console.log('- magmoms:', magmoms);
+            dlog('Data arrays:');
+            dlog('- forces:', forces);
+            dlog('- siteEnergies:', siteEnergies);
+            dlog('- magmoms:', magmoms);
 
             // Determine number of atoms (same logic as display)
             const numAtoms = Math.max(forces.length, siteEnergies.length, magmoms.length);
-            console.log('Number of atoms:', numAtoms);
+            dlog('Number of atoms:', numAtoms);
 
             if (numAtoms === 0) {
                 console.warn('No atomic data available');
@@ -7776,14 +7285,14 @@ Crystal system: ${data.crystal_system}`;
                 csv += `${atomLabel},${siteEnergy},${magmom},${fx},${fy},${fz},${fMag}\n`;
             }
 
-            console.log('Generated Final Atomic Properties CSV:', csv);
+            dlog('Generated Final Atomic Properties CSV:', csv);
             return csv;
         }
 
         // Generate Stress Tensor CSV
         function generateStressTensorCSV() {
-            console.log('=== GENERATING STRESS TENSOR CSV ===');
-            console.log('Using same logic as populateStressDetailTable');
+            dlog('=== GENERATING STRESS TENSOR CSV ===');
+            dlog('Using same logic as populateStressDetailTable');
 
             let csv = 'Component,Value (GPa)\n';
 
@@ -7794,7 +7303,7 @@ Crystal system: ${data.crystal_system}`;
             }
 
             const stress = window.currentAnalysisData.final_prediction.stress_GPa;
-            console.log('Stress data found:', stress);
+            dlog('Stress data found:', stress);
 
             // Define components (same as display logic)
             const components = [
@@ -7811,14 +7320,14 @@ Crystal system: ${data.crystal_system}`;
                 csv += `${component},${value.toFixed(6)}\n`;
             });
 
-            console.log('Generated Stress Tensor CSV:', csv);
+            dlog('Generated Stress Tensor CSV:', csv);
             return csv;
         }
 
         // Generate Step-by-Step Trajectory CSV
         function generateTrajectoryCSV() {
-            console.log('=== GENERATING STEP-BY-STEP TRAJECTORY CSV ===');
-            console.log('Using same logic as trajectory data display');
+            dlog('=== GENERATING STEP-BY-STEP TRAJECTORY CSV ===');
+            dlog('Using same logic as trajectory data display');
 
             let csv = 'Step,Energy (eV),Max Force (eV/Å),RMS Force (eV/Å)\n';
 
@@ -7828,7 +7337,7 @@ Crystal system: ${data.crystal_system}`;
                 return csv;
             }
 
-            console.log('Trajectory data found:', window.currentAnalysisData.trajectory_data);
+            dlog('Trajectory data found:', window.currentAnalysisData.trajectory_data);
 
             const energies = window.currentAnalysisData.trajectory_data.energies;
             const forceMagnitudes = window.currentAnalysisData.trajectory_data.force_magnitudes;
@@ -7851,13 +7360,13 @@ Crystal system: ${data.crystal_system}`;
                 csv += `${step + 1},${energy.toFixed(6)},${maxForce},${rmsForce}\n`;
             });
 
-            console.log('Generated Step-by-Step Trajectory CSV:', csv);
+            dlog('Generated Step-by-Step Trajectory CSV:', csv);
             return csv;
         }
 
         // Generate descriptive ZIP filename
         function generateZipFileName() {
-            console.log('=== GENERATING ZIP FILENAME ===');
+            dlog('=== GENERATING ZIP FILENAME ===');
 
             // Get formula and remove spaces
             let formula = 'Unknown';
@@ -7894,7 +7403,7 @@ Crystal system: ${data.crystal_system}`;
             }
             fileName += `_${timestamp}.zip`;
 
-            console.log('Generated filename components:', { formula, numAtoms, timestamp, fileName });
+            dlog('Generated filename components:', { formula, numAtoms, timestamp, fileName });
             return fileName;
         }
     </script>

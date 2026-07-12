@@ -17,7 +17,8 @@ import signal
 from pathlib import Path
 
 # Environment-aware configuration (same as main.py)
-HOST = os.getenv('CRYSTALNEXUS_HOST', '0.0.0.0')
+# Default to loopback; set CRYSTALNEXUS_HOST=0.0.0.0 to expose on the network
+HOST = os.getenv('CRYSTALNEXUS_HOST', '127.0.0.1')
 PORT = int(os.getenv('CRYSTALNEXUS_PORT', '8080'))
 DEBUG = os.getenv('CRYSTALNEXUS_DEBUG', 'False').lower() == 'true'
 
@@ -51,23 +52,39 @@ def stop_existing_server():
         )
         lines = result.stdout.split('\n')
         for line in lines:
-            if f':{PORT}' in line and 'LISTENING' in line:
-                parts = line.split()
-                if len(parts) > 4:
-                    pid = parts[-1]
-                    if pid != '0':  # Skip system processes
-                        print(f"Found existing server process (PID: {pid})")
-                        print("Stopping existing server...")
-                        # Use PowerShell to kill process (more reliable than taskkill)
-                        kill_result = subprocess.run([
-                            'powershell', '-Command', f'Stop-Process -Id {pid} -Force'
-                        ], capture_output=True, text=True)
-                        
-                        if kill_result.returncode == 0:
-                            print("OK Existing server stopped")
-                            return True
-                        else:
-                            print(f"ERROR Failed to stop process: {kill_result.stderr}")
+            if 'LISTENING' not in line:
+                continue
+            parts = line.split()
+            # netstat -ano columns: Proto, Local Address, Foreign Address, State, PID
+            if len(parts) < 5:
+                continue
+            local_address = parts[1]
+            # Match only the LOCAL address port (a foreign-address port must not match)
+            if not local_address.endswith(f':{PORT}'):
+                continue
+            pid = parts[-1]
+            if pid != '0':  # Skip system processes
+                # Verify the process is actually a python/uvicorn server before killing
+                task_result = subprocess.run(
+                    ['tasklist', '/FI', f'PID eq {pid}'],
+                    capture_output=True, text=True
+                )
+                task_output = task_result.stdout.lower()
+                if 'python' not in task_output and 'uvicorn' not in task_output:
+                    print(f"Skipping PID {pid} on port {PORT}: not a python/uvicorn process")
+                    continue
+                print(f"Found existing server process (PID: {pid})")
+                print("Stopping existing server...")
+                # Use PowerShell to kill process (more reliable than taskkill)
+                kill_result = subprocess.run([
+                    'powershell', '-Command', f'Stop-Process -Id {pid} -Force'
+                ], capture_output=True, text=True)
+
+                if kill_result.returncode == 0:
+                    print("OK Existing server stopped")
+                    return True
+                else:
+                    print(f"ERROR Failed to stop process: {kill_result.stderr}")
         
         print("No existing server found to stop")
         return False
