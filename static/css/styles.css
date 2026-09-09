@@ -1387,6 +1387,21 @@ body {
     transition: width 0.3s ease;
 }
 
+/* Unknown-duration progress (e.g. the interstitial-site geometric search):
+   a sliding band instead of a frozen or fake determinate bar, so the UI
+   visibly keeps working while the total step count isn't known yet. */
+.progress-fill.indeterminate {
+    width: 40% !important;
+    transition: none;
+    animation: progress-indeterminate-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes progress-indeterminate-slide {
+    0% { margin-left: 0%; }
+    50% { margin-left: 60%; }
+    100% { margin-left: 0%; }
+}
+
 
 .chgnet-results {
     border-top: 1px solid #e0e0e0;

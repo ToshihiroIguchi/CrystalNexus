@@ -8,6 +8,10 @@ from pathlib import Path
 
 import pytest
 
+from pymatgen.core import Structure
+
+from main import find_interstitial_candidates
+
 
 def _analyze_sample(client, filename="Metals/Cu.cif"):
     response = client.post("/api/analyze-cif-sample", json={"filename": filename})
@@ -154,3 +158,156 @@ def test_generate_modified_structure_cif_rejects_traversal(client):
         "supercell_size": [1, 1, 1],
     })
     assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# find_interstitial_candidates (replaces pymatgen's VoronoiInterstitialGenerator)
+#
+# Regression coverage for the hang reported against atom insertion: the old
+# VoronoiInterstitialGenerator's StructureMatcher-based symmetry grouping is
+# O(C^2) full structure comparisons and took ~7 minutes on a 3x3x3 Cu supercell.
+# find_interstitial_candidates must return the same sites in well under a second.
+# ---------------------------------------------------------------------------
+
+def _reference_void_distances(structure, element="Li", cutoff=5.0):
+    """Reference implementation using pymatgen's own VoronoiInterstitialGenerator."""
+    from pymatgen.analysis.defects.generators import VoronoiInterstitialGenerator
+    generator = VoronoiInterstitialGenerator()
+    defects = generator.get_defects(structure, insert_species=[element])
+    distances = []
+    for defect in defects:
+        neighbors = structure.get_neighbors(defect.site, cutoff)
+        distances.append(round(min(n.nn_distance for n in neighbors), 3) if neighbors else 0.0)
+    return sorted(distances)
+
+
+def test_find_interstitial_candidates_matches_reference_small_cell(sample_cif_dir):
+    """Fast path (<5-atom unit cell): must match pymatgen's own generator exactly."""
+    structure = Structure.from_file(sample_cif_dir / "Metals" / "Cu.cif")
+    fast_distances = sorted(c["min_dist"] for c in find_interstitial_candidates(structure))
+    assert fast_distances == _reference_void_distances(structure)
+
+
+@pytest.mark.slow
+def test_find_interstitial_candidates_matches_reference_supercell(sample_cif_dir):
+    """2x2x2 supercell: same octahedral/tetrahedral FCC sites as the reference generator."""
+    structure = Structure.from_file(sample_cif_dir / "Metals" / "Cu.cif")
+    structure.make_supercell((2, 2, 2))
+    fast_distances = sorted(c["min_dist"] for c in find_interstitial_candidates(structure))
+    assert fast_distances == _reference_void_distances(structure)
+
+
+def test_find_interstitial_candidates_vacuum_structure_does_not_collapse(sample_cif_dir):
+    """A molecule-in-a-box structure has no atoms within the fingerprint cutoff for
+    most candidate sites; those must stay distinct instead of collapsing to one."""
+    structure = Structure.from_file(sample_cif_dir / "Gases" / "CO2(gas).cif")
+    candidates = find_interstitial_candidates(structure)
+    assert len(candidates) > 1
+
+
+def test_find_interstitial_candidates_respects_max_candidates(sample_cif_dir):
+    structure = Structure.from_file(sample_cif_dir / "Metals" / "Nd2Fe14B.cif")
+    candidates = find_interstitial_candidates(structure, max_candidates=5)
+    assert len(candidates) <= 5
+    # ids/labels stay 0-based and contiguous after truncation
+    assert [c["id"] for c in candidates] == list(range(len(candidates)))
+
+
+# ---------------------------------------------------------------------------
+# /api/get-insertion-voids
+# ---------------------------------------------------------------------------
+
+def test_get_insertion_voids_missing_session_id(client):
+    response = client.post("/api/get-insertion-voids", json={"element": "Li"})
+    assert response.status_code == 400
+
+
+def test_get_insertion_voids_unknown_session_id(client):
+    response = client.post("/api/get-insertion-voids", json={
+        "session_id": str(uuid.uuid4()),
+        "element": "Li",
+    })
+    assert response.status_code == 404
+
+
+@pytest.mark.slow
+def test_get_insertion_voids_flow(client):
+    """Full flow: analyze -> create supercell -> find insertion voids."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    response = client.post("/api/get-insertion-voids", json={
+        "session_id": session_id,
+        "element": "Li",
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert len(data["voids"]) > 0
+    assert {"id", "label", "frac_coords", "min_dist"} <= data["voids"][0].keys()
+
+
+# ---------------------------------------------------------------------------
+# /api/evaluate-insertion-energies
+# ---------------------------------------------------------------------------
+
+def test_evaluate_insertion_energies_missing_session_id(client):
+    response = client.post("/api/evaluate-insertion-energies", json={
+        "element": "Li",
+        "sites": [{"id": 0, "frac_coords": [0.5, 0.5, 0.5]}],
+    })
+    assert response.status_code == 400
+
+
+def test_evaluate_insertion_energies_unknown_session_id(client):
+    response = client.post("/api/evaluate-insertion-energies", json={
+        "session_id": str(uuid.uuid4()),
+        "element": "Li",
+        "sites": [{"id": 0, "frac_coords": [0.5, 0.5, 0.5]}],
+    })
+    assert response.status_code == 404
+
+
+def test_evaluate_insertion_energies_exceeds_max_batch(client):
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    from main import MAX_INSERTION_BATCH
+    too_many_sites = [{"id": i, "frac_coords": [0.1, 0.1, 0.1]} for i in range(MAX_INSERTION_BATCH + 1)]
+    response = client.post("/api/evaluate-insertion-energies", json={
+        "session_id": session_id,
+        "element": "Li",
+        "sites": too_many_sites,
+    })
+    assert response.status_code == 400
+
+
+@pytest.mark.slow
+def test_evaluate_insertion_energies_flow(client):
+    """Full flow: analyze -> create supercell -> batch-evaluate insertion energies."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    voids_response = client.post("/api/get-insertion-voids", json={
+        "session_id": session_id,
+        "element": "Li",
+    })
+    assert voids_response.status_code == 200
+    voids = voids_response.json()["voids"]
+    assert len(voids) > 0
+
+    response = client.post("/api/evaluate-insertion-energies", json={
+        "session_id": session_id,
+        "element": "Li",
+        "sites": [{"id": v["id"], "frac_coords": v["frac_coords"]} for v in voids],
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert len(data["results"]) == len(voids)
+    for result in data["results"]:
+        assert result["error"] is None
+        assert isinstance(result["energy"], float)
