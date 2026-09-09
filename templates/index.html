@@ -754,6 +754,12 @@
         }
 
         // Update session with atomic operations
+        // Returns true if the backend accepted the current operation history,
+        // false otherwise. On failure the most recently recorded operation is
+        // rolled back (popped from window.atomicOperations) so a rejected
+        // operation doesn't silently stick around and get replayed against
+        // later edits -- every call site pushes exactly one operation
+        // immediately before calling this function.
         async function updateSessionWithOperations() {
             try {
                 const response = await fetch('/api/apply-atomic-operations', {
@@ -774,11 +780,25 @@
                     // Update status to ready for calculation when structure changes
                     updateStatusDisplay('energy', 'ready');
                     updateStatusDisplay('magnetic', 'ready');
-                } else {
-                    console.error('❌ Failed to update session with operations');
+                    return true;
                 }
+
+                let detail = `HTTP ${response.status}`;
+                try {
+                    const errorData = await response.json();
+                    if (errorData.detail) detail = errorData.detail;
+                } catch (e) {
+                    // response body wasn't JSON; keep the HTTP status as the detail
+                }
+                console.error('❌ Failed to update session with operations:', detail);
+                window.atomicOperations.pop();
+                showNotification(`Operation rejected by server (undone): ${detail}`, 'error');
+                return false;
             } catch (error) {
                 console.error('❌ Error updating session:', error);
+                window.atomicOperations.pop();
+                showNotification('Operation could not be saved (undone): network error.', 'error');
+                return false;
             }
         }
 
@@ -3612,7 +3632,10 @@ Crystal system: ${data.crystal_system}`;
             await updateStructureForSubstitution(atomIndex, elementLabel, newElement);
 
             // Update session with new operations
-            await updateSessionWithOperations();
+            const accepted = await updateSessionWithOperations();
+            if (!accepted) {
+                return; // updateSessionWithOperations already rolled back and notified
+            }
 
             // Reset physical properties after structure modification
             resetPhysicalProperties();
@@ -3650,7 +3673,10 @@ Crystal system: ${data.crystal_system}`;
             await updateStructureForDeletion(atomIndex, elementLabel);
 
             // Update session with new operations
-            await updateSessionWithOperations();
+            const accepted = await updateSessionWithOperations();
+            if (!accepted) {
+                return; // updateSessionWithOperations already rolled back and notified
+            }
 
             // Reset physical properties after structure modification
             resetPhysicalProperties();
