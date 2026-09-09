@@ -3084,22 +3084,82 @@ Crystal system: ${data.crystal_system}`;
             }
         }
 
+        // Kept in sync with MAX_INSERTION_BATCH in main.py.
+        const INSERTION_ENERGY_BATCH_SIZE = 8;
+        // The geometric search is normally sub-second; this bounds the wait on
+        // pathological structures instead of leaving the user staring at a
+        // spinner forever with no way to tell a hang from real progress.
+        const VOID_SEARCH_TIMEOUT_MS = 120000;
+
         async function performIterativeInsertionEvaluation(element, quickMode = false) {
             // Reset candidates
             window.insertionCandidates = [];
             window.lastEvaluatedElement = element;
 
+            // Create the controller for this run up front, before any await, so
+            // Cancel works immediately during the geometric-search phase too
+            // (previously it was only created before the energy-evaluation phase,
+            // leaving Cancel a silent no-op while the search was running).
+            // Abort any still-running previous sweep first so its `finally`
+            // block can't null out *this* run's controller out from under it.
+            if (currentAbortController) currentAbortController.abort();
+            const controller = new AbortController();
+            currentAbortController = controller;
+
+            let elapsedTimer = null;
+
             try {
                 // Phase 1: Geometric Search
+                setExecuteProgressIndeterminate(true);
                 showExecuteStatus(`Geometric Search (Voronoi) for ${element}...`, true, true);
 
-                const voidsResponse = await fetch('/api/get-insertion-voids', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ session_id: window.sessionId, element: element })
-                });
+                const searchStart = Date.now();
+                elapsedTimer = setInterval(() => {
+                    const secs = Math.floor((Date.now() - searchStart) / 1000);
+                    showExecuteStatus(`Geometric Search (Voronoi) for ${element}... ${secs}s`, true, true);
+                }, 1000);
+
+                // A separate controller for the timeout, chained to the user's
+                // controller, so we can tell "user cancelled" apart from
+                // "search took too long" even though both abort the fetch.
+                const timeoutController = new AbortController();
+                const timeoutId = setTimeout(() => timeoutController.abort(), VOID_SEARCH_TIMEOUT_MS);
+                controller.signal.addEventListener('abort', () => timeoutController.abort());
+
+                let voidsResponse;
+                try {
+                    voidsResponse = await fetch('/api/get-insertion-voids', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ session_id: window.sessionId, element: element }),
+                        signal: timeoutController.signal
+                    });
+                } catch (err) {
+                    if (controller.signal.aborted) {
+                        return { success: false, message: "Search cancelled by user." };
+                    }
+                    if (err.name === 'AbortError') {
+                        return { success: false, message: "Geometric search timed out. Try a smaller supercell." };
+                    }
+                    throw err;
+                } finally {
+                    clearTimeout(timeoutId);
+                    clearInterval(elapsedTimer);
+                    elapsedTimer = null;
+                }
+
+                if (!voidsResponse.ok) {
+                    let detail = `HTTP ${voidsResponse.status}`;
+                    try {
+                        const errData = await voidsResponse.json();
+                        detail = errData.detail || detail;
+                    } catch (_) { /* body wasn't JSON; keep the HTTP status */ }
+                    return { success: false, message: `Geometric search failed: ${detail}` };
+                }
+
                 const voidsData = await voidsResponse.json();
                 const voids = voidsData.voids || [];
+                setExecuteProgressIndeterminate(false);
 
                 if (voids.length === 0) {
                     return { success: false, message: "No potential insertion sites found." };
@@ -3121,62 +3181,65 @@ Crystal system: ${data.crystal_system}`;
                     return { success: true, count: voids.length, quickMode: true };
                 }
 
-                // Phase 2: Energy Prediction
+                // Phase 2: Energy Prediction, chunked into batch requests so a
+                // single request stays short (Cancel keeps working between chunks)
+                // while still cutting the number of round-trips by ~8x.
                 showExecuteStatus(`Energy Prediction (CHGNet) for ${element}...`, true, true);
                 updateExecuteProgress(0, voids.length);
 
-                currentAbortController = new AbortController();
+                let completed = 0;
+                for (let i = 0; i < voids.length; i += INSERTION_ENERGY_BATCH_SIZE) {
+                    if (controller.signal.aborted) break;
 
-                // Step 2: Evaluate each void iteratively
-                for (let i = 0; i < voids.length; i++) {
-                    if (currentAbortController.signal.aborted) break;
-
-                    const v = voids[i];
-                    showExecuteStatus(`Evaluating site ${i + 1}/${voids.length}...`, true, true);
+                    const chunk = voids.slice(i, i + INSERTION_ENERGY_BATCH_SIZE);
+                    const lastInChunk = Math.min(i + chunk.length, voids.length);
+                    showExecuteStatus(`Evaluating sites ${i + 1}-${lastInChunk}/${voids.length}...`, true, true);
 
                     try {
-                        const energyResponse = await fetch('/api/evaluate-insertion-energy', {
+                        const energyResponse = await fetch('/api/evaluate-insertion-energies', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
                                 session_id: window.sessionId,
                                 element: element,
-                                frac_coords: v.frac_coords
+                                sites: chunk.map(v => ({ id: v.id, frac_coords: v.frac_coords }))
                             }),
-                            signal: currentAbortController.signal
+                            signal: controller.signal
                         });
-                        const energyData = await energyResponse.json();
 
-                        if (energyData.status === 'success') {
-                            const energy = energyData.energy;
-                            const cand = {
-                                ...v,
-                                energy: energy,
-                                rel_energy: 0
-                            };
-                            window.insertionCandidates.push(cand);
+                        if (!energyResponse.ok) {
+                            console.warn(`Batch evaluation failed for sites ${i + 1}-${lastInChunk}: HTTP ${energyResponse.status}`);
+                        } else {
+                            const energyData = await energyResponse.json();
+                            const resultById = new Map((energyData.results || []).map(r => [r.id, r]));
 
-                            // Update chart
-                            if (window.autoModeChart) {
-                                window.autoModeChart.addDataPoint(`Site ${i + 1}`, energy);
+                            for (const v of chunk) {
+                                const result = resultById.get(v.id);
+                                if (result && result.error === null && typeof result.energy === 'number') {
+                                    window.insertionCandidates.push({ ...v, energy: result.energy, rel_energy: 0 });
+                                    if (window.autoModeChart) {
+                                        window.autoModeChart.addDataPoint(v.label, result.energy);
+                                    }
+                                } else {
+                                    console.warn(`${v.label} energy evaluation failed:`, result && result.error);
+                                }
                             }
 
-                            // Update Current Best in status UI
-                            const currentBest = [...window.insertionCandidates].sort((a, b) => a.energy - b.energy)[0];
-                            updateCurrentBest(currentBest.energy, currentBest.label, `INSERT ${element}`);
-                        } else {
-                            // Prediction failed for this site; skip it but leave a trace
-                            console.warn(`Site ${i + 1} energy evaluation failed:`, energyData.detail || energyData);
+                            if (window.insertionCandidates.length > 0) {
+                                const currentBest = [...window.insertionCandidates].sort((a, b) => a.energy - b.energy)[0];
+                                updateCurrentBest(currentBest.energy, currentBest.label, `INSERT ${element}`, 'eV');
+                            }
                         }
                     } catch (err) {
                         if (err.name === 'AbortError') break;
-                        console.error(`Error evaluating site ${i + 1}:`, err);
+                        console.error(`Error evaluating sites ${i + 1}-${lastInChunk}:`, err);
                     }
 
-                    updateExecuteProgress(i + 1, voids.length);
+                    completed = lastInChunk;
+                    updateExecuteProgress(completed, voids.length);
                 }
 
-                if (currentAbortController && currentAbortController.signal.aborted) {
+                if (controller.signal.aborted) {
                     return { success: false, message: "Evaluation cancelled by user." };
                 }
 
@@ -3202,7 +3265,9 @@ Crystal system: ${data.crystal_system}`;
                 console.error('Error in iterative evaluation:', error);
                 return { success: false, message: error.message };
             } finally {
-                currentAbortController = null;
+                if (elapsedTimer) clearInterval(elapsedTimer);
+                setExecuteProgressIndeterminate(false);
+                if (currentAbortController === controller) currentAbortController = null;
             }
         }
 
@@ -3424,6 +3489,11 @@ Crystal system: ${data.crystal_system}`;
 
                     if (elementToInsert) {
                         if (window.viewer && typeof clearGhostAtom === 'function') clearGhostAtom();
+                        // Manual-mode handleInsertion doesn't set a processing
+                        // button state itself (unlike handleOptimalInsertion), so
+                        // guard here to prevent a rapid double-click from
+                        // recording the same insertion operation twice.
+                        executeBtn.disabled = true;
                         try {
                             if (isAutoMode) {
                                 await handleOptimalInsertion(elementToInsert);
@@ -3599,7 +3669,7 @@ Crystal system: ${data.crystal_system}`;
                 if (result.success && window.insertionCandidates.length > 0) {
                     const bestCand = [...window.insertionCandidates].sort((a, b) => a.energy - b.energy)[0];
 
-                    if (bestCand.energy > 90000) {
+                    if (typeof bestCand.energy !== 'number') {
                         throw new Error("No stable insertion sites found.");
                     }
 
@@ -3617,6 +3687,7 @@ Crystal system: ${data.crystal_system}`;
                         bestResult: {
                             atom: `Site 1`,
                             energy: bestCand.energy,
+                            unit: 'eV',
                             index: 0
                         }
                     };
@@ -3689,12 +3760,21 @@ Crystal system: ${data.crystal_system}`;
                 window.currentStructureData.supercell_info.density = newDensity;
             }
 
-            // Update displays
+            // Update displays. displayStructureOperations() rebuilds the whole
+            // operations panel from its static template, which always starts
+            // on the "Edit Existing" tab; restore Insert New here so a
+            // completed insertion doesn't visually kick the user back to the
+            // other tab.
+            const wasInsertMode = window.currentOperationMode === 'insert';
             supercellData = window.currentStructureData;
             displaySupercellInfo();
             displayStructureOperations(window.currentLabels);
             updateStructureVisualization();
             resetPhysicalProperties();
+            if (wasInsertMode) {
+                const tabInsert = document.getElementById('tab-insert');
+                if (tabInsert) tabInsert.click();
+            }
 
             dlog(`✓ Inserted ${elementToInsert}`);
             showNotification(`Successfully inserted ${elementToInsert}`, 'success');
@@ -3708,7 +3788,13 @@ Crystal system: ${data.crystal_system}`;
             if (!cand) return;
 
             dlog(`🧪 Evaluating specific candidate: ${cand.label} for ${element}`);
-            showExecuteStatus(`Evaluating energy for ${cand.label}...`, true, false);
+            // showCancel=true: a single CHGNet call is normally quick, but on a
+            // large structure it can still take a while, and previously this
+            // path had no Cancel button at all.
+            if (currentAbortController) currentAbortController.abort();
+            const controller = new AbortController();
+            currentAbortController = controller;
+            showExecuteStatus(`Evaluating energy for ${cand.label}...`, true, true);
 
             // Show loading state in current-best box
             const currentBestDisplay = document.getElementById('current-best');
@@ -3728,7 +3814,8 @@ Crystal system: ${data.crystal_system}`;
                         session_id: window.sessionId,
                         element: element,
                         frac_coords: cand.frac_coords
-                    })
+                    }),
+                    signal: controller.signal
                 });
                 const data = await response.json();
 
@@ -3760,8 +3847,14 @@ Crystal system: ${data.crystal_system}`;
                     showExecuteStatus(`Energy evaluation failed for ${cand.label}.`, false, false);
                 }
             } catch (error) {
+                if (error.name === 'AbortError') {
+                    // Cancel button already hid the status and reset current-best.
+                    return;
+                }
                 console.error('❌ Error evaluating specific site:', error);
                 if (energyElement) energyElement.textContent = 'Error';
+            } finally {
+                if (currentAbortController === controller) currentAbortController = null;
             }
         }
 
@@ -3978,6 +4071,11 @@ Crystal system: ${data.crystal_system}`;
 
             if (showCancel) {
                 cancelBtn.style.display = 'block';
+                // Restore the button in case a previous run left it disabled
+                // mid-"Stopping..." (e.g. the user started a new operation
+                // immediately after cancelling).
+                cancelBtn.disabled = false;
+                cancelBtn.textContent = '❌ Cancel Operation';
             } else {
                 cancelBtn.style.display = 'none';
             }
@@ -3987,6 +4085,10 @@ Crystal system: ${data.crystal_system}`;
             const progressBar = document.getElementById('execute-progress-bar');
             const progressFill = progressBar.querySelector('.progress-fill');
 
+            // A determinate update always means we know current/total now,
+            // so drop any indeterminate (unknown-duration) animation.
+            progressFill.classList.remove('indeterminate');
+
             if (total === 0) {
                 progressFill.style.width = '0%';
                 return;
@@ -3994,6 +4096,20 @@ Crystal system: ${data.crystal_system}`;
 
             const percentage = Math.min((current / total) * 100, 100);
             progressFill.style.width = `${percentage}%`;
+        }
+
+        // Toggle the "unknown duration" progress animation, used while a phase
+        // (e.g. the Voronoi geometric search) is running but its total step
+        // count isn't known yet, so a determinate bar would just sit frozen.
+        function setExecuteProgressIndeterminate(on) {
+            const progressBar = document.getElementById('execute-progress-bar');
+            const progressFill = progressBar.querySelector('.progress-fill');
+            if (on) {
+                progressFill.classList.add('indeterminate');
+                progressFill.style.width = '';
+            } else {
+                progressFill.classList.remove('indeterminate');
+            }
         }
 
         function showExecutionComplete(message, results = null) {
@@ -4045,7 +4161,8 @@ Crystal system: ${data.crystal_system}`;
 
                     if (currentBest && currentBestEnergy && currentBestAtom) {
                         currentBest.style.display = 'block';
-                        currentBestEnergy.textContent = `${results.bestResult.energy.toFixed(6)} eV/atom`;
+                        const unit = results.bestResult.unit || 'eV/atom';
+                        currentBestEnergy.textContent = `${results.bestResult.energy.toFixed(6)} ${unit}`;
                         currentBestAtom.textContent = results.bestResult.atom;
                     }
                 }
@@ -4069,7 +4186,7 @@ Crystal system: ${data.crystal_system}`;
         }
 
         // Update current best result during calculation
-        function updateCurrentBest(energy, atomLabel, operationType) {
+        function updateCurrentBest(energy, atomLabel, operationType, unit = 'eV/atom') {
             const currentBest = document.getElementById('current-best');
             const energyElement = document.getElementById('current-best-energy');
             const atomElement = document.getElementById('current-best-atom');
@@ -4079,7 +4196,7 @@ Crystal system: ${data.crystal_system}`;
             }
 
             // Format energy with appropriate precision
-            energyElement.textContent = `${energy.toFixed(6)} eV/atom`;
+            energyElement.textContent = `${energy.toFixed(6)} ${unit}`;
 
             // Format atom info based on operation type
             if (operationType === 'DELETE') {
@@ -4108,6 +4225,12 @@ Crystal system: ${data.crystal_system}`;
             if (cancelBtn) {
                 cancelBtn.addEventListener('click', function () {
                     if (currentAbortController) {
+                        // Immediate feedback: the in-flight fetch/inference on the
+                        // server can't be interrupted, so the UI won't settle
+                        // instantly. Show that the click registered right away
+                        // rather than leaving the button looking unresponsive.
+                        cancelBtn.disabled = true;
+                        cancelBtn.textContent = '⏹ Stopping...';
                         currentAbortController.abort();
                         hideExecuteStatus();
                         hideCurrentBest();
