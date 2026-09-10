@@ -271,21 +271,25 @@
     <p>CrystalNexus provides sophisticated routines for modifying crystal structures, leveraging both geometric analysis
         and machine learning energy predictions.</p>
 
-    <h3>5.1 Element Substitution</h3>
-    <p>Element substitution can be performed in two modes:</p>
+    <h3>5.1 Element Substitution and Deletion</h3>
+    <p>Element substitution and atom deletion share the same "Edit Existing" workflow and can each be performed in two
+        modes:</p>
     <ul>
-        <li><strong>Manual Mode:</strong> Allows for deterministic replacement of a specific atom at a user-defined site
-            index. This operation is implemented using Pymatgen to preserve the crystalline environment while updating
-            the chemical species<sup><a href="#ref6" class="citation">[6]</a></sup>.</li>
+        <li><strong>Manual Mode:</strong> Allows for deterministic replacement (or removal) of a specific atom at a
+            user-selected site. This operation is implemented using Pymatgen to preserve the crystalline environment
+            while updating the chemical species<sup><a href="#ref6" class="citation">[6]</a></sup>.</li>
         <li><strong>Auto (Optimal) Mode:</strong> Employs an exhaustive screening algorithm to identify the most
-            energetically favorable substitution site for a target element. For a chosen source element type (e.g.,
-            oxygen), the system evaluates the energy $E$ of the structure with the substitution applied at each
-            valid site $i$:
+            energetically favorable substitution (or deletion) site for a target element. For a chosen source element
+            type (e.g., oxygen), the system evaluates the energy $E$ of the structure with the operation applied at
+            each valid site $i$:
             <div class="equation">
-                $$i^* = \text{arg min}_i \{ E(\text{Substitution at site } i) \}$$
+                $$i^* = \text{arg min}_i \{ E(\text{Operation applied at site } i) \}$$
             </div>
-            Energy predictions are performed using the CHGNet universal potential, allowing for rapid assessment across
-            all candidate sites<sup><a href="#ref3" class="citation">[3]</a></sup>.
+            Energy predictions are performed using the CHGNet universal potential<sup><a href="#ref3"
+                    class="citation">[3]</a></sup>. Candidate sites are screened in batches of up to 8 per request
+            (one native batched CHGNet call per batch, rather than one request per site), which keeps large sweeps
+            responsive to cancellation: the search can be stopped mid-sweep with no partial operation applied, and a
+            sweep is automatically aborted if it runs pathologically long.
         </li>
     </ul>
 
@@ -299,9 +303,12 @@
             interstitial positions:
             <ol>
                 <li><strong>Geometric Void Detection:</strong> Potential insertion sites are identified via Voronoi
-                    tessellation analysis. The system uses the <code>VoronoiInterstitialGenerator</code> to determine
-                    symmetrically distinct voids based on the local environment of existing atoms<sup><a href="#ref6"
-                            class="citation">[6]</a></sup>.</li>
+                    tessellation analysis, then de-duplicated to symmetrically distinct voids using a local-environment
+                    fingerprint of each candidate site's neighbors<sup><a href="#ref6" class="citation">[6]</a></sup>.
+                    This replaces Pymatgen's general-purpose <code>VoronoiInterstitialGenerator</code>, whose pairwise
+                    structure-matching for deduplication scales quadratically with candidate count and became
+                    impractically slow on larger supercells; the fingerprint approach scales linearly and returns the
+                    same sites.</li>
                 <li><strong>Energetic Stability Evaluation:</strong> Each candidate interstitial site is evaluated for
                     thermodynamic stability using CHGNet energy predictions. The site yielding the lowest total energy
                     is recommended as the optimal insertion point<sup><a href="#ref3" class="citation">[3]</a></sup>.
