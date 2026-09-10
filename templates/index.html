@@ -4371,8 +4371,17 @@ Crystal system: ${data.crystal_system}`;
 
                             for (const atom of chunk) {
                                 const result = resultById.get(atom.index);
-                                if (result && result.error === null && typeof result.energy_eV_per_atom === 'number') {
-                                    const energy = result.energy_eV_per_atom;
+                                // Use total energy (eV), not energy_eV_per_atom: every
+                                // candidate in one sweep has the same atom count
+                                // (substitution never changes it; every deletion
+                                // candidate removes exactly one atom), so total and
+                                // per-atom energy rank candidates identically -- this
+                                // just matches the unit insertion's sweep already
+                                // displays (see runOptimalCandidateSweep's insertion
+                                // counterpart), instead of mixing eV and eV/atom
+                                // across operation types.
+                                if (result && result.error === null && typeof result.energy === 'number') {
+                                    const energy = result.energy;
 
                                     calculationResults.successful.push({ atom: atom.label, energy, index: atom.index, attempts: 1 });
 
@@ -4381,13 +4390,13 @@ Crystal system: ${data.crystal_system}`;
                                     }
 
                                     if (!calculationResults.bestResult || energy < calculationResults.bestResult.energy) {
-                                        calculationResults.bestResult = { atom: atom.label, energy, index: atom.index };
-                                        updateCurrentBest(energy, atom.label, action === 'substitute' ? newElement : 'DELETE');
+                                        calculationResults.bestResult = { atom: atom.label, energy, index: atom.index, unit: 'eV' };
+                                        updateCurrentBest(energy, atom.label, action === 'substitute' ? newElement : 'DELETE', 'eV');
                                     }
 
                                     dlog(action === 'substitute'
-                                        ? `${atom.label} → ${newElement}: ${energy.toFixed(6)} eV/atom`
-                                        : `Delete ${atom.label}: ${energy.toFixed(6)} eV/atom`);
+                                        ? `${atom.label} → ${newElement}: ${energy.toFixed(6)} eV`
+                                        : `Delete ${atom.label}: ${energy.toFixed(6)} eV`);
                                 } else {
                                     const errorMsg = (result && result.error) || 'Unknown error';
                                     calculationResults.failed.push({ atom: atom.label, errors: [{ error: errorMsg }], finalError: errorMsg });
@@ -4469,7 +4478,7 @@ Crystal system: ${data.crystal_system}`;
                 // Display calculation summary
                 const resultSummary = [...successful]
                     .sort((a, b) => a.energy - b.energy)
-                    .map((r, i) => `${i + 1}. ${r.atom}: ${r.energy.toFixed(6)} eV/atom (${r.attempts} attempts)`)
+                    .map((r, i) => `${i + 1}. ${r.atom}: ${r.energy.toFixed(6)} eV (${r.attempts} attempts)`)
                     .join('\n');
 
                 dlog(`Energy comparison results (${successful.length}/${totalProcessed} successful):\n${resultSummary}`);
@@ -4500,7 +4509,7 @@ Crystal system: ${data.crystal_system}`;
                 }
 
                 // Show completion state instead of hiding
-                showExecutionComplete(`Substitution Completed. Best: ${bestResult.atom} -> ${newElement} (${bestResult.energy.toFixed(4)} eV/atom)`, results);
+                showExecutionComplete(`Substitution Completed. Best: ${bestResult.atom} -> ${newElement} (${bestResult.energy.toFixed(4)} eV)`, results);
 
             } else {
                 // All calculations failed
@@ -4529,7 +4538,7 @@ Crystal system: ${data.crystal_system}`;
                     <h4>Auto Mode ${operationType} Report</h4>
                     <div class="summary">
                         <p><strong>Success Rate:</strong> ${summary.successRate}% (${summary.successfulCalculations}/${summary.totalAtoms})</p>
-                        <p><strong>Best Result:</strong> ${bestResult.atom} → ${bestResult.energy.toFixed(6)} eV/atom</p>
+                        <p><strong>Best Result:</strong> ${bestResult.atom} → ${bestResult.energy.toFixed(6)} eV</p>
                     </div>
                     
                     ${failed.length > 0 ? `
@@ -4609,7 +4618,7 @@ Crystal system: ${data.crystal_system}`;
                 // Display calculation summary
                 const resultSummary = [...successful]
                     .sort((a, b) => a.energy - b.energy)
-                    .map((r, i) => `${i + 1}. Delete ${r.atom}: ${r.energy.toFixed(6)} eV/atom (${r.attempts} attempts)`)
+                    .map((r, i) => `${i + 1}. Delete ${r.atom}: ${r.energy.toFixed(6)} eV (${r.attempts} attempts)`)
                     .join('\n');
 
                 dlog(`Energy comparison results (${successful.length}/${totalProcessed} successful):\n${resultSummary}`);
@@ -4640,7 +4649,7 @@ Crystal system: ${data.crystal_system}`;
                 }
 
                 // Show completion state instead of hiding
-                showExecutionComplete(`Deletion Completed. Best: ${bestResult.atom} (${bestResult.energy.toFixed(4)} eV/atom)`, results);
+                showExecutionComplete(`Deletion Completed. Best: ${bestResult.atom} (${bestResult.energy.toFixed(4)} eV)`, results);
 
             } else {
                 // All calculations failed
