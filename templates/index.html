@@ -2867,17 +2867,56 @@ Crystal system: ${data.crystal_system}`;
                 // Initialize current working labels
                 window.currentLabels = [...labelData.labels];
 
-                displayStructureOperations(window.currentLabels);
+                // Always a full rebuild: this runs once per new supercell
+                // (called only from createSupercell), i.e. a genuinely new
+                // structure the panel has never reflected before. The user
+                // can also re-open the CIF modal without a "New CIF" reset,
+                // so this can't rely on displayStructureOperations' own
+                // not-built detection.
+                displayStructureOperations(window.currentLabels, { forceRebuild: true });
 
             } catch (error) {
                 console.error('Error loading element labels:', error);
                 window.originalLabels = [];
                 window.currentLabels = [];
-                displayStructureOperations([]);
+                displayStructureOperations([], { forceRebuild: true });
             }
         }
 
-        function displayStructureOperations(labels) {
+        // Dispatcher for the two ways the operations panel can be updated:
+        //
+        // - buildStructureOperationsPanel(labels): (re)creates the panel's
+        //   entire DOM subtree from the template below, including every
+        //   listener, the chart canvas, and Reset/tab state. Needed when
+        //   the underlying structure or session actually changed (a new
+        //   CIF, a new supercell) or the panel doesn't exist yet.
+        // - refreshStructureOperationsOptions(labels): only replaces the
+        //   <option> lists of the two atom-selection dropdowns, leaving
+        //   every other node (and its listeners) untouched. Used after an
+        //   atom operation or a Reset, where only which atoms exist changed
+        //   -- not the panel's structure -- so the user's tab, selections,
+        //   and chart survive.
+        //
+        // Which path runs is decided by a DOM probe (does the panel contain
+        // #execute-btn?) rather than a tracked boolean, so any full
+        // innerHTML wipe elsewhere in the file (resetApplicationState's
+        // mock-text placeholder, the "No element labels available" case
+        // below) self-heals into a rebuild here rather than silently
+        // refreshing a panel that doesn't exist.
+        function displayStructureOperations(labels, { forceRebuild = false } = {}) {
+            const operationsElement = document.getElementById('structure-operations-content');
+            if (!operationsElement) return;
+
+            const isBuilt = operationsElement.querySelector('#execute-btn') !== null;
+
+            if (forceRebuild || labels.length === 0 || !isBuilt) {
+                buildStructureOperationsPanel(labels);
+            } else {
+                refreshStructureOperationsOptions(labels);
+            }
+        }
+
+        function buildStructureOperationsPanel(labels) {
             const operationsElement = document.getElementById('structure-operations-content');
             operationsElement.classList.remove('mock-text');
 
@@ -3041,27 +3080,71 @@ Crystal system: ${data.crystal_system}`;
                 });
             }
 
-            // Initialize Chart if not already done
-            const chartCanvas = document.getElementById('auto-mode-chart');
-
-            // Check if existing chart is stale (canvas reference mismatch)
+            // The template above always creates a brand-new <canvas
+            // id="auto-mode-chart">, so any existing chart instance is now
+            // pointing at a detached node -- always replace it here rather
+            // than reset()ing it (reset() is for refreshStructureOperations
+            // Options, where the canvas node is untouched). destroy() also
+            // removes the instance's window 'resize' listener; skipping it
+            // would leak one every rebuild (New CIF, new supercell).
             if (window.autoModeChart) {
-                // If the chart's canvas is different from the one currently in the DOM, it's stale
-                if (window.autoModeChart.canvas !== chartCanvas) {
-                    dlog('♻️ Re-initializing chart (canvas mismatch)');
-                    if (typeof window.autoModeChart.destroy === 'function') {
-                        window.autoModeChart.destroy();
-                    }
-                    window.autoModeChart = null;
-                }
+                window.autoModeChart.destroy();
+            }
+            window.autoModeChart = document.getElementById('auto-mode-chart')
+                ? new AutoModeChart('auto-mode-chart')
+                : null;
+        }
+
+        // Refreshes only the two atom-selection dropdowns after an atom
+        // operation or Reset, preserving every other part of the panel
+        // (tab, mode, Action selection, listeners, chart instance) that a
+        // full rebuild would otherwise discard. See displayStructureOperations
+        // for when this runs instead of a rebuild.
+        function refreshStructureOperationsOptions(labels) {
+            const resetOperationsBtn = document.getElementById('reset-operations-btn');
+            if (resetOperationsBtn && window.originalSupercellData && window.originalLabels.length > 0) {
+                resetOperationsBtn.disabled = false;
             }
 
-            if (!window.autoModeChart && chartCanvas) {
-                window.autoModeChart = new AutoModeChart('auto-mode-chart');
-            } else if (window.autoModeChart) {
-                // Reset chart for new session/operations
-                window.autoModeChart.reset();
+            // Manual atom dropdown: rebuild the <option> list, keeping the
+            // current selection only if that exact label still exists.
+            // Labels can be renumbered by an operation (e.g. deleting O5
+            // shifts the old O6 down to O5 -- see build_element_labels), so
+            // "still exists" deliberately means the same label string, not
+            // the same atom.
+            const atomDropdown = document.getElementById('element-dropdown');
+            if (atomDropdown) {
+                const previousValue = atomDropdown.value;
+                atomDropdown.innerHTML = '<option value="">Choose an atom...</option>' +
+                    labels.map(label => `<option value="${label}">${label}</option>`).join('');
+                atomDropdown.value = labels.includes(previousValue) ? previousValue : '';
             }
+
+            // Auto element-type dropdown: same idea, via the existing
+            // build-time helper.
+            const elementTypeDropdown = document.getElementById('element-type-dropdown');
+            const previousType = elementTypeDropdown ? elementTypeDropdown.value : '';
+            const uniqueElements = extractUniqueElements(labels);
+            populateElementTypeDropdown(uniqueElements);
+            if (elementTypeDropdown) {
+                elementTypeDropdown.value = uniqueElements.includes(previousType) ? previousType : '';
+            }
+
+            // The Action dropdown's enabled state depends on whichever of
+            // the two dropdowns above is active for the current mode. This
+            // normally happens inside the atomDropdown/elementTypeDropdown
+            // 'change' listeners (see setupOperationListeners), which don't
+            // fire here since we replaced their options without dispatching
+            // a change event.
+            const operationSelect = document.getElementById('substitute-element');
+            if (operationSelect) {
+                const manualMode = document.getElementById('manual-mode');
+                operationSelect.disabled = (manualMode && manualMode.checked)
+                    ? !atomDropdown?.value
+                    : !elementTypeDropdown?.value;
+            }
+
+            updateExecuteButton();
         }
 
         function extractUniqueElements(labels) {
@@ -3676,6 +3759,12 @@ Crystal system: ${data.crystal_system}`;
 
             dlog(`✓ Substituted ${elementLabel} → ${newElement}`);
             showNotification(`Successfully substituted ${elementLabel} → ${newElement}`, 'success');
+            // The panel is no longer rebuilt on every operation (see
+            // refreshStructureOperationsOptions), so a completed Auto-mode
+            // results panel (chart, best result) would otherwise stay
+            // visible across a later Manual edit; close it explicitly, as
+            // handleInsertion already does.
+            hideExecuteStatus();
         }
 
         async function handleDeletion(elementLabel, knownIndex = null) {
@@ -3725,6 +3814,8 @@ Crystal system: ${data.crystal_system}`;
 
             dlog(`✓ Deleted ${elementLabel}`);
             showNotification(`Successfully deleted ${elementLabel}`, 'success');
+            // See the matching comment in handleSubstitution.
+            hideExecuteStatus();
         }
 
         async function handleOptimalInsertion(element) {
@@ -3808,21 +3899,16 @@ Crystal system: ${data.crystal_system}`;
             }
             applyServerStructureState(result);
 
-            // Update displays. displayStructureOperations() rebuilds the whole
-            // operations panel from its static template, which always starts
-            // on the "Edit Existing" tab; restore Insert New here so a
-            // completed insertion doesn't visually kick the user back to the
-            // other tab.
-            const wasInsertMode = window.currentOperationMode === 'insert';
+            // Update displays. displayStructureOperations() now only
+            // refreshes the atom-selection dropdowns here (see
+            // refreshStructureOperationsOptions), not the whole panel, so
+            // the active tab (Insert New) is left alone -- no tab-restore
+            // workaround needed.
             supercellData = window.currentStructureData;
             displaySupercellInfo();
             displayStructureOperations(window.currentLabels);
             updateStructureVisualization();
             resetPhysicalProperties();
-            if (wasInsertMode) {
-                const tabInsert = document.getElementById('tab-insert');
-                if (tabInsert) tabInsert.click();
-            }
 
             dlog(`✓ Inserted ${elementToInsert}`);
             showNotification(`Successfully inserted ${elementToInsert}`, 'success');
@@ -4026,20 +4112,29 @@ Crystal system: ${data.crystal_system}`;
             const statusDiv = document.getElementById('execute-status');
             if (statusDiv) statusDiv.style.display = 'block';
 
-            // Restoring chart to the clean canvas created by displayStructureOperations
             if (results) {
                 const chartWrapper = document.getElementById('chart-container-wrapper');
                 if (chartWrapper) {
                     chartWrapper.style.display = 'block';
 
-                    // Re-initialize chart on the new canvas element created by displayStructureOperations
-                    if (window.autoModeChart) {
-                        window.autoModeChart.destroy();
+                    // The canvas node is stable across an Auto-mode run now
+                    // (an operation only refreshes dropdown options, it no
+                    // longer rebuilds the panel -- see
+                    // refreshStructureOperationsOptions), so reuse the chart
+                    // instance instead of destroying and recreating it here
+                    // every time; that used to accumulate 'resize' listeners
+                    // each run since auto_mode_chart.js's destroy()+recreate
+                    // was the only place removing the previous one. Only
+                    // replace it if the canvas actually did change underneath
+                    // us (e.g. a rebuild happened for an unrelated reason).
+                    const chartCanvas = document.getElementById('auto-mode-chart');
+                    if (!window.autoModeChart || window.autoModeChart.canvas !== chartCanvas) {
+                        if (window.autoModeChart) window.autoModeChart.destroy();
+                        window.autoModeChart = chartCanvas ? new AutoModeChart('auto-mode-chart') : null;
                     }
-                    window.autoModeChart = new AutoModeChart('auto-mode-chart');
 
                     // Repopulate data
-                    if (results.successful && results.successful.length > 0) {
+                    if (window.autoModeChart && results.successful && results.successful.length > 0) {
                         window.autoModeChart.reset(results.successful.length);
                         results.successful.forEach(r => {
                             window.autoModeChart.addDataPoint(r.atom, r.energy);
@@ -4276,8 +4371,17 @@ Crystal system: ${data.crystal_system}`;
 
                             for (const atom of chunk) {
                                 const result = resultById.get(atom.index);
-                                if (result && result.error === null && typeof result.energy_eV_per_atom === 'number') {
-                                    const energy = result.energy_eV_per_atom;
+                                // Use total energy (eV), not energy_eV_per_atom: every
+                                // candidate in one sweep has the same atom count
+                                // (substitution never changes it; every deletion
+                                // candidate removes exactly one atom), so total and
+                                // per-atom energy rank candidates identically -- this
+                                // just matches the unit insertion's sweep already
+                                // displays (see runOptimalCandidateSweep's insertion
+                                // counterpart), instead of mixing eV and eV/atom
+                                // across operation types.
+                                if (result && result.error === null && typeof result.energy === 'number') {
+                                    const energy = result.energy;
 
                                     calculationResults.successful.push({ atom: atom.label, energy, index: atom.index, attempts: 1 });
 
@@ -4286,13 +4390,13 @@ Crystal system: ${data.crystal_system}`;
                                     }
 
                                     if (!calculationResults.bestResult || energy < calculationResults.bestResult.energy) {
-                                        calculationResults.bestResult = { atom: atom.label, energy, index: atom.index };
-                                        updateCurrentBest(energy, atom.label, action === 'substitute' ? newElement : 'DELETE');
+                                        calculationResults.bestResult = { atom: atom.label, energy, index: atom.index, unit: 'eV' };
+                                        updateCurrentBest(energy, atom.label, action === 'substitute' ? newElement : 'DELETE', 'eV');
                                     }
 
                                     dlog(action === 'substitute'
-                                        ? `${atom.label} → ${newElement}: ${energy.toFixed(6)} eV/atom`
-                                        : `Delete ${atom.label}: ${energy.toFixed(6)} eV/atom`);
+                                        ? `${atom.label} → ${newElement}: ${energy.toFixed(6)} eV`
+                                        : `Delete ${atom.label}: ${energy.toFixed(6)} eV`);
                                 } else {
                                     const errorMsg = (result && result.error) || 'Unknown error';
                                     calculationResults.failed.push({ atom: atom.label, errors: [{ error: errorMsg }], finalError: errorMsg });
@@ -4374,7 +4478,7 @@ Crystal system: ${data.crystal_system}`;
                 // Display calculation summary
                 const resultSummary = [...successful]
                     .sort((a, b) => a.energy - b.energy)
-                    .map((r, i) => `${i + 1}. ${r.atom}: ${r.energy.toFixed(6)} eV/atom (${r.attempts} attempts)`)
+                    .map((r, i) => `${i + 1}. ${r.atom}: ${r.energy.toFixed(6)} eV (${r.attempts} attempts)`)
                     .join('\n');
 
                 dlog(`Energy comparison results (${successful.length}/${totalProcessed} successful):\n${resultSummary}`);
@@ -4405,7 +4509,7 @@ Crystal system: ${data.crystal_system}`;
                 }
 
                 // Show completion state instead of hiding
-                showExecutionComplete(`Substitution Completed. Best: ${bestResult.atom} -> ${newElement} (${bestResult.energy.toFixed(4)} eV/atom)`, results);
+                showExecutionComplete(`Substitution Completed. Best: ${bestResult.atom} -> ${newElement} (${bestResult.energy.toFixed(4)} eV)`, results);
 
             } else {
                 // All calculations failed
@@ -4434,7 +4538,7 @@ Crystal system: ${data.crystal_system}`;
                     <h4>Auto Mode ${operationType} Report</h4>
                     <div class="summary">
                         <p><strong>Success Rate:</strong> ${summary.successRate}% (${summary.successfulCalculations}/${summary.totalAtoms})</p>
-                        <p><strong>Best Result:</strong> ${bestResult.atom} → ${bestResult.energy.toFixed(6)} eV/atom</p>
+                        <p><strong>Best Result:</strong> ${bestResult.atom} → ${bestResult.energy.toFixed(6)} eV</p>
                     </div>
                     
                     ${failed.length > 0 ? `
@@ -4514,7 +4618,7 @@ Crystal system: ${data.crystal_system}`;
                 // Display calculation summary
                 const resultSummary = [...successful]
                     .sort((a, b) => a.energy - b.energy)
-                    .map((r, i) => `${i + 1}. Delete ${r.atom}: ${r.energy.toFixed(6)} eV/atom (${r.attempts} attempts)`)
+                    .map((r, i) => `${i + 1}. Delete ${r.atom}: ${r.energy.toFixed(6)} eV (${r.attempts} attempts)`)
                     .join('\n');
 
                 dlog(`Energy comparison results (${successful.length}/${totalProcessed} successful):\n${resultSummary}`);
@@ -4545,7 +4649,7 @@ Crystal system: ${data.crystal_system}`;
                 }
 
                 // Show completion state instead of hiding
-                showExecutionComplete(`Deletion Completed. Best: ${bestResult.atom} (${bestResult.energy.toFixed(4)} eV/atom)`, results);
+                showExecutionComplete(`Deletion Completed. Best: ${bestResult.atom} (${bestResult.energy.toFixed(4)} eV)`, results);
 
             } else {
                 // All calculations failed
@@ -4642,6 +4746,11 @@ Crystal system: ${data.crystal_system}`;
                 supercellData = window.currentStructureData; // For compatibility with existing display functions
                 displaySupercellInfo();
                 displayStructureOperations(window.currentLabels);
+                // Reset (unlike a substitute/delete/insert) doesn't rebuild
+                // the panel, so the Auto-mode chart's leftover data from
+                // before the reset isn't cleared as a side effect; clear it
+                // explicitly.
+                if (window.autoModeChart) window.autoModeChart.reset();
 
                 // Update 3D visualization
                 updateStructureVisualization();
@@ -4680,6 +4789,7 @@ Crystal system: ${data.crystal_system}`;
                     window.currentLabels = [...window.originalLabels];
                     displaySupercellInfo();
                     displayStructureOperations(window.currentLabels);
+                    if (window.autoModeChart) window.autoModeChart.reset();
                     updateStructureVisualization();
                     dlog('⚠️ Performed frontend-only fallback reset');
                     // フォールバックリセット後も構造変更を通知
