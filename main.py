@@ -370,8 +370,28 @@ def validate_atomic_operation(operation, structure_size, operation_index=None):
     except Exception as e:
         return False, f"unexpected validation error: {str(e)}"
 
+def substitute_site(structure: Structure, site_index: int, new_element: str) -> bool:
+    """
+    Replace `structure[site_index]` with a neutral `new_element` at the same
+    fractional coordinates. Shared by apply_operations_to_structure (the
+    authoritative replay path) and /api/evaluate-candidate-energies (the Auto
+    mode screening path) so both potential loss sites stay in sync.
+
+    Returns True if the replaced site carried information this discards: an
+    oxidation state (pymatgen Species, e.g. Ba2+) or non-empty site
+    properties (e.g. magmom). The new site is always a plain Element with no
+    properties -- pymatgen does not support preserving these across a
+    species substitution.
+    """
+    site = structure[site_index]
+    old_specie = site.specie
+    lossy = bool(getattr(old_specie, "oxi_state", 0)) or bool(site.properties)
+    structure[site_index] = Element(new_element), site.frac_coords
+    return lossy
+
+
 def apply_operations_to_structure(structure: Structure, operations: List[dict],
-                                   strict_mode: bool = False) -> "tuple[int, List[str]]":
+                                   strict_mode: bool = False) -> "tuple[int, List[str], List[str]]":
     """
     Apply atomic operations to `structure` in place, in the exact order given.
 
@@ -396,10 +416,11 @@ def apply_operations_to_structure(structure: Structure, operations: List[dict],
             returning a description of each one skipped.
 
     Returns:
-        (operations_applied, skipped_messages)
+        (operations_applied, skipped_messages, property_warnings)
     """
     operations_applied = 0
     skipped: List[str] = []
+    property_warnings: List[str] = []
 
     for i, operation in enumerate(operations):
         is_valid, error_msg = validate_atomic_operation(operation, len(structure))
@@ -416,8 +437,12 @@ def apply_operations_to_structure(structure: Structure, operations: List[dict],
         if action == "substitute":
             new_element = operation["to"]
             old_element = structure[site_index].specie
-            old_coords = structure[site_index].frac_coords
-            structure[site_index] = Element(new_element), old_coords
+            if substitute_site(structure, site_index, new_element):
+                property_warnings.append(
+                    f"Operation {i + 1}: site {site_index} ({old_element}) had an "
+                    f"oxidation state and/or site properties (e.g. magmom) that "
+                    f"substitution to {new_element} does not preserve"
+                )
             logger.info(f"Substituted site {site_index}: {old_element} -> {new_element}")
         elif action == "delete":
             deleted_element = structure[site_index].specie
@@ -431,7 +456,7 @@ def apply_operations_to_structure(structure: Structure, operations: List[dict],
 
         operations_applied += 1
 
-    return operations_applied, skipped
+    return operations_applied, skipped, property_warnings
 
 # Global model manager instance
 chgnet_manager = CHGNetModelManager()
@@ -626,6 +651,14 @@ class SessionManager:
                 self.sessions[session_id]['operations'] = operations
             if supercell_size is not None:
                 self.sessions[session_id]['supercell_size'] = supercell_size
+            # Any previously relaxed structure and its CHGNet metadata are
+            # invalidated by this update: /api/generate-relaxed-structure-cif
+            # prefers session_info['relaxed_structure'] over the current
+            # structure (main.py ~2226), so leaving a stale one in place made
+            # Analyze -> substitute -> download silently return the
+            # pre-substitution relaxed cell.
+            self.sessions[session_id].pop('relaxed_structure', None)
+            self.sessions[session_id].pop('chgnet_result', None)
             logger.info(f"Updated structure for session {session_id[:8]}...")
     
     def get_session_info(self, session_id: str) -> Optional[Dict]:
@@ -853,9 +886,11 @@ async def apply_atomic_operations(request: dict):
         # apply_operations_to_structure docstring).
         logger.info(f" OPERATIONS: Applying {len(operations)} operations in recorded order")
         try:
-            operations_applied, _ = apply_operations_to_structure(
+            operations_applied, _, property_warnings = apply_operations_to_structure(
                 structure, operations, strict_mode=True
             )
+            if property_warnings:
+                logger.warning(f"Property loss during atomic operations: {property_warnings}")
             logger.info(f"✅ OPERATIONS: Applied {operations_applied}/{len(operations)} operations - "
                        f"Formula: {structure.formula}, Sites: {len(structure.sites)}")
         except ValueError as e:
@@ -1514,6 +1549,7 @@ async def generate_modified_structure_cif(request: dict):
 
         if not filename:
             raise HTTPException(status_code=400, detail="Filename is required")
+        supercell_size = validate_supercell_size(supercell_size)
 
         logger.info(f"Generating modified structure CIF for {filename}")
         logger.info(f"Supercell size: {supercell_size}")
@@ -1529,7 +1565,7 @@ async def generate_modified_structure_cif(request: dict):
 
         # Apply atomic operations with partial success tolerance (for CIF
         # generation), in the exact order the client recorded them.
-        operations_applied, skipped_operations = apply_operations_to_structure(
+        operations_applied, skipped_operations, property_warnings = apply_operations_to_structure(
             structure, operations, strict_mode=False
         )
 
@@ -1561,24 +1597,35 @@ async def generate_modified_structure_cif(request: dict):
         ]
         if skipped_operations:
             metadata_lines.append(f"# WARNING: {len(skipped_operations)} operation(s) skipped: {'; '.join(skipped_operations)}")
+        if property_warnings:
+            metadata_lines.append(
+                f"# NOTE: {len(property_warnings)} substitution(s) dropped an oxidation state "
+                f"and/or site properties (e.g. magmom): {'; '.join(property_warnings)}"
+            )
         metadata_lines.append("")
 
         final_cif = "\n".join(metadata_lines) + cif_content
-        
+
         logger.info(f"Modified CIF generated successfully, length: {len(final_cif)} characters")
-        
+
         return Response(
             content=final_cif,
             media_type="chemical/x-cif",
             headers={
                 "Content-Disposition": f"inline; filename={filename.replace('.cif', '')}_modified.cif",
-                "Cache-Control": "no-cache"
+                "Cache-Control": "no-cache",
+                # The CIF body only exposes skips as a "# WARNING:" comment
+                # line, which the client does not parse; this header lets it
+                # surface a notification without reading CIF text.
+                "X-Operations-Skipped": str(len(skipped_operations)),
             }
         )
-        
+
     except HTTPException:
         # Re-raise HTTPExceptions without modification
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         error_msg = f"Failed to generate modified structure CIF: {str(e)}"
         logger.error(error_msg)
@@ -1816,7 +1863,15 @@ def safe_get_prediction(pred, num_atoms=None):
 @app.post("/api/chgnet-predict")
 async def chgnet_predict_structure(request: dict):
     """
-    Predict structure properties using CHGNet
+    Predict structure properties using CHGNet, replaying an operation
+    history against a filename + supercell_size instead of a session's
+    current structure.
+
+    Not called by the frontend (Auto mode screening uses the batched
+    /api/evaluate-candidate-energies and /api/evaluate-insertion-energies
+    instead; see main.py history around commit 755aae8). Kept as a
+    standalone single-structure prediction endpoint and exercised by
+    tests/test_main.py::test_chgnet_predict.
     """
     try:
         session_id = request.get("session_id")
@@ -1826,6 +1881,7 @@ async def chgnet_predict_structure(request: dict):
 
         if not filename:
             raise HTTPException(status_code=400, detail="Filename is required")
+        supercell_size = validate_supercell_size(supercell_size)
 
         logger.info(f"CHGNet prediction for {filename} with {len(operations)} operations")
 
@@ -1836,9 +1892,11 @@ async def chgnet_predict_structure(request: dict):
 
         # Apply operations for CHGNet prediction (skip invalid ones), in the
         # exact order the client recorded them.
-        operations_applied, skipped_operations = apply_operations_to_structure(
+        operations_applied, skipped_operations, property_warnings = apply_operations_to_structure(
             structure, operations, strict_mode=False
         )
+        if property_warnings:
+            logger.warning(f"Property loss during CHGNet prediction operations: {property_warnings}")
 
         if skipped_operations:
             logger.warning(f"Skipping {len(skipped_operations)} invalid operations for CHGNet prediction: {skipped_operations}")
@@ -2165,24 +2223,25 @@ async def reset_session_structure(request: dict):
         reset_structure = original_structure.copy()
         reset_structure.make_supercell(supercell_size)
         
-        # Update session with reset structure and clear operations
+        # Update session with reset structure and clear operations. This also
+        # discards any relaxed_structure/chgnet_result (update_structure
+        # always invalidates them), so no separate cleanup is needed here.
         session_manager.update_structure(session_id, reset_structure, operations=[])
-        
-        # Clear any relaxed structure data
-        if 'relaxed_structure' in session_info:
-            del session_info['relaxed_structure']
-        if 'chgnet_result' in session_info:
-            del session_info['chgnet_result']
-        
+
         logger.info(f"Session {session_id[:8]}... reset successfully")
         logger.info(f"Reset structure: {reset_structure.composition} ({len(reset_structure)} sites)")
-        
+
         return {
             "status": "success",
             "message": "Session reset to original structure",
             "session_id": session_id,
             "structure_info": {
-                "formula": str(reset_structure.composition),
+                # str(Structure.formula), not str(.composition): the client
+                # compares this against supercell_info.formula (which has the
+                # same "Cu32"-shaped form), and the two do not always render
+                # identically -- a mismatch there falsely showed "(Note: Sync
+                # issue detected)" on an otherwise-correct reset.
+                "formula": str(reset_structure.formula),
                 "num_sites": len(reset_structure),
                 "volume": float(reset_structure.volume),
                 "density": float(reset_structure.density),
@@ -2647,8 +2706,7 @@ async def evaluate_candidate_energies(data: dict):
                     validate_element(new_element)
                 except ValueError as e:
                     raise HTTPException(status_code=400, detail=f"candidate {cand_id}: {e}")
-                old_coords = cand_structure[index].frac_coords
-                cand_structure[index] = Element(new_element), old_coords
+                substitute_site(cand_structure, index, new_element)
             else:  # delete
                 cand_structure.remove_sites([index])
 

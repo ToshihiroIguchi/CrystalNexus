@@ -156,10 +156,11 @@ def test_apply_operations_to_structure_preserves_recorded_frame(sample_cif_dir):
         {"action": "delete", "index": 2},
         {"action": "substitute", "index": 5, "to": "Ni"},
     ]
-    applied, skipped = apply_operations_to_structure(structure, operations, strict_mode=True)
+    applied, skipped, property_warnings = apply_operations_to_structure(structure, operations, strict_mode=True)
 
     assert applied == 2
     assert skipped == []
+    assert property_warnings == []
 
     ni_sites = [site for site in structure.sites if str(site.specie) == "Ni"]
     assert len(ni_sites) == 1
@@ -202,6 +203,82 @@ def test_apply_atomic_operations_unknown_session_id(client):
     assert response.status_code == 404
 
 
+def test_apply_atomic_operations_rejects_out_of_range_index(client):
+    """Strict path (the authoritative session endpoint) must 400 on an
+    out-of-range index rather than silently skipping it."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    response = client.post("/api/apply-atomic-operations", json={
+        "session_id": session_id,
+        "operations": [{"action": "substitute", "index": 9999, "to": "Ni"}],
+    })
+    assert response.status_code == 400
+
+
+def test_insert_then_substitute_inserted_atom(client):
+    """Regression (Phase 1-2): substituting an atom inserted earlier in the
+    same operation list must resolve against the post-insert index instead
+    of being rejected as out of range against the original supercell."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
+
+    num_sites = crystal_data["num_atoms"] * 8  # 2x2x2 scaling
+    response = client.post("/api/apply-atomic-operations", json={
+        "session_id": session_id,
+        "operations": [
+            {"action": "insert", "to": "Li", "coords": [0.5, 0.5, 0.5]},
+            {"action": "substitute", "index": num_sites, "to": "Na"},
+        ],
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert "Na" in data["composition"]
+    assert "Li" not in data["composition"]
+    assert data["num_sites"] == num_sites + 1
+
+
+def test_update_structure_clears_relaxed_structure():
+    """Regression (data-integrity bug): applying atomic operations must
+    invalidate any previously relaxed structure, otherwise
+    /api/generate-relaxed-structure-cif silently returns a stale,
+    pre-operation relaxed cell after Analyze -> substitute."""
+    from main import session_manager
+    from pymatgen.core import Structure
+
+    session_id = str(uuid.uuid4())
+    structure = Structure.from_file(Path("sample_cif") / "Metals" / "Cu.cif")
+    session_manager.create_session(session_id, "Cu.cif", structure)
+    session_info = session_manager.get_session_info(session_id)
+    session_info['relaxed_structure'] = structure.copy()
+    session_info['chgnet_result'] = {'fmax': 0.1, 'converged': True, 'steps': 5}
+
+    session_manager.update_structure(session_id, structure.copy())
+
+    session_info = session_manager.get_session_info(session_id)
+    assert 'relaxed_structure' not in session_info
+    assert 'chgnet_result' not in session_info
+
+
+def test_reset_session_structure_formula_shape(client):
+    """Regression: structure_info.formula must be in the same
+    'Cu32'-shaped form the client compares against supercell_info.formula
+    (str(Structure.formula)), not str(Structure.composition) (which
+    includes an oxidation-state suffix like 'Cu0+32') -- the shape
+    mismatch caused a spurious "Sync issue detected" warning on every
+    Reset even though nothing was actually out of sync."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
+
+    response = client.post("/api/reset-session-structure", json={"session_id": session_id})
+    assert response.status_code == 200
+    formula = response.json()["structure_info"]["formula"]
+    assert formula == "Cu32"
+
+
 # ---------------------------------------------------------------------------
 # /api/generate-modified-structure-cif
 # ---------------------------------------------------------------------------
@@ -217,6 +294,7 @@ def test_generate_modified_structure_cif_valid(client):
     assert "chemical/x-cif" in response.headers["content-type"]
     assert "data_" in response.text  # CIF data block present
     assert "Cu" in response.text
+    assert response.headers["x-operations-skipped"] == "0"
 
 
 def test_generate_modified_structure_cif_missing_filename(client):
@@ -237,6 +315,54 @@ def test_generate_modified_structure_cif_rejects_traversal(client):
         "supercell_size": [1, 1, 1],
     })
     assert response.status_code == 400
+
+
+def test_generate_modified_structure_cif_with_substitution(client):
+    """The operations:[] -only gap: a substitution must actually apply and
+    show up both in the CIF body and in the metadata header."""
+    response = client.post("/api/generate-modified-structure-cif", json={
+        "filename": "Metals/Cu.cif",
+        "operations": [{"action": "substitute", "index": 0, "to": "Ni"}],
+        "supercell_size": [2, 2, 2],
+    })
+    assert response.status_code == 200
+    assert "Ni" in response.text
+    assert "# Final formula:" in response.text
+    assert response.headers["x-operations-skipped"] == "0"
+
+
+def test_generate_modified_structure_cif_lenient_skips_and_warns(client):
+    """The lenient path (partial-success CIF generation) must report a
+    skipped out-of-range operation via both the CIF metadata comment and
+    the X-Operations-Skipped header, instead of silently dropping it."""
+    response = client.post("/api/generate-modified-structure-cif", json={
+        "filename": "Metals/Cu.cif",
+        "operations": [{"action": "substitute", "index": 9999, "to": "Ni"}],
+        "supercell_size": [1, 1, 1],
+    })
+    assert response.status_code == 200
+    assert "# WARNING:" in response.text
+    assert "skipped" in response.text
+    assert response.headers["x-operations-skipped"] == "1"
+
+
+def test_generate_modified_structure_cif_validates_supercell_size(client):
+    """supercell_size must be validated here too (previously only
+    /api/create-supercell validated it; this endpoint passed the client
+    value straight to Structure.make_supercell)."""
+    too_small = client.post("/api/generate-modified-structure-cif", json={
+        "filename": "Metals/Cu.cif",
+        "operations": [],
+        "supercell_size": [0, 1, 1],
+    })
+    assert too_small.status_code == 400
+
+    too_large = client.post("/api/generate-modified-structure-cif", json={
+        "filename": "Metals/Cu.cif",
+        "operations": [],
+        "supercell_size": [99, 1, 1],
+    })
+    assert too_large.status_code == 400
 
 
 # ---------------------------------------------------------------------------
@@ -433,6 +559,20 @@ def test_evaluate_candidate_energies_rejects_out_of_range_index(client):
     response = client.post("/api/evaluate-candidate-energies", json={
         "session_id": session_id,
         "candidates": [{"id": 0, "action": "delete", "index": 9999}],
+    })
+    assert response.status_code == 400
+
+
+def test_evaluate_candidate_energies_rejects_unknown_element(client):
+    """validate_element must be enforced on the batch screening path too
+    (previously untested)."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    response = client.post("/api/evaluate-candidate-energies", json={
+        "session_id": session_id,
+        "candidates": [{"id": 0, "action": "substitute", "index": 0, "to": "Xx"}],
     })
     assert response.status_code == 400
 

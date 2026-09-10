@@ -12,7 +12,14 @@ class AutoModeChart {
 
         // Handle high DPI displays
         this.resize();
-        window.addEventListener('resize', () => this.resize());
+        // Store the bound handler so destroy() can remove exactly this
+        // listener; an anonymous arrow function passed directly to
+        // addEventListener cannot be removed later, so every
+        // destroy()+recreate cycle used to leak one more 'resize' listener
+        // onto the window, each firing resize() against a ctx that destroy()
+        // has already nulled out.
+        this._onResize = () => this.resize();
+        window.addEventListener('resize', this._onResize);
     }
 
     reset(totalPoints = 50) {
@@ -38,6 +45,7 @@ class AutoModeChart {
     }
 
     resize() {
+        if (!this.ctx) return; // destroyed
         const rect = this.canvas.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) return;
 
@@ -137,6 +145,7 @@ class AutoModeChart {
     }
 
     destroy() {
+        window.removeEventListener('resize', this._onResize);
         this.dataPoints = [];
         this.ctx = null;
     }
