@@ -10,7 +10,7 @@ import pytest
 
 from pymatgen.core import Structure
 
-from main import find_interstitial_candidates
+from main import find_interstitial_candidates, apply_operations_to_structure
 
 
 def _analyze_sample(client, filename="Metals/Cu.cif"):
@@ -85,6 +85,85 @@ def test_analyze_cif_upload_rejects_non_cif_file(client):
         files={"file": ("evil.txt", b"this is not a CIF file", "text/plain")},
     )
     assert response.status_code == 400
+
+
+def test_upload_cif_roundtrip_through_substitution(client, sample_cif_dir):
+    """Regression: uploaded (non-sample) CIFs must support the full modify
+    flow -- upload -> supercell -> substitute -> regenerate CIF -- without
+    404s. Uploads are saved under a random UUID filename with no reliable
+    mapping back to the original name, so any step that re-resolves the
+    file by name from disk (instead of from the session) breaks silently
+    the moment an operation is applied."""
+    cif_bytes = (sample_cif_dir / "Metals" / "Cu.cif").read_bytes()
+    session_id = str(uuid.uuid4())
+
+    uploads_dir = Path("uploads")
+    before = set(uploads_dir.glob("*")) if uploads_dir.exists() else set()
+    try:
+        upload_response = client.post(
+            "/api/analyze-cif-upload",
+            files={"file": ("Cu.cif", cif_bytes, "chemical/x-cif")},
+        )
+        assert upload_response.status_code == 200
+        crystal_data = upload_response.json()
+
+        _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
+
+        ops_response = client.post("/api/apply-atomic-operations", json={
+            "session_id": session_id,
+            "operations": [{"action": "substitute", "index": 0, "to": "Ni"}],
+        })
+        assert ops_response.status_code == 200
+        assert "Ni" in ops_response.json()["composition"]
+
+        # Before the fix, this 404'd for uploaded files: the endpoint looked
+        # for "*_Cu.cif" in uploads/, but uploads are saved as "<uuid>.cif".
+        cif_response = client.post("/api/generate-modified-structure-cif", json={
+            "session_id": session_id,
+            "filename": crystal_data["filename"],
+            "operations": [{"action": "substitute", "index": 0, "to": "Ni"}],
+            "supercell_size": [2, 2, 2],
+        })
+        assert cif_response.status_code == 200
+        assert "Ni" in cif_response.text
+    finally:
+        if uploads_dir.exists():
+            for leftover in set(uploads_dir.glob("*")) - before:
+                leftover.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# apply_operations_to_structure (atomic operation replay order)
+# ---------------------------------------------------------------------------
+
+def test_apply_operations_to_structure_preserves_recorded_frame(sample_cif_dir):
+    """Regression: operations must replay in the exact order recorded, each
+    index referring to the structure state produced by the operations
+    before it -- the same "live array" frame the client's own operation
+    history uses -- not reordered by descending index against the original
+    structure.
+
+    Reproduces the reported bug: delete site 2, then (using the client's
+    now-shifted array) substitute what the client sees as index 5, which is
+    original site 6 since deleting site 2 shifted everything after it down
+    by one. The old descending-index-first replay applied substitute@5 to
+    the *original*, unshifted structure and silently hit the wrong atom."""
+    structure = Structure.from_file(sample_cif_dir / "Metals" / "Cu.cif")
+    structure.make_supercell((2, 2, 2))  # 32 uniform Cu sites
+    original_coords = [tuple(site.frac_coords) for site in structure.sites]
+
+    operations = [
+        {"action": "delete", "index": 2},
+        {"action": "substitute", "index": 5, "to": "Ni"},
+    ]
+    applied, skipped = apply_operations_to_structure(structure, operations, strict_mode=True)
+
+    assert applied == 2
+    assert skipped == []
+
+    ni_sites = [site for site in structure.sites if str(site.specie) == "Ni"]
+    assert len(ni_sites) == 1
+    assert tuple(ni_sites[0].frac_coords) == original_coords[6]
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +387,99 @@ def test_evaluate_insertion_energies_flow(client):
     data = response.json()
     assert data["status"] == "success"
     assert len(data["results"]) == len(voids)
+    for result in data["results"]:
+        assert result["error"] is None
+        assert isinstance(result["energy"], float)
+
+
+# ---------------------------------------------------------------------------
+# /api/evaluate-candidate-energies
+# ---------------------------------------------------------------------------
+
+def test_evaluate_candidate_energies_missing_session_id(client):
+    response = client.post("/api/evaluate-candidate-energies", json={
+        "candidates": [{"id": 0, "action": "delete", "index": 0}],
+    })
+    assert response.status_code == 400
+
+
+def test_evaluate_candidate_energies_unknown_session_id(client):
+    response = client.post("/api/evaluate-candidate-energies", json={
+        "session_id": str(uuid.uuid4()),
+        "candidates": [{"id": 0, "action": "delete", "index": 0}],
+    })
+    assert response.status_code == 404
+
+
+def test_evaluate_candidate_energies_exceeds_max_batch(client):
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    from main import MAX_CANDIDATE_BATCH
+    too_many = [{"id": i, "action": "delete", "index": 0} for i in range(MAX_CANDIDATE_BATCH + 1)]
+    response = client.post("/api/evaluate-candidate-energies", json={
+        "session_id": session_id,
+        "candidates": too_many,
+    })
+    assert response.status_code == 400
+
+
+def test_evaluate_candidate_energies_rejects_out_of_range_index(client):
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    response = client.post("/api/evaluate-candidate-energies", json={
+        "session_id": session_id,
+        "candidates": [{"id": 0, "action": "delete", "index": 9999}],
+    })
+    assert response.status_code == 400
+
+
+@pytest.mark.slow
+def test_evaluate_candidate_energies_substitute_flow(client):
+    """Full flow: analyze -> create supercell -> batch-evaluate substitution
+    energies for every site in one CHGNet call (Auto-mode sweep)."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    num_sites = crystal_data["num_atoms"]
+    candidates = [{"id": i, "action": "substitute", "index": i, "to": "Ni"} for i in range(num_sites)]
+
+    response = client.post("/api/evaluate-candidate-energies", json={
+        "session_id": session_id,
+        "candidates": candidates,
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert len(data["results"]) == num_sites
+    for result in data["results"]:
+        assert result["error"] is None
+        assert isinstance(result["energy"], float)
+
+
+@pytest.mark.slow
+def test_evaluate_candidate_energies_delete_flow(client):
+    """Full flow: analyze -> create supercell -> batch-evaluate deletion
+    energies for every site in one CHGNet call (Auto-mode sweep)."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    num_sites = crystal_data["num_atoms"]
+    candidates = [{"id": i, "action": "delete", "index": i} for i in range(num_sites)]
+
+    response = client.post("/api/evaluate-candidate-energies", json={
+        "session_id": session_id,
+        "candidates": candidates,
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert len(data["results"]) == num_sites
     for result in data["results"]:
         assert result["error"] is None
         assert isinstance(result["energy"], float)

@@ -174,6 +174,9 @@ CHGNET_BATCH_SIZE = int(os.getenv('CHGNET_BATCH_SIZE', '4'))
 MAX_VOID_CANDIDATES = int(os.getenv('MAX_VOID_CANDIDATES', '50'))
 MAX_INSERTION_BATCH = int(os.getenv('MAX_INSERTION_BATCH', '8'))
 
+# Atom substitution/deletion Auto-mode settings
+MAX_CANDIDATE_BATCH = int(os.getenv('MAX_CANDIDATE_BATCH', '8'))
+
 # CHGNet model settings
 MAX_ATOMIC_NUMBER = int(os.getenv('MAX_ATOMIC_NUMBER', '94'))
 MIN_SUPPORTED_ELEMENTS = int(os.getenv('MIN_SUPPORTED_ELEMENTS', '50'))
@@ -367,33 +370,68 @@ def validate_atomic_operation(operation, structure_size, operation_index=None):
     except Exception as e:
         return False, f"unexpected validation error: {str(e)}"
 
-def filter_valid_operations(operations, structure_size, strict_mode=False):
+def apply_operations_to_structure(structure: Structure, operations: List[dict],
+                                   strict_mode: bool = False) -> "tuple[int, List[str]]":
     """
-    Filter and validate atomic operations
-    
+    Apply atomic operations to `structure` in place, in the exact order given.
+
+    Each operation's 'index' refers to the structure state produced by every
+    operation that precedes it in this list -- the same "live array" frame
+    the client uses when it records operations, since a delete/insert
+    immediately shifts what index everything after it refers to on the
+    client. This deliberately replaces the previous approach of reordering
+    the batch by descending index before a single-pass apply: that
+    reordering only kept a batch's *own* indices consistent with each
+    other, while the client had already recorded those indices against a
+    structure it was progressively mutating -- so replaying out of order
+    silently applied an operation to the wrong site whenever a delete or
+    insert was followed by another operation in the same batch.
+
     Args:
-        operations: List of operations to validate
-        structure_size: Number of sites in structure
-        strict_mode: If True, raise exception on any invalid operation
-    
+        structure: Structure to mutate in place.
+        operations: Atomic operations in client-recorded order.
+        strict_mode: If True, raise ValueError on the first invalid
+            operation (fail-fast; used for the authoritative session
+            endpoint). If False, skip invalid operations and keep going,
+            returning a description of each one skipped.
+
     Returns:
-        (valid_operations, invalid_operations_info)
+        (operations_applied, skipped_messages)
     """
-    valid_operations = []
-    invalid_operations = []
-    
+    operations_applied = 0
+    skipped: List[str] = []
+
     for i, operation in enumerate(operations):
-        is_valid, error_msg = validate_atomic_operation(operation, structure_size, i+1)
-        if is_valid:
-            valid_operations.append(operation)
-        else:
-            invalid_operations.append(f"Operation {i+1}: {error_msg}")
-    
-    if strict_mode and invalid_operations:
-        error_message = f"Invalid atomic operations detected:\n" + "\n".join(f"  - {error}" for error in invalid_operations)
-        raise ValueError(error_message)
-    
-    return valid_operations, invalid_operations
+        is_valid, error_msg = validate_atomic_operation(operation, len(structure))
+        if not is_valid:
+            message = f"Operation {i + 1}: {error_msg}"
+            if strict_mode:
+                raise ValueError(message)
+            skipped.append(message)
+            continue
+
+        action = operation["action"]
+        site_index = operation.get("index")
+
+        if action == "substitute":
+            new_element = operation["to"]
+            old_element = structure[site_index].specie
+            old_coords = structure[site_index].frac_coords
+            structure[site_index] = Element(new_element), old_coords
+            logger.info(f"Substituted site {site_index}: {old_element} -> {new_element}")
+        elif action == "delete":
+            deleted_element = structure[site_index].specie
+            structure.remove_sites([site_index])
+            logger.info(f"Deleted site {site_index} ({deleted_element})")
+        elif action == "insert":
+            new_element = operation["to"]
+            frac_coords = [float(c) % 1.0 for c in operation["coords"]]
+            structure.append(Element(new_element), frac_coords)
+            logger.info(f"Inserted {new_element} at {frac_coords}")
+
+        operations_applied += 1
+
+    return operations_applied, skipped
 
 # Global model manager instance
 chgnet_manager = CHGNetModelManager()
@@ -718,6 +756,48 @@ SAMPLE_CIF_DIR = Path(SAMPLE_CIF_DIR_NAME)
 if DEBUG:
     logger.setLevel(logging.DEBUG)
 
+def load_base_supercell(session_id: Optional[str], filename: Optional[str],
+                         supercell_size: List[int]) -> Structure:
+    """
+    Resolve the pre-operation supercell that atomic operations should be
+    replayed against.
+
+    Prefers the session's own original structure + supercell size: this
+    works uniformly for both sample and uploaded files, since the parsed
+    Structure already lives in memory and needs no filesystem lookup.
+    Falls back to the sample CIF directory by filename only when no
+    session is available.
+
+    Uploaded files are deliberately NOT looked up by filename on disk here:
+    the saved filename is a random UUID (see /api/analyze-cif-upload) with
+    no reliable mapping back to the original name, and matching by the
+    original name risked resolving to a different session's upload.
+
+    Raises:
+        HTTPException(404) if no structure can be resolved, or (400) if
+        filename fails path-safety validation.
+    """
+    if session_id:
+        session_info = session_manager.get_session_info(session_id)
+        if session_info:
+            structure = session_info['original_structure'].copy()
+            effective_size = supercell_size or session_info.get('supercell_size', [1, 1, 1])
+            structure.make_supercell(effective_size)
+            return structure
+
+    if filename:
+        try:
+            sample_path = SAMPLE_CIF_DIR / safe_path(filename)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid filename: {e}")
+        if sample_path.exists():
+            parser = CifParser(str(sample_path))
+            structure = parser.get_structures(primitive=False)[0]
+            structure.make_supercell(supercell_size)
+            return structure
+
+    raise HTTPException(status_code=404, detail=f"CIF file not found: {filename}")
+
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
@@ -764,54 +844,24 @@ async def apply_atomic_operations(request: dict):
         logger.info(f" OPERATIONS: Applying supercell {supercell_size}")
         structure.make_supercell(supercell_size)
         logger.info(f"✅ OPERATIONS: Supercell applied - Formula: {structure.formula}, Sites: {len(structure.sites)}")
-        
-        # Validate all operations using strict mode (fail-fast approach)
-        logger.info(f" OPERATIONS: Validating {len(operations)} operations against {len(structure.sites)} sites")
+
+        # Apply operations in the exact order the client recorded them (strict
+        # mode: fail-fast on the first invalid operation). Each operation's
+        # index refers to the structure state produced by the operations
+        # before it -- the same frame the client's own atomicOperations
+        # history uses -- so this must NOT reorder by index (see
+        # apply_operations_to_structure docstring).
+        logger.info(f" OPERATIONS: Applying {len(operations)} operations in recorded order")
         try:
-            valid_operations, invalid_operations = filter_valid_operations(
-                operations, len(structure.sites), strict_mode=True
+            operations_applied, _ = apply_operations_to_structure(
+                structure, operations, strict_mode=True
             )
-            logger.info(f"✅ OPERATIONS: Validation complete - Valid: {len(valid_operations)}, Invalid: {len(invalid_operations)}")
+            logger.info(f"✅ OPERATIONS: Applied {operations_applied}/{len(operations)} operations - "
+                       f"Formula: {structure.formula}, Sites: {len(structure.sites)}")
         except ValueError as e:
             logger.error(f"❌ OPERATIONS: Validation failed - Rejecting {len(operations)} operations: {e}")
             raise HTTPException(status_code=400, detail=str(e))
 
-        # Process delete/substitute first (in descending index order so earlier
-        # removals don't shift the indices of later operations), then inserts
-        # last (appending doesn't shift existing indices)
-        stable_operations = sorted(valid_operations, key=lambda x: (
-            0 if x["action"] in ["delete", "substitute"] else 1,  # delete/substitute before insert
-            -x.get("index", 0)  # descending index within delete/substitute
-        ))
-        logger.info(f" OPERATIONS: Processing {len(stable_operations)} validated operations in order: {[f'{op["action"]}@{op.get("index", "append")}' for op in stable_operations]}")
-
-        for i, operation in enumerate(stable_operations):
-            action = operation["action"]
-            site_index = operation.get("index")
-            logger.info(f" OPERATIONS: Step {i+1}/{len(stable_operations)} - {action} at site {site_index if site_index is not None else 'end'}")
-
-            if action == "substitute":
-                # Already validated: element and index are valid
-                new_element = operation["to"]
-                old_element = structure[site_index].specie
-                old_coords = structure[site_index].frac_coords
-                structure[site_index] = Element(new_element), old_coords
-                logger.info(f"✅ OPERATIONS: Substituted site {site_index}: {old_element} -> {new_element}")
-
-            elif action == "delete":
-                # Already validated: index is valid
-                deleted_element = structure[site_index].specie
-                logger.info(f" OPERATIONS: Deleting site {site_index} ({deleted_element}) - Structure before: {len(structure.sites)} sites")
-                structure.remove_sites([site_index])
-                logger.info(f"✅ OPERATIONS: Site {site_index} deleted - Structure after: {len(structure.sites)} sites")
-                
-            elif action == "insert":
-                new_element = operation["to"]
-                coords = [float(c) % 1.0 for c in operation["coords"]]
-                logger.info(f"➕ OPERATIONS: Inserting {new_element} at {coords} - Structure before: {len(structure.sites)} sites")
-                structure.append(new_element, coords)
-                logger.info(f"✅ OPERATIONS: Insertion completed - Structure after: {len(structure.sites)} sites")
-        
         # Update session with modified structure and operations
         logger.info(f" OPERATIONS: Updating session with final structure - Formula: {structure.formula}, Sites: {len(structure.sites)}")
         session_manager.update_structure(session_id, structure, operations=operations)
@@ -1252,28 +1302,13 @@ async def create_supercell(data: dict):
                     except Exception as e:
                         logger.error(f"❌ SUPERCELL: Failed to parse sample file: {e}")
                 else:
-                    # Try uploads directory
-                    upload_dir = Path("uploads")
-                    logger.info(f" SUPERCELL: Sample file not found, checking uploads dir: {upload_dir}")
-
-                    if upload_dir.exists():
-                        upload_pattern = f"*_{Path(validated_filename).name}"
-                        logger.info(f" SUPERCELL: Searching for pattern: {upload_pattern}")
-                        uploaded_files = list(upload_dir.glob(upload_pattern))
-                        logger.info(f" SUPERCELL: Found {len(uploaded_files)} matching files: {[f.name for f in uploaded_files]}")
-
-                        for uploaded_file in uploaded_files:
-                            logger.info(f" SUPERCELL: Trying to parse: {uploaded_file}")
-                            try:
-                                parser = CifParser(str(uploaded_file))
-                                original_structure = parser.get_structures()[0]
-                                logger.info(f"✅ SUPERCELL: Loaded structure from uploaded CIF - Formula: {original_structure.formula}, Sites: {len(original_structure.sites)}")
-                                break
-                            except Exception as e:
-                                logger.error(f"❌ SUPERCELL: Failed to parse uploaded file {uploaded_file}: {e}")
-                                continue
-                    else:
-                        logger.warning(f"⚠️ SUPERCELL: Uploads directory does not exist: {upload_dir}")
+                    # Uploaded files are not looked up by filename on disk:
+                    # they are saved under a random UUID name (see
+                    # /api/analyze-cif-upload), which has no reliable mapping
+                    # back to the original filename. Uploaded structures must
+                    # come through structure_data (Method 1) instead; if that
+                    # was missing or invalid, this is a genuine error.
+                    logger.warning(f"⚠️ SUPERCELL: Sample file not found and no structure_data available for: {filename}")
             
             # If no structure available, this is an error condition
             if original_structure is None:
@@ -1472,124 +1507,49 @@ async def generate_modified_structure_cif(request: dict):
     Supports complete atomic operation history replay
     """
     try:
+        session_id = request.get("session_id")
         filename = request.get("filename")
         supercell_size = request.get("supercell_size", [1, 1, 1])
         operations = request.get("operations", [])
-        
+
         if not filename:
             raise HTTPException(status_code=400, detail="Filename is required")
-        
+
         logger.info(f"Generating modified structure CIF for {filename}")
         logger.info(f"Supercell size: {supercell_size}")
         logger.info(f"Operations to apply: {len(operations)}")
-        
-        # Get the structure - check both sample and upload directories
-        from pymatgen.io.cif import CifParser, CifWriter
-        from pymatgen.core import Element
-        structure = None
-        cif_path = None
 
-        # First try sample directory
-        try:
-            sample_path = SAMPLE_CIF_DIR / safe_path(filename)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid filename: {e}")
-        logger.info(f" MODIFIED: Checking sample path: {sample_path}")
+        from pymatgen.io.cif import CifWriter
 
-        if sample_path.exists():
-            logger.info(f"✅ MODIFIED: Found sample file, parsing...")
-            parser = CifParser(str(sample_path))
-            structure = parser.get_structures(primitive=False)[0]
-            cif_path = sample_path
-        else:
-            # Try uploads directory
-            upload_dir = Path("uploads")
-            logger.info(f" MODIFIED: Sample not found, checking uploads: {upload_dir}")
+        # Resolve the base supercell from the session when available (works
+        # for uploaded files too, since the parsed Structure already lives
+        # in memory), falling back to the sample directory by filename.
+        structure = load_base_supercell(session_id, filename, supercell_size)
+        logger.info(f"Base supercell: {structure.formula} ({len(structure.sites)} sites)")
 
-            if upload_dir.exists():
-                for uploaded_file in upload_dir.glob(f"*_{filename}"):
-                    logger.info(f" MODIFIED: Trying uploaded file: {uploaded_file}")
-                    try:
-                        parser = CifParser(str(uploaded_file))
-                        structure = parser.get_structures(primitive=False)[0]
-                        cif_path = uploaded_file
-                        logger.info(f"✅ MODIFIED: Loaded from uploaded file: {uploaded_file}")
-                        break
-                    except Exception as e:
-                        logger.warning(f"⚠️ MODIFIED: Failed to parse {uploaded_file}: {e}")
-                        continue
-
-        if structure is None:
-            raise HTTPException(status_code=404, detail=f"CIF file not found: {filename}")
-        
-        logger.info(f"Original structure: {structure.formula}")
-        
-        # Create supercell
-        structure.make_supercell(supercell_size)
-        logger.info(f"Supercell created: {structure.formula} ({len(structure.sites)} sites)")
-        
-        # Apply atomic operations with partial success tolerance (for CIF generation)
-        valid_operations, invalid_operations = filter_valid_operations(
-            operations, len(structure.sites), strict_mode=False
+        # Apply atomic operations with partial success tolerance (for CIF
+        # generation), in the exact order the client recorded them.
+        operations_applied, skipped_operations = apply_operations_to_structure(
+            structure, operations, strict_mode=False
         )
-        
-        # Log invalid operations but continue with valid ones
-        if invalid_operations:
-            logger.warning(f"Skipping {len(invalid_operations)} invalid operations during CIF generation: {invalid_operations}")
-        
-        # Process delete/substitute first (in descending index order so earlier
-        # removals don't shift the indices of later operations), then inserts
-        # last (appending doesn't shift existing indices)
-        stable_operations = sorted(valid_operations, key=lambda x: (
-            0 if x["action"] in ["delete", "substitute"] else 1,  # delete/substitute before insert
-            -x.get("index", 0)  # descending index within delete/substitute
-        ))
-        operations_applied = 0
-        
-        for operation in stable_operations:
-            site_index = operation.get("index")
-            if operation["action"] == "substitute":
-                new_element = operation["to"]
-                old_coords = structure[site_index].frac_coords
-                old_element = str(structure[site_index].specie)
-                
-                # Replace the site with new element
-                structure[site_index] = Element(new_element), old_coords
-                
-                logger.info(f"CIF Generation: Substituted {old_element} -> {new_element} at site {site_index}")
-                operations_applied += 1
-                        
-            elif operation["action"] == "delete":
-                deleted_element = str(structure[site_index].specie)
-                structure.remove_sites([site_index])
-                
-                logger.info(f"CIF Generation: Deleted {deleted_element} at site {site_index}")
-                operations_applied += 1
-                
-            elif operation["action"] == "insert":
-                new_element = operation["to"]
-                coords = operation["coords"]
-                
-                frac_coords = [float(c) % 1.0 for c in coords]
-                structure.append(new_element, frac_coords)
-                
-                logger.info(f"CIF Generation: Inserted {new_element} at {frac_coords}")
-                operations_applied += 1
-        
+
+        if skipped_operations:
+            logger.warning(f"Skipping {len(skipped_operations)} invalid operations during CIF generation: {skipped_operations}")
+
         logger.info(f"Applied {operations_applied}/{len(operations)} operations successfully")
         logger.info(f"Final structure: {structure.formula} ({len(structure.sites)} sites)")
-        
+
         # Generate CIF using pymatgen CifWriter
         cif_writer = CifWriter(
             structure,
             write_magmoms=False,
             significant_figures=6
         )
-        
+
         cif_content = str(cif_writer)
-        
+
         # Add metadata header
-        operations_summary = f"{len(operations)} operations applied"
+        operations_summary = f"{operations_applied}/{len(operations)} operations applied"
         metadata_lines = [
             f"# Modified structure CIF generated by CrystalNexus",
             f"# Original file: {filename}",
@@ -1598,9 +1558,11 @@ async def generate_modified_structure_cif(request: dict):
             f"# Final formula: {structure.formula}",
             f"# Number of atoms: {len(structure.sites)}",
             f"# Volume: {structure.volume:.2f} A^3",
-            ""
         ]
-        
+        if skipped_operations:
+            metadata_lines.append(f"# WARNING: {len(skipped_operations)} operation(s) skipped: {'; '.join(skipped_operations)}")
+        metadata_lines.append("")
+
         final_cif = "\n".join(metadata_lines) + cif_content
         
         logger.info(f"Modified CIF generated successfully, length: {len(final_cif)} characters")
@@ -1857,82 +1819,30 @@ async def chgnet_predict_structure(request: dict):
     Predict structure properties using CHGNet
     """
     try:
+        session_id = request.get("session_id")
         filename = request.get("filename")
         operations = request.get("operations", [])
         supercell_size = request.get("supercell_size", [1, 1, 1])
-        
+
         if not filename:
             raise HTTPException(status_code=400, detail="Filename is required")
-        
+
         logger.info(f"CHGNet prediction for {filename} with {len(operations)} operations")
-        
-        # Get the modified structure - check both sample and upload directories
-        from pymatgen.io.cif import CifParser
-        structure = None
 
-        # First try sample directory
-        cif_path = SAMPLE_CIF_DIR / safe_path(filename)
-        logger.info(f" CHGNET: Checking sample path: {cif_path}")
+        # Resolve the base supercell from the session when available (works
+        # for uploaded files too), falling back to the sample directory.
+        structure = load_base_supercell(session_id, filename, supercell_size)
+        logger.info(f"✅ CHGNET: Base supercell - Formula: {structure.formula}, Sites: {len(structure.sites)}")
 
-        if cif_path.exists():
-            logger.info(f"✅ CHGNET: Found sample file, parsing...")
-            parser = CifParser(str(cif_path))
-            structure = parser.get_structures(primitive=False)[0]
-        else:
-            # Try uploads directory
-            upload_dir = Path("uploads")
-            logger.info(f" CHGNET: Sample not found, checking uploads: {upload_dir}")
-
-            if upload_dir.exists():
-                for uploaded_file in upload_dir.glob(f"*_{filename}"):
-                    logger.info(f" CHGNET: Trying uploaded file: {uploaded_file}")
-                    try:
-                        parser = CifParser(str(uploaded_file))
-                        structure = parser.get_structures(primitive=False)[0]
-                        logger.info(f"✅ CHGNET: Loaded from uploaded file: {uploaded_file}")
-                        break
-                    except Exception as e:
-                        logger.warning(f"⚠️ CHGNET: Failed to parse {uploaded_file}: {e}")
-                        continue
-
-        if structure is None:
-            logger.error(f"❌ CHGNET: File not found in any location: {filename}")
-            raise HTTPException(status_code=404, detail=f"CIF file not found: {filename}")
-
-        # Parse and create supercell
-        logger.info(f" CHGNET: Creating supercell {supercell_size} from structure: {structure.formula}")
-        structure.make_supercell(supercell_size)
-        logger.info(f"✅ CHGNET: Supercell created - Formula: {structure.formula}, Sites: {len(structure.sites)}")
-        
-        # Apply operations for CHGNet prediction (skip invalid operations)
-        valid_operations, invalid_operations = filter_valid_operations(
-            operations, len(structure.sites), strict_mode=False
+        # Apply operations for CHGNet prediction (skip invalid ones), in the
+        # exact order the client recorded them.
+        operations_applied, skipped_operations = apply_operations_to_structure(
+            structure, operations, strict_mode=False
         )
-        
-        # Log invalid operations but continue with valid ones
-        if invalid_operations:
-            logger.warning(f"Skipping {len(invalid_operations)} invalid operations for CHGNet prediction: {invalid_operations}")
-        
-        # Process substitute/delete in descending order by index to eliminate index adjustment issues
-        mod_operations = [op for op in valid_operations if op["action"] in ["substitute", "delete"]]
-        insert_operations = [op for op in valid_operations if op["action"] == "insert"]
-        
-        stable_mods = sorted(mod_operations, key=lambda x: x["index"], reverse=True)
-        
-        for operation in stable_mods:
-            site_index = operation["index"]
-            if operation["action"] == "substitute":
-                new_element = operation["to"]
-                old_coords = structure[site_index].frac_coords
-                structure[site_index] = Element(new_element), old_coords
-            elif operation["action"] == "delete":
-                structure.remove_sites([site_index])
-                
-        # Process insertions after removals to avoid index mapping issues
-        for operation in insert_operations:
-            frac_coords = [float(c) % 1.0 for c in operation["coords"]]
-            structure.append(Element(operation["to"]), frac_coords)
-        
+
+        if skipped_operations:
+            logger.warning(f"Skipping {len(skipped_operations)} invalid operations for CHGNet prediction: {skipped_operations}")
+
         # Load CHGNet model (using singleton pattern)
         try:
             chgnet = await chgnet_manager.get_model()
@@ -1957,7 +1867,8 @@ async def chgnet_predict_structure(request: dict):
             "num_sites": len(structure.sites),
             "volume": float(structure.volume),
             "density": float(structure.density),
-            "operations_applied": len(operations),
+            "operations_applied": operations_applied,
+            "operations_skipped": skipped_operations,
             "supercell_size": supercell_size
         })
         
@@ -2681,6 +2592,99 @@ async def evaluate_insertion_energies(data: dict):
         raise
     except Exception as e:
         logger.error(f"Error evaluating insertion energies: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/evaluate-candidate-energies")
+async def evaluate_candidate_energies(data: dict):
+    """
+    Predicts substitution/deletion energies for a batch of candidate atoms in
+    one CHGNet call.
+
+    Mirrors /api/evaluate-insertion-energies (added for the equivalent
+    insertion sweep): used by the Auto-mode substitution and deletion sweeps
+    to replace the previous one-HTTP-request-per-atom loop, where each
+    request re-parsed the CIF from disk, rebuilt the supercell, and replayed
+    the full operation history just to score one candidate. Candidates are
+    chunked client-side (MAX_CANDIDATE_BATCH per request) so a single
+    request stays short enough for STOP to remain responsive, and each
+    chunk is one native batched CHGNet call.
+    """
+    try:
+        session_id = data.get("session_id")
+        candidates = data.get("candidates")
+
+        if not session_id or not candidates:
+            raise HTTPException(status_code=400, detail="Session ID and candidates are required")
+        if not isinstance(candidates, list):
+            raise HTTPException(status_code=400, detail="candidates must be a list")
+        if len(candidates) > MAX_CANDIDATE_BATCH:
+            raise HTTPException(status_code=400,
+                               detail=f"candidates exceeds the maximum batch size of {MAX_CANDIDATE_BATCH}")
+
+        structure = session_manager.get_current_structure(session_id)
+        if not structure:
+            raise HTTPException(status_code=404, detail="Structure not found")
+
+        cand_structures = []
+        cand_ids = []
+        cand_num_atoms = []
+        for candidate in candidates:
+            cand_id = candidate.get("id")
+            action = candidate.get("action")
+            index = candidate.get("index")
+
+            if cand_id is None or action not in ("substitute", "delete"):
+                raise HTTPException(status_code=400,
+                                   detail="Each candidate requires 'id' and action 'substitute' or 'delete'")
+            if not isinstance(index, int) or index < 0 or index >= len(structure):
+                raise HTTPException(status_code=400,
+                                   detail=f"candidate {cand_id}: index {index} out of range (max: {len(structure) - 1})")
+
+            cand_structure = structure.copy()
+            if action == "substitute":
+                new_element = candidate.get("to")
+                try:
+                    validate_element(new_element)
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=f"candidate {cand_id}: {e}")
+                old_coords = cand_structure[index].frac_coords
+                cand_structure[index] = Element(new_element), old_coords
+            else:  # delete
+                cand_structure.remove_sites([index])
+
+            cand_structures.append(cand_structure)
+            cand_ids.append(cand_id)
+            cand_num_atoms.append(len(cand_structure))
+
+        pred_results = await chgnet_manager.predict_structures_batch(cand_structures, task="e")
+
+        results = []
+        for cand_id, num_atoms, pred_result in zip(cand_ids, cand_num_atoms, pred_results):
+            if pred_result is None:
+                results.append({"id": cand_id, "energy": None, "energy_eV_per_atom": None,
+                               "error": "Prediction failed"})
+                continue
+            try:
+                parsed = safe_get_prediction(pred_result, num_atoms=num_atoms)
+                per_atom_energy = parsed.get("energy_eV_per_atom")
+                if per_atom_energy is None:
+                    raise ValueError("Prediction returned no energy value")
+                results.append({
+                    "id": cand_id,
+                    "energy": per_atom_energy * num_atoms,
+                    "energy_eV_per_atom": per_atom_energy,
+                    "error": None,
+                })
+            except Exception as e:
+                logger.warning(f"Failed to parse prediction for candidate {cand_id}: {e}")
+                results.append({"id": cand_id, "energy": None, "energy_eV_per_atom": None, "error": str(e)})
+
+        return {"status": "success", "results": results}
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
+    except Exception as e:
+        logger.error(f"Error evaluating candidate energies: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # --- Analytics API Routes ---
