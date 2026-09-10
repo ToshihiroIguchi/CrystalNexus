@@ -132,3 +132,46 @@ def test_chgnet_predict(client):
     assert isinstance(energy, float)
     # Cohesive/formation energy per atom for bulk Cu must be negative
     assert energy < 0
+
+
+def test_chgnet_predict_validates_supercell_size(client):
+    """supercell_size must be validated before the (expensive, model-
+    loading) CHGNet path runs, so this stays fast even without CHGNet."""
+    response = client.post("/api/chgnet-predict", json={
+        "filename": "Metals/Cu.cif",
+        "operations": [],
+        "supercell_size": [99, 1, 1],
+    })
+    assert response.status_code == 400
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not CHGNET_AVAILABLE, reason="CHGNet not available")
+def test_chgnet_predict_with_substitution(client):
+    """A substitution passed through /api/chgnet-predict must actually
+    apply and be reflected in the returned structure info."""
+    response = client.post("/api/chgnet-predict", json={
+        "filename": "Metals/Cu.cif",
+        "operations": [{"action": "substitute", "index": 0, "to": "Ni"}],
+        "supercell_size": [1, 1, 1],
+    })
+    assert response.status_code == 200
+    prediction = response.json()["prediction"]
+    assert "Ni" in prediction["formula"]
+    assert prediction["operations_applied"] == 1
+    assert prediction["operations_skipped"] == []
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not CHGNET_AVAILABLE, reason="CHGNet not available")
+def test_chgnet_predict_reports_skipped_operations(client):
+    """An out-of-range operation must be reported in operations_skipped
+    rather than silently dropped (the field the frontend now reads)."""
+    response = client.post("/api/chgnet-predict", json={
+        "filename": "Metals/Cu.cif",
+        "operations": [{"action": "substitute", "index": 9999, "to": "Ni"}],
+        "supercell_size": [1, 1, 1],
+    })
+    assert response.status_code == 200
+    prediction = response.json()["prediction"]
+    assert len(prediction["operations_skipped"]) == 1

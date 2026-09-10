@@ -1084,12 +1084,12 @@
                         α = ${data.lattice_parameters.alpha.toFixed(5)}°<br>
                         β = ${data.lattice_parameters.beta.toFixed(5)}°<br>
                         γ = ${data.lattice_parameters.gamma.toFixed(5)}°<br>
-                        Volume = ${data.volume.toFixed(5)} Ų
+                        Volume = ${data.volume.toFixed(5)} Å³
                     </div>
                 </div>
                 
                 <div style="margin-bottom: 15px;">
-                    <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Symmetry Information:</div>
+                    <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Symmetry Information (original unit cell):</div>
                     <div><strong>International notation:</strong> ${data.space_group}</div>
                     <div><strong>Space group number:</strong> ${data.space_group_number}</div>
                     <div><strong>Point group:</strong> ${data.point_group}</div>
@@ -1323,8 +1323,14 @@
                     filename: window.currentFilename || null,
                     // 原子操作の検知のためにフォーミュラも含める
                     formula: window.currentStructureData?.supercell_info?.formula || null,
-                    // 操作履歴も含める（原子の追加・削除を検知）
-                    operationsHash: window.operationHistory ? JSON.stringify(window.operationHistory) : null
+                    // Include the actual recorded operation history (atom
+                    // add/delete/substitute) so a round trip back to the
+                    // original formula (A -> B -> A) is still detected as a
+                    // structure change. window.operationHistory was always
+                    // [] (only ever assigned that, never populated) and so
+                    // never contributed to this hash; window.atomicOperations
+                    // is the real operation history used everywhere else.
+                    operationsHash: window.atomicOperations ? JSON.stringify(window.atomicOperations) : null
                 };
                 return JSON.stringify(data);
             } catch (error) {
@@ -2122,7 +2128,7 @@ c = ${relaxedInfo.lattice_parameters.c.toFixed(5)} Å
 α = ${relaxedInfo.lattice_parameters.alpha.toFixed(5)}°
 β = ${relaxedInfo.lattice_parameters.beta.toFixed(5)}°
 γ = ${relaxedInfo.lattice_parameters.gamma.toFixed(5)}°
-Volume = ${relaxedInfo.volume.toFixed(5)} Ų
+Volume = ${relaxedInfo.volume.toFixed(5)} Å³
 
 ⚡ Structure relaxed with CHGNet
 Note: CHGNet may overestimate lattice constants and underestimate density`;
@@ -2176,7 +2182,7 @@ c = ${supercellLattice.c.toFixed(5)} Å
 α = ${supercellLattice.alpha.toFixed(5)}°
 β = ${supercellLattice.beta.toFixed(5)}°
 γ = ${supercellLattice.gamma.toFixed(5)}°
-Volume = ${supercell.volume.toFixed(5)} Ų
+Volume = ${supercell.volume.toFixed(5)} Å³
 
 Note: Symmetry information excluded for supercell structure`;
 
@@ -2210,9 +2216,9 @@ c = ${data.lattice_parameters.c.toFixed(5)} Å
 α = ${data.lattice_parameters.alpha.toFixed(5)}°
 β = ${data.lattice_parameters.beta.toFixed(5)}°
 γ = ${data.lattice_parameters.gamma.toFixed(5)}°
-Volume = ${data.volume.toFixed(5)} Ų
+Volume = ${data.volume.toFixed(5)} Å³
 
-Symmetry Information:
+Symmetry Information (original unit cell):
 International notation: ${data.space_group}
 Space group number: ${data.space_group_number}
 Point group: ${data.point_group}
@@ -2276,19 +2282,9 @@ Crystal system: ${data.crystal_system}`;
             displayBonds = true;
             syncButtonStates();
 
-            // Show error message to user
-            const container = document.getElementById('3dmol-viewer');
-            if (container) {
-                container.innerHTML = `
-                    <div style="display: flex; align-items: center; justify-content: center; height: 100%; background: #f8f9fa; color: #dc3545; text-align: center; padding: 20px;">
-                        <div>
-                            <div style="font-size: 24px; margin-bottom: 10px;">⚠️</div>
-                            <div style="font-weight: bold; margin-bottom: 5px;">3D Display Error</div>
-                            <div style="font-size: 14px;">Failed to rebuild 3D display. Please refresh the page.</div>
-                        </div>
-                    </div>
-                `;
-            }
+            // Show error message to user (overlay, not an innerHTML
+            // replacement -- see showViewerError)
+            showViewerError('Failed to rebuild 3D display. Please refresh the page.');
         }
 
         // Lattice data functions removed - using 3Dmol.js built-in functionality
@@ -2469,7 +2465,7 @@ Crystal system: ${data.crystal_system}`;
                         α = ${relaxedStructureInfo.lattice_parameters.alpha.toFixed(5)}°<br>
                         β = ${relaxedStructureInfo.lattice_parameters.beta.toFixed(5)}°<br>
                         γ = ${relaxedStructureInfo.lattice_parameters.gamma.toFixed(5)}°<br>
-                        Volume = ${relaxedStructureInfo.volume.toFixed(5)} Ų
+                        Volume = ${relaxedStructureInfo.volume.toFixed(5)} Å³
                     </div>
                 </div>
                 
@@ -2533,6 +2529,7 @@ Crystal system: ${data.crystal_system}`;
                 const viewerElement = document.getElementById('3dmol-viewer');
                 if (viewerElement && viewerElement.offsetWidth > 0 && viewerElement.offsetHeight > 0) {
                     window.viewer3D.clear();
+                    clearViewerError();
                 } else {
                     console.warn('Skipping viewer clear - element has zero dimensions');
                 }
@@ -2574,28 +2571,22 @@ Crystal system: ${data.crystal_system}`;
             } catch (error) {
                 console.error('Relaxed 3D visualization update failed:', error);
 
-                // Clear 3D display to avoid showing incorrect structure
+                // Clear 3D display to avoid showing incorrect structure. Uses
+                // an overlay (showViewerError), not innerHTML replacement:
+                // #3dmol-viewer is the DOM node 3Dmol.js has bound its own
+                // canvas into, and overwriting its innerHTML detaches that
+                // canvas, silently breaking every later clear()/addModel()/
+                // render() call on this viewer.
                 if (window.viewer3D) {
                     // Clear viewer safely
                     const viewerElement = document.getElementById('3dmol-viewer');
                     if (viewerElement && viewerElement.offsetWidth > 0 && viewerElement.offsetHeight > 0) {
                         window.viewer3D.clear();
                     }
-
-                    // Show clear error message in 3D viewer
-                    const container = document.getElementById('3dmol-viewer');
-                    if (container) {
-                        container.innerHTML = `
-                            <div style="display: flex; align-items: center; justify-content: center; height: 100%; background: #f8f9fa; border: 2px dashed #dc3545;">
-                                <div style="text-align: center; color: #dc3545; font-size: 14px;">
-                                    <div style="font-weight: bold; margin-bottom: 10px;">⚠️ Failed to Display Relaxed Structure</div>
-                                    <div>Could not retrieve accurate structure data</div>
-                                    <div style="font-size: 12px; margin-top: 5px; color: #6c757d;">CHGNet calculation completed but 3D display unavailable</div>
-                                    <div style="font-size: 10px; margin-top: 10px; color: #868e96;">Error: ${error.message}</div>
-                                </div>
-                            </div>
-                        `;
-                    }
+                    showViewerError(
+                        'Failed to display relaxed structure. Could not retrieve accurate structure data. ' +
+                        `CHGNet calculation completed but 3D display unavailable. Error: ${error.message}`
+                    );
                 }
 
                 showNotification('Failed to display relaxed structure. Calculation data is valid.', 'warning');
@@ -2805,7 +2796,7 @@ Crystal system: ${data.crystal_system}`;
                         α = ${supercellLattice.alpha.toFixed(5)}°<br>
                         β = ${supercellLattice.beta.toFixed(5)}°<br>
                         γ = ${supercellLattice.gamma.toFixed(5)}°<br>
-                        Volume = ${supercell.volume.toFixed(5)} Ų
+                        Volume = ${supercell.volume.toFixed(5)} Å³
                     </div>
                 </div>
                 
@@ -3371,7 +3362,7 @@ Crystal system: ${data.crystal_system}`;
             let insertableElementsLoaded = false;
 
             async function switchTab(mode) {
-                if (window.viewer && typeof clearGhostAtom === 'function') clearGhostAtom(); // Clear preview
+                if (window.viewer3D && typeof clearGhostAtom === 'function') clearGhostAtom(); // Clear preview
                 window.currentOperationMode = mode;
 
                 if (mode === 'insert') {
@@ -3435,7 +3426,7 @@ Crystal system: ${data.crystal_system}`;
 
             // Insert Selection mode toggles
             insertManualMode.addEventListener('change', function () {
-                if (window.viewer && typeof clearGhostAtom === 'function') clearGhostAtom();
+                if (window.viewer3D && typeof clearGhostAtom === 'function') clearGhostAtom();
                 insertCandidateDropdown.value = '';
                 if (this.checked) {
                     insertManualSelector.style.display = 'block';
@@ -3447,7 +3438,7 @@ Crystal system: ${data.crystal_system}`;
             });
 
             insertAutoMode.addEventListener('change', function () {
-                if (window.viewer && typeof clearGhostAtom === 'function') clearGhostAtom();
+                if (window.viewer3D && typeof clearGhostAtom === 'function') clearGhostAtom();
                 if (this.checked) {
                     insertManualSelector.style.display = 'none';
                 }
@@ -3455,7 +3446,7 @@ Crystal system: ${data.crystal_system}`;
             });
 
             insertElementDropdown.addEventListener('change', async function () {
-                if (window.viewer && typeof clearGhostAtom === 'function') clearGhostAtom();
+                if (window.viewer3D && typeof clearGhostAtom === 'function') clearGhostAtom();
                 window.insertionCandidates = [];
                 insertCandidateDropdown.innerHTML = '<option value="">Select element first...</option>';
 
@@ -3495,6 +3486,11 @@ Crystal system: ${data.crystal_system}`;
                     const selectedTarget = isAutoMode ? elementTypeDropdown.value : atomDropdown.value;
 
                     if (selectedTarget && selectedOperation) {
+                        // Manual-mode handleDeletion/handleSubstitution don't set a
+                        // processing button state themselves (unlike the Auto-mode
+                        // handlers below), so guard here to prevent a rapid
+                        // double-click from recording the same operation twice.
+                        executeBtn.disabled = true;
                         try {
                             if (isAutoMode) {
                                 if (selectedOperation === 'DELETE') await handleOptimalDeletion(selectedTarget);
@@ -3517,7 +3513,7 @@ Crystal system: ${data.crystal_system}`;
                     const isAutoMode = insertAutoMode.checked;
 
                     if (elementToInsert) {
-                        if (window.viewer && typeof clearGhostAtom === 'function') clearGhostAtom();
+                        if (window.viewer3D && typeof clearGhostAtom === 'function') clearGhostAtom();
                         // Manual-mode handleInsertion doesn't set a processing
                         // button state itself (unlike handleOptimalInsertion), so
                         // guard here to prevent a rapid double-click from
@@ -4419,7 +4415,6 @@ Crystal system: ${data.crystal_system}`;
                             console.warn(`Batch evaluation failed for atoms ${i + 1}-${lastInChunk}: ${detail}`);
                             chunk.forEach(atom => {
                                 calculationResults.failed.push({ atom: atom.label, errors: [{ error: detail }], finalError: detail });
-                                if (AUTO_MODE_CONFIG.showRealTimeErrors) updateRealTimeErrorDisplay(atom.label, detail);
                             });
                         } else {
                             const data = await response.json();
@@ -4448,9 +4443,6 @@ Crystal system: ${data.crystal_system}`;
                                     const errorMsg = (result && result.error) || 'Unknown error';
                                     calculationResults.failed.push({ atom: atom.label, errors: [{ error: errorMsg }], finalError: errorMsg });
                                     console.warn(`Failed to calculate energy for ${atom.label}: ${errorMsg}`);
-                                    if (AUTO_MODE_CONFIG.showRealTimeErrors) {
-                                        updateRealTimeErrorDisplay(atom.label, errorMsg);
-                                    }
                                 }
                             }
                         }
@@ -4557,7 +4549,7 @@ Crystal system: ${data.crystal_system}`;
                 }
 
                 // Show completion state instead of hiding
-                showExecutionComplete(`Substitution Completed. Best: ${bestResult.atom} -> ${newElement} (${bestResult.energy.toFixed(4)} eV)`, results);
+                showExecutionComplete(`Substitution Completed. Best: ${bestResult.atom} -> ${newElement} (${bestResult.energy.toFixed(4)} eV/atom)`, results);
 
             } else {
                 // All calculations failed
@@ -4646,31 +4638,6 @@ Crystal system: ${data.crystal_system}`;
             reportContainer.style.display = 'block';
         }
 
-        function updateRealTimeErrorDisplay(atomLabel, errorMessage) {
-            let errorContainer = document.getElementById('real-time-errors');
-            if (!errorContainer) {
-                errorContainer = document.createElement('div');
-                errorContainer.id = 'real-time-errors';
-                errorContainer.className = 'real-time-errors';
-
-                const statusContainer = document.getElementById('execute-status-container');
-                if (statusContainer) {
-                    statusContainer.appendChild(errorContainer);
-                }
-            }
-
-            const errorItem = document.createElement('div');
-            errorItem.className = 'error-item';
-            errorItem.innerHTML = `<span class="atom-label">${atomLabel}:</span> <span class="error-message">${errorMessage}</span>`;
-
-            errorContainer.appendChild(errorItem);
-
-            // Keep only last 5 errors visible
-            while (errorContainer.children.length > 5) {
-                errorContainer.removeChild(errorContainer.firstChild);
-            }
-        }
-
         async function handleOptimalDeletion(elementType) {
             await runOptimalCandidateSweep('delete', elementType, null);
         }
@@ -4720,7 +4687,7 @@ Crystal system: ${data.crystal_system}`;
                 }
 
                 // Show completion state instead of hiding
-                showExecutionComplete(`Deletion Completed. Best: ${bestResult.atom} (${bestResult.energy.toFixed(4)} eV)`, results);
+                showExecutionComplete(`Deletion Completed. Best: ${bestResult.atom} (${bestResult.energy.toFixed(4)} eV/atom)`, results);
 
             } else {
                 // All calculations failed
@@ -4757,18 +4724,6 @@ Crystal system: ${data.crystal_system}`;
             });
             return atoms;
         }
-
-        // Auto mode configuration. Only showRealTimeErrors remains: the
-        // retry/timeout/error-classification machinery that used to live
-        // here (calculateEnergyWithRetry, classifyError, ERROR_TYPES,
-        // ERROR_HANDLING_STRATEGY) was tied to the old one-HTTP-request-per-
-        // atom loop and was removed along with it -- see
-        // runOptimalCandidateSweep, which now handles substitution and
-        // deletion identically via chunked batch requests with no per-atom
-        // retries (matching the insertion sweep it was modeled on).
-        const AUTO_MODE_CONFIG = {
-            showRealTimeErrors: true
-        };
 
         async function resetToOriginalStructure() {
             if (!window.originalSupercellData || window.originalLabels.length === 0) {
@@ -5039,6 +4994,7 @@ Crystal system: ${data.crystal_system}`;
                 const viewerElement = document.getElementById('3dmol-viewer');
                 if (viewerElement && viewerElement.offsetWidth > 0 && viewerElement.offsetHeight > 0) {
                     window.viewer3D.clear();
+                    clearViewerError();
                 } else {
                     console.warn('⚠️ Skipping viewer clear - element has zero dimensions');
                     return;
@@ -5079,19 +5035,9 @@ Crystal system: ${data.crystal_system}`;
             } catch (error) {
                 console.error('❌ Error loading supercell 3D structure:', error);
 
-                // Fallback: show error message in viewer
-                const container = document.getElementById('3dmol-viewer');
-                if (container) {
-                    container.innerHTML = `
-                        <div style="display: flex; align-items: center; justify-content: center; height: 100%; color: #666; text-align: center; padding: 20px;">
-                            <div>
-                                <div style="font-size: 18px; margin-bottom: 10px;">⚠️</div>
-                                <div>Failed to load 3D structure</div>
-                                <div style="font-size: 12px; margin-top: 5px;">${error.message}</div>
-                            </div>
-                        </div>
-                    `;
-                }
+                // Fallback: show error message in viewer (overlay, not an
+                // innerHTML replacement -- see showViewerError)
+                showViewerError(`Failed to load 3D structure. ${error.message}`);
             }
         }
 
@@ -5110,6 +5056,7 @@ Crystal system: ${data.crystal_system}`;
                 }];
 
                 const requestData = {
+                    session_id: window.sessionId,
                     filename: window.currentFilename,
                     supercell_size: window.currentSupercellSize,
                     operations: previewOps
@@ -5226,12 +5173,25 @@ Crystal system: ${data.crystal_system}`;
                 const cifData = await response.text();
                 dlog(`📄 Generated modified CIF data: ${cifData.length} characters`);
 
+                // The CIF body only records skipped operations as a "#
+                // WARNING:" comment, which we don't parse; the server also
+                // exposes the count in this header so it can surface as a
+                // real notification instead of being silently dropped.
+                const skippedCount = parseInt(response.headers.get('X-Operations-Skipped') || '0', 10);
+                if (skippedCount > 0) {
+                    showNotification(
+                        `${skippedCount} operation(s) could not be applied and were skipped.`,
+                        'warning'
+                    );
+                }
+
                 // Update 3D viewer with modified structure
                 dlog('🗑️ Clearing existing models');
                 // Clear viewer safely
                 const viewerElement = document.getElementById('3dmol-viewer');
                 if (viewerElement && viewerElement.offsetWidth > 0 && viewerElement.offsetHeight > 0) {
                     window.viewer3D.clear();
+                    clearViewerError();
                 } else {
                     console.warn('⚠️ Skipping viewer clear - element has zero dimensions');
                     return;
@@ -5275,6 +5235,7 @@ Crystal system: ${data.crystal_system}`;
                 console.error('❌ Error updating 3D visualization:', error);
 
                 // Clear 3D display to avoid showing incorrect structure
+                // (overlay, not an innerHTML replacement -- see showViewerError)
                 if (window.viewer3D) {
                     // Clear viewer safely
                     const viewerElement = document.getElementById('3dmol-viewer');
@@ -5283,20 +5244,10 @@ Crystal system: ${data.crystal_system}`;
                     } else {
                         console.warn('⚠️ Skipping viewer clear - element has zero dimensions');
                     }
-
-                    // Show clear error message in 3D viewer
-                    const container = document.getElementById('3dmol-viewer');
-                    if (container) {
-                        container.innerHTML = `
-                            <div style="display: flex; align-items: center; justify-content: center; height: 100%; background: #f8f9fa; border: 2px dashed #ffc107;">
-                                <div style="text-align: center; color: #856404; font-size: 14px;">
-                                    <div style="font-weight: bold; margin-bottom: 10px;">⚠️ Failed to Display Structure</div>
-                                    <div>Could not retrieve accurate structure data</div>
-                                    <div style="font-size: 12px; margin-top: 5px; color: #6c757d;">Operations are recorded but 3D display unavailable</div>
-                                </div>
-                            </div>
-                        `;
-                    }
+                    showViewerError(
+                        'Failed to display structure. Could not retrieve accurate structure data. ' +
+                        'Operations are recorded but 3D display unavailable.'
+                    );
                 }
 
                 showNotification('Failed to display structure. Operation data is preserved.', 'warning');
@@ -5323,6 +5274,44 @@ Crystal system: ${data.crystal_system}`;
             `;
             statusDiv.textContent = label;
             container.appendChild(statusDiv);
+        }
+
+        // Shows a 3D-display-failed message as an overlay child of
+        // #3dmol-viewer, following the same pattern as
+        // addStructureStatusLabel above. Deliberately NOT
+        // `container.innerHTML = ...`: 3Dmol.js binds its own canvas inside
+        // #3dmol-viewer, and overwriting its innerHTML detaches that canvas,
+        // silently breaking every later clear()/addModel()/render() call on
+        // this viewer for the rest of the session.
+        function showViewerError(message) {
+            const container = document.getElementById('3dmol-viewer');
+            if (!container) return;
+
+            clearViewerError();
+
+            const overlay = document.createElement('div');
+            overlay.className = 'viewer-error-overlay';
+            overlay.style.cssText = `
+                position: absolute; inset: 0; z-index: 90;
+                display: flex; align-items: center; justify-content: center;
+                background: rgba(248, 249, 250, 0.95); text-align: center; padding: 20px;
+            `;
+            const messageDiv = document.createElement('div');
+            messageDiv.style.cssText = 'color: #856404; font-size: 14px; max-width: 90%;';
+            messageDiv.innerHTML = `
+                <div style="font-size: 24px; margin-bottom: 10px;">⚠️</div>
+                <div style="font-weight: bold; margin-bottom: 5px;">3D Display Error</div>
+                <div>${escapeHtml(message)}</div>
+            `;
+            overlay.appendChild(messageDiv);
+            container.appendChild(overlay);
+        }
+
+        function clearViewerError() {
+            const container = document.getElementById('3dmol-viewer');
+            if (!container) return;
+            const existing = container.querySelector('.viewer-error-overlay');
+            if (existing) existing.remove();
         }
 
         async function recalculateDensityWithPymatgen(formula, volume, latticeParameters) {
@@ -5526,7 +5515,6 @@ Crystal system: ${data.crystal_system}`;
             updateAnalyzeButtonState();
             window.currentAnalysisData = null;
             window.currentStructureData = null;
-            window.operationHistory = [];
 
             // Clear 3D viewer safely
             if (window.viewer3D) {
@@ -7057,7 +7045,7 @@ Crystal system: ${data.crystal_system}`;
                     const alphaMatch = html.match(/α\s*=\s*([\d.]+)°/i);
                     const betaMatch = html.match(/β\s*=\s*([\d.]+)°/i);
                     const gammaMatch = html.match(/γ\s*=\s*([\d.]+)°/i);
-                    const volumeMatch = html.match(/Volume\s*=\s*([\d.]+)\s*Ų/i);
+                    const volumeMatch = html.match(/Volume\s*=\s*([\d.]+)\s*Å³/i);
                     const densityMatch = html.match(/<strong>Density:<\/strong>\s*([\d.]+)\s*g\/cm³/i);
 
                     dlog('Regex extraction results:', {
