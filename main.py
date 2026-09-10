@@ -370,6 +370,43 @@ def validate_atomic_operation(operation, structure_size, operation_index=None):
     except Exception as e:
         return False, f"unexpected validation error: {str(e)}"
 
+def build_element_labels(structure: Structure) -> "tuple[List[str], List[str]]":
+    """
+    Generate per-element sequential labels (Ba0, Ti0, O0, O1, O2, ...) directly
+    from a Structure's sites, in site order.
+
+    Site order here is the same order CHGNet's site-energy/force results
+    come back in and the same order the client's currentLabels array is
+    built in, so these labels stay aligned with both. Extracted from
+    /api/get-element-labels so /api/apply-atomic-operations can return the
+    same labels the client would otherwise have to re-derive itself.
+
+    Returns:
+        (labels, unique_elements) -- unique_elements is in first-appearance
+        order, not alphabetical; sort it yourself if you need the latter
+        (the client's own extractUniqueElements() already does).
+    """
+    labels: List[str] = []
+    element_counts: Dict[str, int] = {}
+
+    for site in structure.sites:
+        # Get clean element symbol using PyMatGen's unified approach.
+        # This handles both Element and Species types consistently.
+        if hasattr(site.specie, 'element'):
+            element = str(site.specie.element)  # Species type (e.g., Ba2+ -> Ba)
+        else:
+            element = str(site.specie)          # Element type (e.g., Nd -> Nd)
+
+        if element not in element_counts:
+            element_counts[element] = 0
+        else:
+            element_counts[element] += 1
+
+        labels.append(f"{element}{element_counts[element]}")
+
+    return labels, list(element_counts.keys())
+
+
 def substitute_site(structure: Structure, site_index: int, new_element: str) -> bool:
     """
     Replace `structure[site_index]` with a neutral `new_element` at the same
@@ -901,16 +938,29 @@ async def apply_atomic_operations(request: dict):
         logger.info(f" OPERATIONS: Updating session with final structure - Formula: {structure.formula}, Sites: {len(structure.sites)}")
         session_manager.update_structure(session_id, structure, operations=operations)
         logger.info(f"✅ OPERATIONS: Session updated successfully")
-        
+
         logger.info(f"Applied {len(operations)} operations to session {session_id[:8]}...")
-        
+
+        labels, unique_elements = build_element_labels(structure)
+
         return {
             "status": "success",
             "message": f"Applied {len(operations)} atomic operations",
             "num_sites": len(structure),
-            "composition": str(structure.composition)
+            "composition": str(structure.composition),  # kept for existing callers/tests
+            # Authoritative structure state: the client overwrites its own
+            # copy with these instead of recomputing formula/volume/density
+            # from a parsed formula string client-side, which cannot be done
+            # correctly -- deleting an atom does not shrink the lattice
+            # volume, and the regex-based formula parser dropped elements
+            # whose count was implicit (e.g. "Fe" rather than "Fe1").
+            "formula": str(structure.formula),
+            "volume": float(structure.volume),
+            "density": float(structure.density),
+            "labels": labels,
+            "unique_elements": unique_elements,
         }
-        
+
     except HTTPException:
         # Re-raise HTTPExceptions without modification
         raise
@@ -1380,17 +1430,38 @@ async def create_supercell(data: dict):
             import traceback
             traceback.print_exc()
             structure_dict = None
-        
-        return {
-            "status": "supercell_created",
-            "original_data": crystal_data,
-            "supercell_info": {
+            supercell_structure = None
+
+        if supercell_structure is not None:
+            # Authoritative values from the actual pymatgen Structure,
+            # rather than calculate_supercell_formula's formula-string
+            # regex scaling and a volume/site-count multiplied out of the
+            # client-supplied original_data. Keeps the very first structure
+            # state on the same footing as /api/apply-atomic-operations'
+            # response (see build_element_labels usage there).
+            supercell_info = {
+                "size": supercell_size,
+                "volume": float(supercell_structure.volume),
+                "num_sites": len(supercell_structure),
+                "scaling_factor": scaling_factor,
+                "formula": str(supercell_structure.formula),
+                "density": float(supercell_structure.density),
+            }
+        else:
+            # Fallback for the (rare) case no Structure could be built at
+            # all: approximate from the client-supplied original values.
+            supercell_info = {
                 "size": supercell_size,
                 "volume": supercell_volume,
                 "num_sites": supercell_sites,
                 "scaling_factor": scaling_factor,
-                "formula": supercell_formula
-            },
+                "formula": supercell_formula,
+            }
+
+        return {
+            "status": "supercell_created",
+            "original_data": crystal_data,
+            "supercell_info": supercell_info,
             "structure_dict": structure_dict,  # Add structure_dict for 3D visualization
             "message": f"Supercell {a_mult}x{b_mult}x{c_mult} created successfully"
         }
@@ -1416,33 +1487,11 @@ async def get_element_labels(data: dict):
         structure = session_manager.get_current_structure(session_id)
         if structure is None:
             raise HTTPException(status_code=404, detail=f"No structure found for session {session_id}")
-        
-        # Generate labels directly from Structure sites in the exact same order
-        # This ensures perfect alignment with CHGNet results
-        labels = []
-        element_counts = {}
-        
-        for i, site in enumerate(structure.sites):
-            # Get clean element symbol using PyMatGen's unified approach
-            # This handles both Element and Species types consistently
-            if hasattr(site.specie, 'element'):
-                element = str(site.specie.element)  # Species type (e.g., Ba2+ -> Ba)
-            else:
-                element = str(site.specie)          # Element type (e.g., Nd -> Nd)
-            
-            # Count occurrences of each element to generate unique labels
-            if element not in element_counts:
-                element_counts[element] = 0
-            else:
-                element_counts[element] += 1
-            
-            # Generate label: Element + count (e.g., Ba0, Ti0, O0, O1, O2)
-            label = f"{element}{element_counts[element]}"
-            labels.append(label)
-        
-        # Get unique elements for the UI
-        unique_elements = list(element_counts.keys())
-        
+
+        # Generate labels directly from Structure sites in the exact same
+        # order, ensuring perfect alignment with CHGNet results.
+        labels, unique_elements = build_element_labels(structure)
+
         logger.info(f"Generated structure-based labels for session {session_id}: {labels}")
         
         return {
@@ -1481,59 +1530,6 @@ async def get_chgnet_elements():
     except Exception as e:
         logger.error(f"Error getting CHGnet elements: {e}")
         raise HTTPException(status_code=500, detail="Failed to get supported elements")
-
-@app.post("/api/recalculate-density")
-async def recalculate_density(request: dict):
-    """
-    Recalculate density using pymatgen after atom operations
-    """
-    try:
-        formula = request.get("formula")
-        volume = request.get("volume")  # in A^3
-        lattice_parameters = request.get("lattice_parameters", {})
-        
-        if not all([formula, volume]):
-            raise HTTPException(status_code=400, detail="Missing required parameters: formula, volume")
-        
-        # Parse the formula to create a dummy structure for density calculation
-        import re
-        from pymatgen.core import Structure, Lattice, Element
-        from pymatgen.core.composition import Composition
-        
-        # Create composition from formula
-        comp = Composition(formula.replace(" ", ""))
-        
-        # Create dummy lattice with correct volume
-        # Use cubic lattice for simplicity (actual lattice shape doesn't affect density)
-        a = (volume) ** (1/3)  # Convert volume to lattice parameter
-        lattice = Lattice.cubic(a)
-        
-        # Get atomic masses and calculate density
-        total_mass = 0
-        for element, amount in comp.items():
-            atomic_mass = Element(element).atomic_mass
-            total_mass += atomic_mass * amount
-        
-        # Convert to g/cm^3
-        # Density = mass (g/mol) / (volume (A^3) * N_A * 1e-24 (cm^3/A^3))
-        avogadro = 6.02214076e23
-        volume_cm3 = volume * 1e-24  # Convert A^3 to cm^3
-        density = total_mass / (avogadro * volume_cm3)
-        
-        return {
-            "status": "success",
-            "density": density,
-            "formula": formula,
-            "volume": volume,
-            "total_mass": total_mass,
-            "calculation_method": "pymatgen_composition"
-        }
-        
-    except HTTPException:
-        # Re-raise HTTPExceptions without modification
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error recalculating density: {str(e)}")
 
 @app.post("/api/generate-modified-structure-cif")
 async def generate_modified_structure_cif(request: dict):
