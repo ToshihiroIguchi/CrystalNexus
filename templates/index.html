@@ -753,13 +753,17 @@
             }, 100);
         }
 
-        // Update session with atomic operations
-        // Returns true if the backend accepted the current operation history,
-        // false otherwise. On failure the most recently recorded operation is
+        // Update session with atomic operations.
+        // Returns the parsed response body (carrying server-authoritative
+        // formula/volume/density/labels -- see applyServerStructureState) if
+        // the backend accepted the current operation history, or null
+        // otherwise. On failure the most recently recorded operation is
         // rolled back (popped from window.atomicOperations) so a rejected
         // operation doesn't silently stick around and get replayed against
         // later edits -- every call site pushes exactly one operation
-        // immediately before calling this function.
+        // immediately before calling this function. null is falsy, so
+        // existing `if (!accepted) return;`-style call sites keep working
+        // unchanged.
         async function updateSessionWithOperations() {
             try {
                 const response = await fetch('/api/apply-atomic-operations', {
@@ -780,7 +784,7 @@
                     // Update status to ready for calculation when structure changes
                     updateStatusDisplay('energy', 'ready');
                     updateStatusDisplay('magnetic', 'ready');
-                    return true;
+                    return result;
                 }
 
                 let detail = `HTTP ${response.status}`;
@@ -793,13 +797,30 @@
                 console.error('❌ Failed to update session with operations:', detail);
                 window.atomicOperations.pop();
                 showNotification(`Operation rejected by server (undone): ${detail}`, 'error');
-                return false;
+                return null;
             } catch (error) {
                 console.error('❌ Error updating session:', error);
                 window.atomicOperations.pop();
                 showNotification('Operation could not be saved (undone): network error.', 'error');
-                return false;
+                return null;
             }
+        }
+
+        // Overwrites the client's working structure state with the
+        // server-authoritative values /api/apply-atomic-operations now
+        // returns, instead of recomputing formula/volume/density/labels
+        // client-side (which cannot be done correctly -- see the deleted
+        // updateStructureForSubstitution/ForDeletion and calculateNewFormula*
+        // functions this replaces). Does NOT replace supercell_info
+        // wholesale: `size` and `scaling_factor` are set once at supercell
+        // creation and are not echoed by this endpoint.
+        function applyServerStructureState(result) {
+            window.currentLabels = result.labels;
+            const info = window.currentStructureData.supercell_info;
+            info.formula = result.formula;
+            info.num_sites = result.num_sites;
+            info.volume = result.volume;
+            info.density = result.density;
         }
 
         // Initialize the application
@@ -3607,15 +3628,17 @@ Crystal system: ${data.crystal_system}`;
             }
         }
 
-        async function handleSubstitution(elementLabel, newElement) {
+        async function handleSubstitution(elementLabel, newElement, knownIndex = null) {
             if (!window.currentStructureData || window.currentLabels.length === 0) {
                 showNotification('No structure data available for modification', 'error');
                 return;
             }
 
-            // Find the atom index
-            const atomIndex = window.currentLabels.indexOf(elementLabel);
-            if (atomIndex === -1) {
+            // Prefer an index the caller already knows (e.g. the Auto-mode
+            // sweep's winning candidate) over re-deriving it from a label,
+            // which is only safe as a fallback for the Manual dropdown path.
+            const atomIndex = knownIndex !== null ? knownIndex : window.currentLabels.indexOf(elementLabel);
+            if (atomIndex === -1 || atomIndex === undefined) {
                 showNotification(`Atom ${elementLabel} not found`, 'error');
                 return;
             }
@@ -3633,14 +3656,20 @@ Crystal system: ${data.crystal_system}`;
 
             dlog(`📝 Recorded substitution: ${elementLabel} → ${newElement} (operation #${window.atomicOperations.length})`);
 
-            // Update the structure data
-            await updateStructureForSubstitution(atomIndex, elementLabel, newElement);
-
-            // Update session with new operations
-            const accepted = await updateSessionWithOperations();
-            if (!accepted) {
+            // Ask the server first: only once it accepts do we touch any
+            // local state, so a rejection needs no rollback beyond the
+            // atomicOperations pop updateSessionWithOperations already did.
+            const result = await updateSessionWithOperations();
+            if (!result) {
                 return; // updateSessionWithOperations already rolled back and notified
             }
+            applyServerStructureState(result);
+
+            // Update displays with the server-authoritative structure state
+            supercellData = window.currentStructureData; // For compatibility
+            displaySupercellInfo();
+            displayStructureOperations(window.currentLabels);
+            updateStructureVisualization();
 
             // Reset physical properties after structure modification
             resetPhysicalProperties();
@@ -3649,15 +3678,17 @@ Crystal system: ${data.crystal_system}`;
             showNotification(`Successfully substituted ${elementLabel} → ${newElement}`, 'success');
         }
 
-        async function handleDeletion(elementLabel) {
+        async function handleDeletion(elementLabel, knownIndex = null) {
             if (!window.currentStructureData || window.currentLabels.length === 0) {
                 showNotification('No structure data available for modification', 'error');
                 return;
             }
 
-            // Find the atom index
-            const atomIndex = window.currentLabels.indexOf(elementLabel);
-            if (atomIndex === -1) {
+            // Prefer an index the caller already knows (e.g. the Auto-mode
+            // sweep's winning candidate) over re-deriving it from a label,
+            // which is only safe as a fallback for the Manual dropdown path.
+            const atomIndex = knownIndex !== null ? knownIndex : window.currentLabels.indexOf(elementLabel);
+            if (atomIndex === -1 || atomIndex === undefined) {
                 showNotification(`Atom ${elementLabel} not found`, 'error');
                 return;
             }
@@ -3674,14 +3705,20 @@ Crystal system: ${data.crystal_system}`;
 
             dlog(`📝 Recorded deletion: ${elementLabel} (operation #${window.atomicOperations.length})`);
 
-            // Update the structure data
-            await updateStructureForDeletion(atomIndex, elementLabel);
-
-            // Update session with new operations
-            const accepted = await updateSessionWithOperations();
-            if (!accepted) {
+            // Ask the server first: only once it accepts do we touch any
+            // local state, so a rejection needs no rollback beyond the
+            // atomicOperations pop updateSessionWithOperations already did.
+            const result = await updateSessionWithOperations();
+            if (!result) {
                 return; // updateSessionWithOperations already rolled back and notified
             }
+            applyServerStructureState(result);
+
+            // Update displays with the server-authoritative structure state
+            supercellData = window.currentStructureData; // For compatibility
+            displaySupercellInfo();
+            displayStructureOperations(window.currentLabels);
+            updateStructureVisualization();
 
             // Reset physical properties after structure modification
             resetPhysicalProperties();
@@ -3746,58 +3783,30 @@ Crystal system: ${data.crystal_system}`;
                 return;
             }
 
-            // Assign a new label for the inserted atom
-            // Find max index for this element to create a unique label
-            const existingSameExt = window.currentLabels.filter(l => l.startsWith(elementToInsert));
-            let maxNum = -1;
-            existingSameExt.forEach(l => {
-                const match = l.match(/\d+$/);
-                if (match) {
-                    const num = parseInt(match[0]);
-                    if (num > maxNum) maxNum = num;
-                }
-            });
-            const newLabel = `${elementToInsert}${maxNum + 1}`;
-
-            // Record operation in history
+            // Record operation in history. The inserted atom's actual label
+            // (element-sequential over the live structure, e.g. "C14") is
+            // assigned by the server once accepted below and applied via
+            // applyServerStructureState -- 'label' here is informational
+            // only (unread by the server; see validate_atomic_operation)
+            // and used just for the dlog line before that response arrives.
             window.atomicOperations.push({
                 action: "insert",
                 to: elementToInsert,
                 coords: cand.frac_coords,
                 timestamp: Date.now(),
-                label: newLabel
+                label: elementToInsert
             });
 
-            dlog(`📝 Recorded insertion: ${newLabel} at ${cand.frac_coords} (operation #${window.atomicOperations.length})`);
+            dlog(`📝 Recorded insertion: ${elementToInsert} at ${cand.frac_coords} (operation #${window.atomicOperations.length})`);
 
-            // Update the structure data in UI side
-            window.currentLabels.push(newLabel);
-            window.currentStructureData.supercell_info.num_sites = window.currentLabels.length;
-
-            // Recalculate formula
-            const newFormula = calculateNewFormulaAfterInsertion(elementToInsert);
-            window.currentStructureData.supercell_info.formula = newFormula;
-
-            // Update session with new operations via backend API
-            const accepted = await updateSessionWithOperations();
-            if (!accepted) {
-                // Roll back the optimistic local edits too, since
-                // updateSessionWithOperations already popped the operation.
-                window.currentLabels.pop();
-                window.currentStructureData.supercell_info.num_sites = window.currentLabels.length;
-                window.currentStructureData.supercell_info.formula = calculateNewFormulaAfterDeletion(elementToInsert);
-                return;
+            // Ask the server first: only once it accepts do we touch any
+            // local state, so a rejection needs no rollback beyond the
+            // atomicOperations pop updateSessionWithOperations already did.
+            const result = await updateSessionWithOperations();
+            if (!result) {
+                return; // updateSessionWithOperations already rolled back and notified
             }
-
-            // Refresh densities etc
-            const newDensity = await recalculateDensityWithPymatgen(
-                newFormula,
-                window.currentStructureData.supercell_info.volume,
-                window.currentStructureData.original_data?.lattice_parameters || {}
-            );
-            if (newDensity !== null) {
-                window.currentStructureData.supercell_info.density = newDensity;
-            }
+            applyServerStructureState(result);
 
             // Update displays. displayStructureOperations() rebuilds the whole
             // operations panel from its static template, which always starts
@@ -3898,161 +3907,6 @@ Crystal system: ${data.crystal_system}`;
         }
 
 
-        async function updateStructureForSubstitution(atomIndex, oldLabel, newElement) {
-            // Update the formula by replacing one atom
-            const oldElement = oldLabel.replace(/\d+$/, ''); // Remove numbers to get element symbol
-
-            // Update labels - replace the substituted atom label
-            window.currentLabels[atomIndex] = `${newElement}${atomIndex}`;
-
-            // Recalculate formula
-            const newFormula = calculateNewFormula(oldElement, newElement);
-            window.currentStructureData.supercell_info.formula = newFormula;
-
-            // Recalculate density using pymatgen
-            const newDensity = await recalculateDensityWithPymatgen(
-                newFormula,
-                window.currentStructureData.supercell_info.volume,
-                window.currentStructureData.original_data?.lattice_parameters || {}
-            );
-
-            if (newDensity !== null) {
-                window.currentStructureData.supercell_info.density = newDensity;
-                dlog(`Updated density: ${newDensity.toFixed(4)} g/cm³`);
-            } else {
-                console.warn('Failed to recalculate density, keeping previous value');
-            }
-
-            // Update displays
-            supercellData = window.currentStructureData; // For compatibility
-            displaySupercellInfo();
-            displayStructureOperations(window.currentLabels);
-
-            // Update 3D visualization
-            updateStructureVisualization();
-
-            dlog(`Updated formula: ${newFormula}`);
-        }
-
-        async function updateStructureForDeletion(atomIndex, deletedLabel) {
-            const deletedElement = deletedLabel.replace(/\d+$/, ''); // Remove numbers to get element symbol
-
-            // Remove from labels array
-            window.currentLabels.splice(atomIndex, 1);
-
-            // Update atom count
-            window.currentStructureData.supercell_info.num_sites = window.currentLabels.length;
-
-            // Recalculate formula
-            const newFormula = calculateNewFormulaAfterDeletion(deletedElement);
-            window.currentStructureData.supercell_info.formula = newFormula;
-
-            // Recalculate volume (approximation - actual volume would need structure recalculation)
-            const deletionRatio = window.currentLabels.length / (window.currentLabels.length + 1);
-            window.currentStructureData.supercell_info.volume *= deletionRatio;
-
-            // Recalculate density using pymatgen
-            const newDensity = await recalculateDensityWithPymatgen(
-                newFormula,
-                window.currentStructureData.supercell_info.volume,
-                window.currentStructureData.original_data?.lattice_parameters || {}
-            );
-
-            if (newDensity !== null) {
-                window.currentStructureData.supercell_info.density = newDensity;
-                dlog(`Updated density: ${newDensity.toFixed(4)} g/cm³`);
-            } else {
-                console.warn('Failed to recalculate density, keeping previous value');
-            }
-
-            // Update displays
-            supercellData = window.currentStructureData; // For compatibility
-            displaySupercellInfo();
-            displayStructureOperations(window.currentLabels);
-
-            // Update 3D visualization
-            updateStructureVisualization();
-
-            dlog(`Updated formula: ${newFormula}`);
-            dlog(`Updated atom count: ${window.currentLabels.length}`);
-        }
-
-        function calculateNewFormula(oldElement, newElement) {
-            const currentFormula = window.currentStructureData.supercell_info.formula;
-
-            // Parse current formula
-            const elementCounts = {};
-            const matches = currentFormula.match(/([A-Z][a-z]?)(\d+)/g) || [];
-
-            matches.forEach(match => {
-                const element = match.replace(/\d+$/, '');
-                const count = parseInt(match.replace(/^[A-Z][a-z]?/, '')) || 1;
-                elementCounts[element] = count;
-            });
-
-            // Update counts
-            elementCounts[oldElement] = (elementCounts[oldElement] || 0) - 1;
-            if (elementCounts[oldElement] <= 0) {
-                delete elementCounts[oldElement];
-            }
-
-            elementCounts[newElement] = (elementCounts[newElement] || 0) + 1;
-
-            // Rebuild formula
-            return Object.entries(elementCounts)
-                .sort(([a], [b]) => a.localeCompare(b))
-                .map(([element, count]) => `${element}${count}`)
-                .join(' ');
-        }
-
-        function calculateNewFormulaAfterDeletion(deletedElement) {
-            const currentFormula = window.currentStructureData.supercell_info.formula;
-
-            // Parse current formula
-            const elementCounts = {};
-            const matches = currentFormula.match(/([A-Z][a-z]?)(\d+)/g) || [];
-
-            matches.forEach(match => {
-                const element = match.replace(/\d+$/, '');
-                const count = parseInt(match.replace(/^[A-Z][a-z]?/, '')) || 1;
-                elementCounts[element] = count;
-            });
-
-            // Decrease count for deleted element
-            elementCounts[deletedElement] = (elementCounts[deletedElement] || 0) - 1;
-            if (elementCounts[deletedElement] <= 0) {
-                delete elementCounts[deletedElement];
-            }
-
-            // Rebuild formula
-            return Object.entries(elementCounts)
-                .sort(([a], [b]) => a.localeCompare(b))
-                .map(([element, count]) => `${element}${count}`)
-                .join(' ');
-        }
-
-        function calculateNewFormulaAfterInsertion(insertedElement) {
-            const currentFormula = window.currentStructureData.supercell_info.formula;
-
-            // Parse current formula
-            const elementCounts = {};
-            const matches = currentFormula.match(/([A-Z][a-z]?)(\d+)/g) || [];
-
-            matches.forEach(match => {
-                const element = match.replace(/\d+$/, '');
-                const count = parseInt(match.replace(/^[A-Z][a-z]?/, '')) || 1;
-                elementCounts[element] = count;
-            });
-
-            // Increase count for inserted element
-            elementCounts[insertedElement] = (elementCounts[insertedElement] || 0) + 1;
-
-            // Rebuild formula
-            return Object.entries(elementCounts)
-                .sort(([a], [b]) => a.localeCompare(b))
-                .map(([element, count]) => `${element}${count}`)
-                .join(' ');
-        }
         // Execute status functions using same system as Analyze Structure
         function setExecuteButtonState(state, text) {
             const executeBtn = document.getElementById('execute-btn');
@@ -4530,8 +4384,10 @@ Crystal system: ${data.crystal_system}`;
                 }
 
                 try {
-                    // Execute optimal substitution
-                    await handleSubstitution(bestResult.atom, newElement);
+                    // Execute optimal substitution. Pass the index the sweep
+                    // already resolved rather than re-deriving it from the
+                    // label via indexOf.
+                    await handleSubstitution(bestResult.atom, newElement, bestResult.index);
 
                     // Show success notification with statistics
                     showNotification(
@@ -4668,8 +4524,10 @@ Crystal system: ${data.crystal_system}`;
                 }
 
                 try {
-                    // Execute optimal deletion
-                    await handleDeletion(bestResult.atom);
+                    // Execute optimal deletion. Pass the index the sweep
+                    // already resolved rather than re-deriving it from the
+                    // label via indexOf.
+                    await handleDeletion(bestResult.atom, bestResult.index);
 
                     // Show success notification with statistics
                     showNotification(
@@ -5312,38 +5170,6 @@ Crystal system: ${data.crystal_system}`;
             if (!container) return;
             const existing = container.querySelector('.viewer-error-overlay');
             if (existing) existing.remove();
-        }
-
-        async function recalculateDensityWithPymatgen(formula, volume, latticeParameters) {
-            /**
-             * Recalculate density using pymatgen backend API
-             */
-            try {
-                const response = await fetch('/api/recalculate-density', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        formula: formula,
-                        volume: volume,
-                        lattice_parameters: latticeParameters
-                    })
-                });
-
-                const data = await response.json();
-
-                if (data.status === 'success') {
-                    return data.density;
-                } else {
-                    console.error('Error recalculating density:', data);
-                    return null;
-                }
-
-            } catch (error) {
-                console.error('Error calling density recalculation API:', error);
-                return null;
-            }
         }
 
 

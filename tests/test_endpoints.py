@@ -188,6 +188,91 @@ def test_apply_atomic_operations_flow(client):
     assert "Ni" in data["composition"]
 
 
+def test_apply_atomic_operations_returns_structure_state(client):
+    """The response must carry server-authoritative structure state
+    (formula/volume/density/labels/unique_elements) so the client can stop
+    recomputing these itself from a parsed formula string."""
+    from pymatgen.core.composition import Composition
+
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
+
+    response = client.post("/api/apply-atomic-operations", json={
+        "session_id": session_id,
+        "operations": [{"action": "substitute", "index": 0, "to": "Ni"}],
+    })
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["num_sites"] == 32
+    assert data["density"] > 0
+
+    counts = {str(el): int(amt) for el, amt in Composition(data["formula"]).items()}
+    assert counts == {"Cu": 31, "Ni": 1}
+
+    labels = data["labels"]
+    assert len(labels) == 32
+    assert len(set(labels)) == 32  # no duplicate labels
+    assert labels[0] == "Ni0"
+
+
+def test_apply_atomic_operations_delete_preserves_volume(client):
+    """Regression: deleting an atom must not change the lattice volume
+    (only atom count and density change) -- a client-side
+    `volume *= (n-1)/n` approximation this response now replaces did."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
+
+    before = client.post("/api/apply-atomic-operations", json={
+        "session_id": session_id,
+        "operations": [],
+    }).json()
+
+    after = client.post("/api/apply-atomic-operations", json={
+        "session_id": session_id,
+        "operations": [{"action": "delete", "index": 0}],
+    }).json()
+
+    assert after["num_sites"] == 31
+    assert after["volume"] == pytest.approx(before["volume"])
+    assert after["density"] < before["density"]
+
+
+def test_apply_atomic_operations_labels_match_get_element_labels(client):
+    """Both endpoints must derive labels from the same helper and agree on
+    the same session's current structure."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
+
+    apply_response = client.post("/api/apply-atomic-operations", json={
+        "session_id": session_id,
+        "operations": [{"action": "substitute", "index": 0, "to": "Ni"}],
+    })
+    labels_response = client.post("/api/get-element-labels", json={"session_id": session_id})
+
+    assert apply_response.json()["labels"] == labels_response.json()["labels"]
+
+
+def test_build_element_labels_handles_species():
+    """Species (oxidation-state-bearing) sites, not just plain Elements,
+    must be labeled by their element symbol (Ba2+ -> Ba0)."""
+    from pymatgen.core import Lattice, Species, Structure as PmgStructure
+    from main import build_element_labels
+
+    lattice = Lattice.cubic(4.0)
+    structure = PmgStructure(
+        lattice,
+        [Species("Ba", 2), "O"],
+        [[0, 0, 0], [0.5, 0.5, 0.5]],
+    )
+    labels, unique_elements = build_element_labels(structure)
+    assert labels == ["Ba0", "O0"]
+    assert unique_elements == ["Ba", "O"]
+
+
 def test_apply_atomic_operations_missing_session_id(client):
     """Request without session_id must return 400 (regression: HTTPException fix)"""
     response = client.post("/api/apply-atomic-operations", json={"operations": []})
