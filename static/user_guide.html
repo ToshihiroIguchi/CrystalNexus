@@ -232,10 +232,15 @@
 
     <h3>3.3 Structure Optimization Protocol</h3>
 
-    <p>Structure relaxation employs the FIRE (Fast Inertial Relaxation Engine) algorithm with force tolerance criteria
-        of 0.1 eV/Å and maximum iteration limits of 100 steps. The optimization simultaneously adjusts atomic positions
-        and lattice parameters without space group constraints, allowing for complete structural relaxation to the
-        nearest local energy minimum.</p>
+    <p>Structure relaxation employs the LBFGS (Limited-memory Broyden–Fletcher–Goldfarb–Shanno) algorithm with force
+        tolerance criteria of 0.1 eV/Å and maximum iteration limits of 100 steps. The FIRE (Fast Inertial Relaxation
+        Engine) algorithm remains available as a configurable alternative optimizer. The optimization simultaneously
+        adjusts atomic positions and lattice parameters without space group constraints, allowing for complete
+        structural relaxation to the nearest local energy minimum. Two convergence criteria are evaluated: a legacy
+        criterion based solely on the maximum atomic force, and a criterion determined by the ASE optimizer itself,
+        which also accounts for cell stress during cell relaxation and may therefore disagree with the force-only
+        criterion. If a timeout (600 seconds by default) is reached before convergence, the best structure identified
+        up to that point is returned.</p>
 
     <h2>4. User Interface and Workflow</h2>
 

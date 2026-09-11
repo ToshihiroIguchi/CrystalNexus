@@ -429,6 +429,14 @@
                                         <input type="number" id="max-steps-input" value="100" min="10" max="500"
                                             step="10">
                                     </div>
+                                    <div class="setting-group">
+                                        <label for="optimizer-input">Optimizer:</label>
+                                        <select id="optimizer-input">
+                                            <option value="LBFGS" selected>LBFGS (default, usually fastest)</option>
+                                            <option value="FIRE">FIRE (more robust on difficult cells)</option>
+                                            <option value="BFGS">BFGS</option>
+                                        </select>
+                                    </div>
                                 </div>
                             </details>
 
@@ -2372,51 +2380,105 @@ Crystal system: ${data.crystal_system}`;
 
                 const fmax = parseFloat(document.getElementById('fmax-input').value);
                 const maxSteps = parseInt(document.getElementById('max-steps-input').value);
+                const optimizer = document.getElementById('optimizer-input').value;
 
                 const requestData = {
                     session_id: window.sessionId,
                     fmax: fmax,
-                    max_steps: maxSteps
+                    max_steps: maxSteps,
+                    optimizer: optimizer
                 };
 
                 dlog('🔬 Starting CHGNet analysis:', requestData);
 
-                const response = await fetch('/api/chgnet-relax', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(requestData)
-                });
-
-                if (!response.ok) {
-                    let errorMessage = 'Error occurred during CHGNet analysis.';
+                let maxProgressFraction = 0;
+                const progressSource = new EventSource('/api/relax-progress/' + window.sessionId);
+                progressSource.onmessage = (event) => {
                     try {
-                        const errorData = await response.json();
-                        if (errorData.detail) {
-                            errorMessage = errorData.detail;
+                        const state = JSON.parse(event.data);
+                        if (state.done) {
+                            return;
+                        }
+                        showCHGNetStatus(
+                            `Step ${state.step} / ${state.max_steps} — max force ${state.max_force_eV_per_A.toFixed(4)} eV/Å (target ${state.fmax})`,
+                            true
+                        );
+
+                        const stepFraction = state.max_steps > 0 ? state.step / state.max_steps : 0;
+                        let forceFraction = 0;
+                        if (state.max_force_eV_per_A > state.fmax) {
+                            // log-scale: how far we've come from the (unknown) initial force
+                            // towards fmax. We don't know the true initial force here, so
+                            // approximate progress from the step fraction and force ratio
+                            // together and just take whichever is more optimistic that step.
+                            forceFraction = 1 - (Math.log(state.max_force_eV_per_A) / Math.log(state.fmax));
+                        } else {
+                            forceFraction = 1;
+                        }
+                        maxProgressFraction = Math.max(maxProgressFraction, stepFraction, Math.min(1, Math.max(0, forceFraction)));
+
+                        const progressFillEl = document.querySelector('#progress-bar .progress-fill');
+                        if (progressFillEl) {
+                            progressFillEl.style.width = `${(maxProgressFraction * 100).toFixed(0)}%`;
                         }
                     } catch (e) {
-                        // If we can't parse JSON, provide user-friendly message
-                        if (response.status === 400) {
-                            errorMessage = 'Invalid structure data. Fully occupied crystal structure required.';
-                        } else if (response.status === 500) {
-                            errorMessage = 'Server error occurred. Please try again later.';
-                        }
+                        console.warn('Failed to parse relax-progress event:', e);
                     }
-                    throw new Error(errorMessage);
+                };
+                progressSource.onerror = () => {
+                    // Transient SSE connection errors are expected (e.g. stream closes
+                    // naturally when relaxation finishes); ignore them.
+                    console.warn('relax-progress EventSource error (ignored)');
+                };
+
+                let data;
+                try {
+                    const response = await fetch('/api/chgnet-relax', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(requestData)
+                    });
+
+                    if (!response.ok) {
+                        let errorMessage = 'Error occurred during CHGNet analysis.';
+                        try {
+                            const errorData = await response.json();
+                            if (errorData.detail) {
+                                errorMessage = errorData.detail;
+                            }
+                        } catch (e) {
+                            // If we can't parse JSON, provide user-friendly message
+                            if (response.status === 400) {
+                                errorMessage = 'Invalid structure data. Fully occupied crystal structure required.';
+                            } else if (response.status === 500) {
+                                errorMessage = 'Server error occurred. Please try again later.';
+                            }
+                        }
+                        throw new Error(errorMessage);
+                    }
+
+                    // Structure calculation phase
+                    setCHGNetButtonState('calculating_structure');
+
+                    data = await response.json();
+                    dlog('✅ CHGNet analysis completed:', data);
+
+                    // Properties calculation phase
+                    setCHGNetButtonState('calculating_properties');
+
+                    displayCHGNetResults(data, true);
+
+                    if (data.relaxation_info?.aborted) {
+                        showNotification('Relaxation hit the time limit; showing the best structure found so far.', 'warning');
+                    } else if (data.relaxation_info?.converged === false && data.relaxation_info?.steps === data.relaxation_info?.max_steps) {
+                        showNotification('Reached the step limit without converging; try increasing Max steps in Advanced Settings.', 'warning');
+                    }
+                } finally {
+                    progressSource.close();
+                    hideCHGNetStatus();
                 }
-
-                // Structure calculation phase
-                setCHGNetButtonState('calculating_structure');
-
-                const data = await response.json();
-                dlog('✅ CHGNet analysis completed:', data);
-
-                // Properties calculation phase
-                setCHGNetButtonState('calculating_properties');
-
-                displayCHGNetResults(data, true);
 
                 // Update structure information with relaxed data
                 if (data.relaxed_structure_info) {
@@ -5731,6 +5793,7 @@ Crystal system: ${data.crystal_system}`;
             settingsEl.innerHTML = `
                 <div>Force Tolerance: ${data.relaxation_info?.fmax || 'N/A'} eV/Å</div>
                 <div>Max Steps: ${data.relaxation_info?.max_steps || 'N/A'}</div>
+                <div>Optimizer: ${data.relaxation_info?.optimizer || 'N/A'}</div>
                 <div>Model: CHGNet v${data.model_info?.version || '0.3.0'}</div>
                 <div>Device: ${data.model_info?.device || 'CPU'}</div>
             `;
