@@ -2138,7 +2138,7 @@ async def chgnet_relax_structure(request: dict):
         session_info['chgnet_result'] = {
             'fmax': fmax,
             'converged': relaxation_info.get('converged', False),
-            'steps': relaxation_info.get('steps', 0)
+            'steps': relaxation_info.get('optimizer_steps', 0)
         }
         logger.info(f"Saved relaxed structure to session {session_id[:8]}...")
         
@@ -2154,8 +2154,8 @@ async def chgnet_relax_structure(request: dict):
                 num_atoms=final_num_sites,
                 execution_time=None, # We don't have precise execution time here easily without refactoring
                 parameters={
-                    "fmax": fmax, 
-                    "steps": steps, 
+                    "fmax": fmax,
+                    "steps": relaxation_info["optimizer_steps"],
                     "converged": converged,
                     "energy_change_eV": energy_diff
                 },
