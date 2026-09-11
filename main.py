@@ -2,6 +2,7 @@ import os
 import asyncio
 import functools
 import itertools
+import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -14,7 +15,7 @@ from scipy.spatial import Voronoi
 from fastapi import FastAPI, Request, HTTPException, File, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 import uvicorn
 
 from pymatgen.core import Structure, Element, PeriodicSite
@@ -181,12 +182,35 @@ MAX_CANDIDATE_BATCH = int(os.getenv('MAX_CANDIDATE_BATCH', '8'))
 MAX_ATOMIC_NUMBER = int(os.getenv('MAX_ATOMIC_NUMBER', '94'))
 MIN_SUPPORTED_ELEMENTS = int(os.getenv('MIN_SUPPORTED_ELEMENTS', '50'))
 
+# CHGNet relaxation settings
+# LBFGS reaches the same or a lower energy minimum than FIRE on every
+# structure we benchmarked, and needs fewer force evaluations in most
+# cases (BaTiO3 2x2x2 + 1 substitution: 35 frames/24.6s with FIRE vs
+# 19 frames/10.1s with LBFGS, final energy -337.8715 vs -337.8779 eV).
+# Set CHGNET_RELAX_OPTIMIZER=FIRE to restore the previous default.
+RELAX_OPTIMIZER = os.getenv('CHGNET_RELAX_OPTIMIZER', 'LBFGS')
+VALID_RELAX_OPTIMIZERS = ('LBFGS', 'FIRE', 'BFGS', 'LBFGSLineSearch')
+MAX_RELAX_STEPS = int(os.getenv('MAX_RELAX_STEPS', '500'))
+MIN_RELAX_FMAX = float(os.getenv('MIN_RELAX_FMAX', '0.01'))
+MAX_RELAX_FMAX = float(os.getenv('MAX_RELAX_FMAX', '1.0'))
+MAX_RELAX_ATOMS = int(os.getenv('MAX_RELAX_ATOMS', '400'))
+RELAX_TIMEOUT_SECONDS = float(os.getenv('RELAX_TIMEOUT_SECONDS', '600'))
+
 # Initialize once as global variable
 ALLOWED_ELEMENTS: Set[str] = get_chgnet_supported_elements()
 
 # Single worker: serializes CHGNet access (model is not thread-safe) while
 # keeping inference off the event loop.
 _inference_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="chgnet")
+
+# Relaxation can run for minutes; block a second concurrent relaxation
+# immediately with a clear error instead of silently queuing behind the
+# only CHGNet worker thread (which would also starve Auto-mode screening).
+_relax_semaphore = asyncio.Semaphore(1)
+
+# session_id -> {"state": {...}} published by RelaxationWatcher from the
+# executor thread and polled/streamed by GET /api/relax-progress/{id}.
+_relax_progress: Dict[str, dict] = {}
 
 # CHGNet Model Manager (Singleton Pattern)
 class CHGNetModelManager:
@@ -197,15 +221,21 @@ class CHGNetModelManager:
     """
     _instance: Optional['CHGNetModelManager'] = None
     _model = None
-    _relaxer = None
+    _calculator = None
+    _device = "cpu"
     _lock = asyncio.Lock()
     batch_size = CHGNET_BATCH_SIZE  # Configurable batch size for CPU processing
-    
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
-    
+
+    @property
+    def device(self) -> str:
+        """The device CHGNet is actually running on (always 'cpu' today)."""
+        return self._device
+
     async def get_model(self):
         """Get CHGNet model instance (lazy loading)"""
         if self._model is None:
@@ -213,33 +243,40 @@ class CHGNetModelManager:
                 if self._model is None:  # Double-check locking
                     await self._load_model()
         return self._model
-    
-    async def get_relaxer(self):
-        """Get StructOptimizer instance (lazy loading)"""
-        if self._relaxer is None:
+
+    async def get_calculator(self):
+        """Get the shared CHGNetCalculator instance (lazy loading).
+
+        A single calculator is reused across every optimizer choice --
+        switching optimizers (main.py run_relaxation()) is just a different
+        ASE Optimizer wrapped around the same calculator, so there is no
+        need to keep one StructOptimizer per optimizer name.
+        """
+        # Resolved (and, on a cold start, loaded) BEFORE this method takes
+        # its own lock below: get_model() acquires the same self._lock
+        # internally, and asyncio.Lock is not reentrant, so calling it from
+        # inside an already-held `async with self._lock` block here would
+        # deadlock the very first request in a fresh process.
+        model = await self.get_model()
+        if self._calculator is None:
             async with self._lock:
-                if self._relaxer is None:  # Double-check locking
-                    model = await self.get_model()
-                    from chgnet.model import StructOptimizer
-                    self._relaxer = StructOptimizer(model=model, use_device="cpu", optimizer_class="FIRE")
-                    logger.info("CHGNet StructOptimizer created and cached")
-        return self._relaxer
-    
+                if self._calculator is None:  # Double-check locking
+                    from chgnet.model.dynamics import CHGNetCalculator
+                    self._calculator = CHGNetCalculator(model=model, use_device=self._device)
+                    logger.info("CHGNet calculator created and cached")
+        return self._calculator
+
     async def _load_model(self):
         """Internal method to load CHGNet model"""
         if not CHGNET_AVAILABLE:
             raise RuntimeError("CHGNet not available")
-        
+
         try:
             from chgnet.model.model import CHGNet
-            
-            if WINDOWS_PLATFORM:
-                self._model = CHGNet.load(use_device="cpu", verbose=False)
-                logger.info("CHGNet model loaded with Windows compatibility settings (cached)")
-            else:
-                self._model = CHGNet.load(use_device="cpu", verbose=False)
-                logger.info("CHGNet model loaded and cached")
-                
+
+            self._model = CHGNet.load(use_device=self._device, verbose=False)
+            logger.info(f"CHGNet model loaded and cached (device={self._device})")
+
         except Exception as load_error:
             if WINDOWS_PLATFORM and "Buffer dtype mismatch" in str(load_error):
                 raise RuntimeError("Windows CHGNet compatibility issue. Solution: Install Microsoft Visual C++ Redistributable")
@@ -1776,15 +1813,14 @@ def _get_chgnet_version():
             return "unknown"
 
 def _get_device_info():
-    """Get current device information for CHGNet"""
-    try:
-        import torch
-        if torch.cuda.is_available():
-            return f"cuda:{torch.cuda.current_device()}"
-        else:
-            return "cpu"
-    except ImportError:
-        return "cpu"
+    """Report the device CHGNet is actually running on.
+
+    This used to return "cuda:N" whenever torch.cuda.is_available(), while
+    the model was unconditionally loaded with use_device="cpu" -- so the
+    reported device (shown in the analysis modal) could disagree with
+    reality on any CUDA-capable machine. Report what was actually loaded.
+    """
+    return chgnet_manager.device or "cpu"
 
 def evaluate_convergence(trajectory, fmax):
     """
@@ -1803,8 +1839,193 @@ def evaluate_convergence(trajectory, fmax):
     
     converged = max_force < fmax
     logger.info(f"Convergence check: max_force={max_force:.4f} eV/A, fmax={fmax}, converged={converged}")
-    
+
     return bool(converged)
+
+
+class RelaxationAborted(Exception):
+    """Raised from an optimizer observer to stop a run cooperatively.
+
+    This is the only reliable way to stop an in-progress ASE relaxation:
+    asyncio.wait_for() would abandon the awaiting coroutine while the
+    executor thread kept running and kept the single CHGNet worker
+    (_inference_executor, max_workers=1) busy for the rest of its steps.
+    """
+
+
+class TrajectoryRecorder:
+    """Records the same fields as chgnet.model.dynamics.TrajectoryObserver
+    (energies, forces, stresses, magmoms, atom_positions, cells) so the
+    existing evaluate_convergence() and trajectory_data extraction code
+    (main.py) can consume it unchanged.
+    """
+
+    def __init__(self, atoms):
+        self.atoms = atoms
+        self.energies = []
+        self.forces = []
+        self.stresses = []
+        self.magmoms = []
+        self.atom_positions = []
+        self.cells = []
+
+    def __call__(self):
+        self.energies.append(float(self.atoms.get_potential_energy()))
+        self.forces.append(self.atoms.get_forces())
+        try:
+            self.stresses.append(self.atoms.get_stress())
+        except Exception:
+            self.stresses.append(None)
+        self.magmoms.append(self.atoms.get_magnetic_moments())
+        self.atom_positions.append(self.atoms.get_positions())
+        self.cells.append(self.atoms.get_cell()[:])
+
+    def __len__(self):
+        return len(self.energies)
+
+
+class RelaxationWatcher:
+    """ASE observer: publishes progress and enforces a wall-clock deadline.
+
+    Attached with interval=1, so ASE calls it once per optimizer step plus
+    once at step 0 (ase.optimize.optimize.Dynamics.call_observers). The
+    force/energy reads below are served from the calculator's cache -- the
+    optimizer has just computed them for its own convergence check -- so
+    the observer triggers no extra CHGNet evaluation.
+
+    Raising RelaxationAborted here propagates out of optimizer.run(); see
+    the class docstring for why that (rather than asyncio.wait_for) is the
+    correct way to enforce a timeout.
+    """
+
+    def __init__(self, atoms, fmax, max_steps, deadline, progress_slot=None):
+        self.atoms = atoms  # the UNFILTERED Atoms object (raw atomic forces)
+        self.fmax = fmax
+        self.max_steps = max_steps
+        self.deadline = deadline
+        self.progress_slot = progress_slot
+        self.started_at = time.monotonic()
+        self.step = -1
+
+    def __call__(self):
+        self.step += 1
+        max_force = float(np.linalg.norm(self.atoms.get_forces(), axis=1).max())
+        if self.progress_slot is not None:
+            # Plain dict assignment is atomic under the GIL, so the executor
+            # thread (writer) and the event loop (reader, via the progress
+            # polling/SSE endpoint) need no lock between them.
+            self.progress_slot["state"] = {
+                "step": self.step,
+                "max_steps": self.max_steps,
+                "max_force_eV_per_A": max_force,
+                "fmax": self.fmax,
+                "energy_eV": float(self.atoms.get_potential_energy()),
+                "elapsed_s": time.monotonic() - self.started_at,
+            }
+        if time.monotonic() > self.deadline:
+            raise RelaxationAborted(f"time limit reached at step {self.step}")
+
+
+def run_relaxation(calculator, structure, *, fmax, steps, optimizer_name,
+                    deadline, relax_cell=True, progress_slot=None):
+    """Run an ASE relaxation with full control over observers and stopping.
+
+    Reimplements chgnet.model.dynamics.StructOptimizer.relax (which this
+    replaces at the call site) because that method exposes neither the
+    Optimizer object -- so no progress/timeout observer can be attached and
+    ASE's own convergence verdict cannot be read -- nor a way to skip its
+    duplicated final obs() call, which is why the old code had to subtract
+    2 from the trajectory length to get the true step count.
+
+    Returns a dict with:
+        final_structure: the relaxed pymatgen Structure
+        trajectory: a TrajectoryRecorder (same shape as chgnet's own)
+        ase_converged: bool, ASE's own verdict from optimizer.run(). With
+            relax_cell=True this is computed on the FrechetCellFilter's
+            extended force array (atomic forces + cell stress terms), which
+            can disagree with evaluate_convergence()'s atomic-forces-only
+            check.
+        optimizer_steps: int, optimizer.get_number_of_steps() -- exact,
+            unlike the old len(trajectory) - 2 approximation.
+        aborted: bool, True if the wall-clock deadline was hit first.
+    """
+    from ase.filters import FrechetCellFilter
+    from ase.optimize import BFGS, FIRE, LBFGS, LBFGSLineSearch
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    optimizers = {"FIRE": FIRE, "BFGS": BFGS, "LBFGS": LBFGS,
+                  "LBFGSLineSearch": LBFGSLineSearch}
+    if optimizer_name not in optimizers:
+        raise ValueError(f"Unknown optimizer {optimizer_name!r}; "
+                         f"must be one of {sorted(optimizers)}")
+
+    atoms = AseAtomsAdaptor().get_atoms(structure)
+    atoms.calc = calculator
+
+    obs = TrajectoryRecorder(atoms)
+    watcher = RelaxationWatcher(atoms, fmax, steps, deadline, progress_slot)
+
+    target = FrechetCellFilter(atoms) if relax_cell else atoms
+    optimizer = optimizers[optimizer_name](target, logfile=None)
+    optimizer.attach(obs, interval=1)
+    optimizer.attach(watcher, interval=1)
+
+    aborted = False
+    try:
+        # ASE 3.27's Optimizer.run() returns the convergence verdict
+        # directly; Optimizer.converged() takes a mandatory gradient
+        # argument and is not meant to be called standalone here.
+        ase_converged = bool(optimizer.run(fmax=fmax, steps=steps))
+    except RelaxationAborted as e:
+        logger.warning(f"Relaxation aborted: {e}")
+        aborted = True
+        ase_converged = False
+
+    final_structure = AseAtomsAdaptor.get_structure(atoms)
+    final_structure.add_site_property(
+        "magmom", [float(m) for m in atoms.get_magnetic_moments()])
+
+    return {
+        "final_structure": final_structure,
+        "trajectory": obs,
+        "ase_converged": ase_converged,
+        "optimizer_steps": int(optimizer.get_number_of_steps()),
+        "aborted": aborted,
+    }
+
+
+def _validate_relax_params(request: dict) -> Tuple[float, int, str]:
+    """Validate and clamp relaxation parameters before any model loading.
+
+    Raises HTTPException(400) on invalid input so bad requests are rejected
+    without ever touching the (slow, singleton, serialized) CHGNet model.
+    """
+    try:
+        fmax = float(request.get("fmax", 0.1))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="fmax must be a number")
+    try:
+        max_steps = int(request.get("max_steps", 100))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="max_steps must be an integer")
+
+    if not (MIN_RELAX_FMAX <= fmax <= MAX_RELAX_FMAX):
+        raise HTTPException(
+            status_code=400,
+            detail=f"fmax must be between {MIN_RELAX_FMAX} and {MAX_RELAX_FMAX} eV/A")
+    if not (1 <= max_steps <= MAX_RELAX_STEPS):
+        raise HTTPException(
+            status_code=400,
+            detail=f"max_steps must be between 1 and {MAX_RELAX_STEPS}")
+
+    optimizer_name = request.get("optimizer", RELAX_OPTIMIZER) or RELAX_OPTIMIZER
+    if optimizer_name not in VALID_RELAX_OPTIMIZERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"optimizer must be one of {VALID_RELAX_OPTIMIZERS}")
+
+    return fmax, max_steps, optimizer_name
+
 
 def safe_get_prediction(pred, num_atoms=None):
     """Extract prediction results safely from CHGNet output"""
@@ -1965,226 +2186,263 @@ async def chgnet_relax_structure(request: dict):
     """
     try:
         session_id = request.get("session_id")
-        fmax = float(request.get("fmax", 0.1))
-        max_steps = int(request.get("max_steps", 100))
-        
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required")
-        
+
+        # Validated and clamped before any model loading, so malformed or
+        # out-of-range requests never touch the slow, serialized CHGNet model.
+        fmax, max_steps, optimizer_name = _validate_relax_params(request)
+
         # Get the current structure from session (already has supercell + operations applied)
         structure = session_manager.get_current_structure(session_id)
         if structure is None:
             raise HTTPException(status_code=404, detail=f"No structure found for session {session_id}")
-        
+
+        if len(structure) > MAX_RELAX_ATOMS:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Structure has {len(structure)} atoms; the relaxation limit is "
+                       f"{MAX_RELAX_ATOMS}. Reduce the supercell size.")
+
         session_info = session_manager.get_session_info(session_id)
         filename = session_info.get('filename', 'unknown') if session_info else 'unknown'
-        
-        logger.info(f"CHGNet relaxation for session {session_id[:8]}... ({filename}) with fmax={fmax}, max_steps={max_steps}")
-        logger.info(f"Structure: {structure.composition} ({len(structure)} sites)")
-        
-        # Load CHGNet model and relaxer (using singleton pattern)
-        try:
-            chgnet = await chgnet_manager.get_model()
-            relaxer = await chgnet_manager.get_relaxer()
-        except RuntimeError as e:
-            raise HTTPException(status_code=503, detail=str(e))
-        
-        # Predict initial structure using optimized prediction
-        try:
-            pred_initial = await chgnet_manager.predict_single_optimized(structure,
-                                                                       return_site_energies=True,
-                                                                       return_atom_feas=True,
-                                                                       return_crystal_feas=True)
-            initial_results = safe_get_prediction(pred_initial, num_atoms=len(structure.sites))
-        except TypeError:
-            # Fallback if detailed prediction fails
-            pred_initial = await chgnet_manager.predict_single_optimized(structure)
-            initial_results = safe_get_prediction(pred_initial, num_atoms=len(structure.sites))
-        except Exception as e:
-            logger.warning(f"Initial prediction failed: {e}")
-            initial_results = {"energy_eV_per_atom": None}
-        
-        # CHGNet structure relaxation
-        logger.info(f"Starting CHGNet relaxation: fmax={fmax}, max_steps={max_steps}")
-        result = await asyncio.get_running_loop().run_in_executor(
-            _inference_executor,
-            functools.partial(relaxer.relax, structure, fmax=fmax, steps=max_steps,
-                              verbose=True, relax_cell=True))
-        
-        # Basic result validation
-        logger.info(f"CHGNet result keys: {sorted(result.keys())}")
-        if 'final_structure' not in result:
-            raise RuntimeError("CHGNet relaxation failed: no final_structure returned")
-        if 'trajectory' not in result:
-            logger.warning("CHGNet relaxation warning: no trajectory returned")
-        
-        final_structure = result.get("final_structure")
-        if final_structure is None:
-            raise RuntimeError("Relaxation failed: no final structure returned")
-        
-        # Predict relaxed structure using optimized prediction
-        try:
-            pred_final = await chgnet_manager.predict_single_optimized(final_structure,
-                                                                     return_site_energies=True,
-                                                                     return_atom_feas=True,
-                                                                     return_crystal_feas=True)
-            final_results = safe_get_prediction(pred_final, num_atoms=len(final_structure.sites))
-        except TypeError:
-            # Fallback if detailed prediction fails
-            pred_final = await chgnet_manager.predict_single_optimized(final_structure)
-            final_results = safe_get_prediction(pred_final, num_atoms=len(final_structure.sites))
-        except Exception as e:
-            logger.warning(f"Final prediction failed: {e}")
-            final_results = {"energy_eV_per_atom": None}
-        
-        # Calculate energy difference in total eV
-        energy_diff = None
-        energy_diff_per_atom = None
-        if (initial_results.get("total_energy_eV") is not None and 
-            final_results.get("total_energy_eV") is not None):
-            energy_diff = final_results["total_energy_eV"] - initial_results["total_energy_eV"]
-            energy_diff_per_atom = final_results["energy_eV_per_atom"] - initial_results["energy_eV_per_atom"]
-        
-        # Extract relaxation information with CHGNet-compliant convergence evaluation
-        trajectory = result.get("trajectory")
-        steps = len(trajectory) if trajectory else 0
-        
-        # Use our own convergence evaluation (CHGNet spec-compliant)
-        converged = evaluate_convergence(trajectory, fmax)
-        
-        # Log convergence evaluation details using consistent force calculation method
-        if trajectory and hasattr(trajectory, 'forces') and len(trajectory.forces) > 0:
-            import numpy as np
-            final_forces = trajectory.forces[-1]
-            final_forces_array = np.array(final_forces)
-            max_final_force = np.linalg.norm(final_forces_array, axis=1).max()
-            logger.info(f"Convergence evaluation: max_force={max_final_force:.6f} eV/A, fmax={fmax}, converged={converged}")
-        else:
-            logger.info(f"Convergence evaluation: no force data available, converged={converged}")
-            
-        logger.info(f"Final relaxation status: converged={converged}, steps={steps}, trajectory_exists={trajectory is not None}")
-        logger.info("=== CHGNet SPEC-COMPLIANT CONVERGENCE EVALUATION COMPLETE ===")
-        
-        relaxation_info = {
-            "converged": converged,
-            "steps": steps,
-            "fmax": fmax,
-            "max_steps": max_steps,
-            "energy_change_eV": energy_diff,
-            "energy_change_eV_per_atom": energy_diff_per_atom,
-            "optimizer_steps": max(0, steps - 2) if steps >= 2 else 0,
-            "trajectory_frames": steps
-        }
-        
-        # Calculate structure properties once to avoid redundancy
-        final_formula = str(final_structure.formula)
-        final_volume = float(final_structure.volume)
-        final_density = float(final_structure.density)
-        final_num_sites = len(final_structure.sites)
-        
-        # Add structure information
-        final_results.update({
-            "formula": final_formula,
-            "num_sites": final_num_sites,
-            "volume": final_volume,
-            "density": final_density
-        })
-        
-        logger.info(f"CHGNet relaxation completed: {relaxation_info['steps']} steps, converged: {relaxation_info['converged']}")
-        
-        # Generate relaxed structure info
-        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-        analyzer = await asyncio.to_thread(SpacegroupAnalyzer, final_structure)
-        
-        relaxed_structure_info = {
-            "formula": final_formula,
-            "num_atoms": len(final_structure),
-            "density": final_density,
-            "lattice_parameters": {
-                "a": float(final_structure.lattice.a),
-                "b": float(final_structure.lattice.b),
-                "c": float(final_structure.lattice.c),
-                "alpha": float(final_structure.lattice.alpha),
-                "beta": float(final_structure.lattice.beta),
-                "gamma": float(final_structure.lattice.gamma)
-            },
-            "volume": float(final_structure.lattice.volume),
-            "space_group": analyzer.get_space_group_symbol(),
-            "space_group_number": analyzer.get_space_group_number(),
-            "point_group": analyzer.get_point_group_symbol(),
-            "crystal_system": analyzer.get_crystal_system(),
-            "num_sites": len(final_structure.sites)
-        }
-        
-        # Extract trajectory data for analysis modal
-        # Use all steps as provided by CHGNet - no unnecessary optimization
-        trajectory_data = None
-        if trajectory:
-            import numpy as np
-            trajectory_data = {
-                "steps": len(trajectory.forces) if hasattr(trajectory, 'forces') else 0,
-                "energies": [float(e) for e in trajectory.energies] if hasattr(trajectory, 'energies') else [],
-                "forces": [],
-                "force_magnitudes": []
-            }
-            
-            # Extract force data for all steps
-            if hasattr(trajectory, 'forces'):
-                for step_forces in trajectory.forces:
-                    # Store detailed forces only for final step
-                    if step_forces is trajectory.forces[-1]:
-                        step_force_data = step_forces.tolist() if hasattr(step_forces, 'tolist') else step_forces
-                        trajectory_data["forces"].append(step_force_data)
-                    
-                    # Calculate force magnitudes efficiently for all steps
-                    step_forces_array = np.array(step_forces)
-                    force_mags = np.linalg.norm(step_forces_array, axis=1).tolist()
-                    trajectory_data["force_magnitudes"].append(force_mags)
-        
-        # Save relaxed structure and CHGNet result metadata to session for later use
-        session_info['relaxed_structure'] = final_structure
-        session_info['chgnet_result'] = {
-            'fmax': fmax,
-            'converged': relaxation_info.get('converged', False),
-            'steps': relaxation_info.get('optimizer_steps', 0)
-        }
-        logger.info(f"Saved relaxed structure to session {session_id[:8]}...")
-        
-        # Analytics Logging - Log successful relaxation
-        try:
-            start_time = time.time() # This is only approximate as we don't track start in this scope precisely
-            # But we have steps and conversion info
-            
-            analytics_db.log_event(
-                event_type="relax",
-                filename=filename,
-                formula=final_formula, # Use final formula
-                num_atoms=final_num_sites,
-                execution_time=None, # We don't have precise execution time here easily without refactoring
-                parameters={
-                    "fmax": fmax,
-                    "steps": relaxation_info["optimizer_steps"],
-                    "converged": converged,
-                    "energy_change_eV": energy_diff
-                },
-                session_id=session_id
-            )
-        except Exception as e:
-            logger.error(f"Failed to log relaxation event: {e}")
 
-        return {
-            "status": "success",
-            "initial_prediction": initial_results,
-            "final_prediction": final_results,
-            "relaxation_info": relaxation_info,
-            "relaxed_structure_info": relaxed_structure_info,
-            "trajectory_data": trajectory_data,
-            "model_info": {
-                "version": _get_chgnet_version(),
-                "device": _get_device_info()
+        logger.info(f"CHGNet relaxation for session {session_id[:8]}... ({filename}) "
+                    f"with fmax={fmax}, max_steps={max_steps}, optimizer={optimizer_name}")
+        logger.info(f"Structure: {structure.composition} ({len(structure)} sites)")
+
+        # A relaxation can run for minutes; refuse a second concurrent one
+        # immediately rather than silently queuing it behind the single
+        # CHGNet worker thread (which would also starve Auto-mode screening).
+        # No await happens between this check and the acquire() call below,
+        # so the check-then-acquire is atomic on the single-threaded event
+        # loop -- acquire() only suspends when the semaphore is contended.
+        if _relax_semaphore.locked():
+            raise HTTPException(
+                status_code=429,
+                detail="Another relaxation is already running. Please wait for it to finish.")
+        await _relax_semaphore.acquire()
+        try:
+            # Load CHGNet model/calculator (using singleton pattern)
+            try:
+                calculator = await chgnet_manager.get_calculator()
+            except RuntimeError as e:
+                raise HTTPException(status_code=503, detail=str(e))
+
+            # Predict initial structure using optimized prediction
+            try:
+                pred_initial = await chgnet_manager.predict_single_optimized(structure,
+                                                                           return_site_energies=True,
+                                                                           return_atom_feas=True,
+                                                                           return_crystal_feas=True)
+                initial_results = safe_get_prediction(pred_initial, num_atoms=len(structure.sites))
+            except TypeError:
+                # Fallback if detailed prediction fails
+                pred_initial = await chgnet_manager.predict_single_optimized(structure)
+                initial_results = safe_get_prediction(pred_initial, num_atoms=len(structure.sites))
+            except Exception as e:
+                logger.warning(f"Initial prediction failed: {e}")
+                initial_results = {"energy_eV_per_atom": None}
+
+            # CHGNet structure relaxation
+            logger.info(f"Starting CHGNet relaxation: fmax={fmax}, max_steps={max_steps}, optimizer={optimizer_name}")
+            deadline = time.monotonic() + RELAX_TIMEOUT_SECONDS
+            progress_slot = _relax_progress.setdefault(session_id, {})
+            progress_slot.clear()
+            try:
+                result = await asyncio.get_running_loop().run_in_executor(
+                    _inference_executor,
+                    functools.partial(run_relaxation, calculator, structure,
+                                      fmax=fmax, steps=max_steps,
+                                      optimizer_name=optimizer_name,
+                                      deadline=deadline, relax_cell=True,
+                                      progress_slot=progress_slot))
+            finally:
+                _relax_progress.pop(session_id, None)
+
+            final_structure = result.get("final_structure")
+            if final_structure is None:
+                raise RuntimeError("Relaxation failed: no final structure returned")
+            trajectory = result.get("trajectory")
+            aborted = result.get("aborted", False)
+            if aborted:
+                logger.warning(f"Relaxation for session {session_id[:8]}... hit the "
+                               f"{RELAX_TIMEOUT_SECONDS}s time limit; returning the best "
+                               f"structure found so far")
+
+            # Predict relaxed structure using optimized prediction
+            try:
+                pred_final = await chgnet_manager.predict_single_optimized(final_structure,
+                                                                         return_site_energies=True,
+                                                                         return_atom_feas=True,
+                                                                         return_crystal_feas=True)
+                final_results = safe_get_prediction(pred_final, num_atoms=len(final_structure.sites))
+            except TypeError:
+                # Fallback if detailed prediction fails
+                pred_final = await chgnet_manager.predict_single_optimized(final_structure)
+                final_results = safe_get_prediction(pred_final, num_atoms=len(final_structure.sites))
+            except Exception as e:
+                logger.warning(f"Final prediction failed: {e}")
+                final_results = {"energy_eV_per_atom": None}
+
+            # Calculate energy difference in total eV
+            energy_diff = None
+            energy_diff_per_atom = None
+            if (initial_results.get("total_energy_eV") is not None and
+                final_results.get("total_energy_eV") is not None):
+                energy_diff = final_results["total_energy_eV"] - initial_results["total_energy_eV"]
+                energy_diff_per_atom = final_results["energy_eV_per_atom"] - initial_results["energy_eV_per_atom"]
+
+            # Extract relaxation information. "converged" keeps its original
+            # meaning (max atomic force < fmax) so the CIF header and the
+            # analytics history stay comparable across versions.
+            # "converged_optimizer" is ASE's own verdict from run_relaxation():
+            # with relax_cell=True it additionally requires the
+            # FrechetCellFilter's cell-stress terms to be below fmax, so it
+            # can disagree with "converged" (see run_relaxation docstring).
+            steps = len(trajectory) if trajectory else 0
+
+            converged = evaluate_convergence(trajectory, fmax)
+
+            # Log convergence evaluation details using consistent force calculation method
+            if trajectory and hasattr(trajectory, 'forces') and len(trajectory.forces) > 0:
+                final_forces_array = np.array(trajectory.forces[-1])
+                max_final_force = np.linalg.norm(final_forces_array, axis=1).max()
+                logger.info(f"Convergence evaluation: max_force={max_final_force:.6f} eV/A, fmax={fmax}, converged={converged}")
+            else:
+                logger.info(f"Convergence evaluation: no force data available, converged={converged}")
+
+            logger.info(f"Final relaxation status: converged={converged}, steps={steps}, aborted={aborted}")
+
+            relaxation_info = {
+                "converged": converged,
+                "converged_optimizer": result.get("ase_converged", False),
+                "steps": steps,
+                "fmax": fmax,
+                "max_steps": max_steps,
+                "energy_change_eV": energy_diff,
+                "energy_change_eV_per_atom": energy_diff_per_atom,
+                # Exact now: optimizer.get_number_of_steps() from
+                # run_relaxation(), instead of the old len(trajectory) - 2
+                # approximation needed to undo chgnet's duplicated final
+                # observer call.
+                "optimizer_steps": result.get("optimizer_steps", 0),
+                "trajectory_frames": steps,
+                "optimizer": optimizer_name,
+                "aborted": aborted,
+                "abort_reason": "timeout" if aborted else None,
             }
-        }
-        
+
+            # Calculate structure properties once to avoid redundancy
+            final_formula = str(final_structure.formula)
+            final_volume = float(final_structure.volume)
+            final_density = float(final_structure.density)
+            final_num_sites = len(final_structure.sites)
+
+            # Add structure information
+            final_results.update({
+                "formula": final_formula,
+                "num_sites": final_num_sites,
+                "volume": final_volume,
+                "density": final_density
+            })
+
+            logger.info(f"CHGNet relaxation completed: {relaxation_info['steps']} steps, converged: {relaxation_info['converged']}")
+
+            # Generate relaxed structure info
+            from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+            analyzer = await asyncio.to_thread(SpacegroupAnalyzer, final_structure)
+
+            relaxed_structure_info = {
+                "formula": final_formula,
+                "num_atoms": len(final_structure),
+                "density": final_density,
+                "lattice_parameters": {
+                    "a": float(final_structure.lattice.a),
+                    "b": float(final_structure.lattice.b),
+                    "c": float(final_structure.lattice.c),
+                    "alpha": float(final_structure.lattice.alpha),
+                    "beta": float(final_structure.lattice.beta),
+                    "gamma": float(final_structure.lattice.gamma)
+                },
+                "volume": float(final_structure.lattice.volume),
+                "space_group": analyzer.get_space_group_symbol(),
+                "space_group_number": analyzer.get_space_group_number(),
+                "point_group": analyzer.get_point_group_symbol(),
+                "crystal_system": analyzer.get_crystal_system(),
+                "num_sites": len(final_structure.sites)
+            }
+
+            # Extract trajectory data for analysis modal
+            # Use all steps as provided by CHGNet - no unnecessary optimization
+            trajectory_data = None
+            if trajectory:
+                trajectory_data = {
+                    "steps": len(trajectory.forces) if hasattr(trajectory, 'forces') else 0,
+                    "energies": [float(e) for e in trajectory.energies] if hasattr(trajectory, 'energies') else [],
+                    "forces": [],
+                    "force_magnitudes": []
+                }
+
+                # Extract force data for all steps
+                if hasattr(trajectory, 'forces'):
+                    for step_forces in trajectory.forces:
+                        # Store detailed forces only for final step
+                        if step_forces is trajectory.forces[-1]:
+                            step_force_data = step_forces.tolist() if hasattr(step_forces, 'tolist') else step_forces
+                            trajectory_data["forces"].append(step_force_data)
+
+                        # Calculate force magnitudes efficiently for all steps
+                        step_forces_array = np.array(step_forces)
+                        force_mags = np.linalg.norm(step_forces_array, axis=1).tolist()
+                        trajectory_data["force_magnitudes"].append(force_mags)
+
+            # Save relaxed structure and CHGNet result metadata to session for later use
+            session_info['relaxed_structure'] = final_structure
+            session_info['chgnet_result'] = {
+                'fmax': fmax,
+                'converged': relaxation_info.get('converged', False),
+                'steps': relaxation_info.get('optimizer_steps', 0),
+                'optimizer': optimizer_name,
+            }
+            logger.info(f"Saved relaxed structure to session {session_id[:8]}...")
+
+            # Analytics Logging - Log successful relaxation
+            try:
+                analytics_db.log_event(
+                    event_type="relax",
+                    filename=filename,
+                    formula=final_formula, # Use final formula
+                    num_atoms=final_num_sites,
+                    execution_time=None, # We don't have precise execution time here easily without refactoring
+                    parameters={
+                        "fmax": fmax,
+                        "steps": relaxation_info["optimizer_steps"],
+                        "converged": converged,
+                        "energy_change_eV": energy_diff,
+                        "optimizer": optimizer_name,
+                        "aborted": aborted,
+                    },
+                    session_id=session_id
+                )
+            except Exception as e:
+                logger.error(f"Failed to log relaxation event: {e}")
+
+            return {
+                "status": "success",
+                "initial_prediction": initial_results,
+                "final_prediction": final_results,
+                "relaxation_info": relaxation_info,
+                "relaxed_structure_info": relaxed_structure_info,
+                "trajectory_data": trajectory_data,
+                "model_info": {
+                    "version": _get_chgnet_version(),
+                    "device": _get_device_info()
+                }
+            }
+        finally:
+            _relax_semaphore.release()
+
     except ValueError as e:
         logger.error(f"CHGNet relaxation validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -2196,6 +2454,30 @@ async def chgnet_relax_structure(request: dict):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"CHGNet relaxation failed: {str(e)}")
+
+@app.get("/api/relax-progress/{session_id}")
+async def stream_relax_progress(session_id: str):
+    """Server-sent events for an in-flight relaxation.
+
+    RelaxationWatcher (run inside the CHGNet executor thread) publishes into
+    _relax_progress[session_id] as the optimizer steps; a plain dict
+    assignment is atomic under the GIL, so neither side needs a lock. The
+    stream ends on its own once /api/chgnet-relax's finally block removes
+    the session's slot.
+    """
+    async def events():
+        last = None
+        while session_id in _relax_progress:
+            state = _relax_progress[session_id].get("state")
+            if state is not None and state != last:
+                last = state
+                yield f"data: {json.dumps(state)}\n\n"
+            await asyncio.sleep(0.5)
+        yield 'data: {"done": true}\n\n'
+
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
 
 @app.post("/api/reset-session-structure")
 async def reset_session_structure(request: dict):
@@ -2307,6 +2589,9 @@ async def generate_relaxed_structure_cif(request: dict):
         fmax = chgnet_result.get('fmax', 'N/A')
         converged = chgnet_result.get('converged', 'N/A')
         steps = chgnet_result.get('steps', 'N/A')
+        # Default to FIRE for CIFs from sessions relaxed before the
+        # optimizer became selectable, so old sessions still read sensibly.
+        optimizer_used = chgnet_result.get('optimizer', 'FIRE')
         
         # Generate CIF using pymatgen CifWriter
         from pymatgen.io.cif import CifWriter
@@ -2331,7 +2616,7 @@ async def generate_relaxed_structure_cif(request: dict):
             f"# Original file: {filename}",
             f"# Supercell size: {size_str}",
             f"# Operations: {operations_summary}",
-            f"# CHGNet relaxation: fmax={fmax}, steps={steps}, converged={converged}",
+            f"# CHGNet relaxation: fmax={fmax}, steps={steps}, converged={converged}, optimizer={optimizer_used}",
             f"# Final formula: {final_formula_str}",
             f"# Number of atoms: {final_num_atoms}",
             f"# Volume: {final_volume_val:.2f} A^3",
