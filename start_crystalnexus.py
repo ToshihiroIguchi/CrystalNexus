@@ -157,12 +157,12 @@ def monitor_process_health(process, status_queue):
     
     while not shutdown_requested:
         try:
-            # プロセス状態チェック
+            # Check process state
             if process.poll() is not None:
                 status_queue.put(("process_died", f"Process terminated unexpectedly (exit code: {process.returncode})"))
                 break
             
-            # ヘルスチェック実行
+            # Run health check
             try:
                 response = requests.get(HEALTH_URL, timeout=3)
                 if response.status_code != 200:
@@ -180,7 +180,7 @@ def monitor_process_health(process, status_queue):
             
         except Exception as e:
             status_queue.put(("monitor_error", f"Monitor thread error: {e}"))
-            # エラー時も interruptible sleep
+            # Interruptible sleep even on error
             for _ in range(60):
                 if shutdown_requested:
                     break
@@ -196,7 +196,7 @@ def print_status_updates(status_queue):
     
     while not shutdown_requested:
         try:
-            # ノンブロッキングでステータスチェック
+            # Non-blocking status check
             try:
                 status_type, message = status_queue.get_nowait()
                 current_time = time.strftime("%H:%M:%S")
@@ -226,7 +226,7 @@ def print_status_updates(status_queue):
             
         except Exception as e:
             print(f"Status monitor error: {e}")
-            # エラー時も interruptible sleep
+            # Interruptible sleep even on error
             for _ in range(30):
                 if shutdown_requested:
                     break
@@ -294,12 +294,12 @@ def main():
     # Countermeasure 3: Start process monitoring thread
     status_queue = queue.Queue()
     
-    # バックグラウンド監視スレッド
+    # Background monitoring thread
     monitor_thread = threading.Thread(target=monitor_process_health, args=(process, status_queue))
     monitor_thread.daemon = True  # Terminate on main process exit
     monitor_thread.start()
     
-    # ステータス表示スレッド
+    # Status display thread
     status_thread = threading.Thread(target=print_status_updates, args=(status_queue,))
     status_thread.daemon = True  # Terminate on main process exit
     status_thread.start()
@@ -326,7 +326,7 @@ def main():
         print(f"ERROR in main loop: {e}")
         shutdown_requested = True
         
-    # 最終クリーンアップ
+    # Final cleanup
     if process and process.poll() is None:
         print("Final cleanup: terminating server...")
         process.terminate()

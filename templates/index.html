@@ -1316,7 +1316,7 @@
                 });
             }
 
-            // スーパーセル変更の監視
+            // Monitor supercell changes
             const supercellInputs = ['supercell-a', 'supercell-b', 'supercell-c'];
             supercellInputs.forEach(id => {
                 const input = document.getElementById(id);
@@ -1342,7 +1342,7 @@
                         c: document.getElementById('supercell-c')?.value || '1'
                     },
                     filename: window.currentFilename || null,
-                    // 原子操作の検知のためにフォーミュラも含める
+                    // Also include the formula so atom operations can be detected
                     formula: window.currentStructureData?.supercell_info?.formula || null,
                     // Include the actual recorded operation history (atom
                     // add/delete/substitute) so a round trip back to the
@@ -1370,13 +1370,13 @@
             if (!analyzeBtn) return;
 
             if (isStructureAnalyzed && !isStructureChanged()) {
-                // 計算済み + 構造未変更 = グレー表示だが押下可能
+                // Calculated + structure unchanged = grayed out but still clickable
                 analyzeBtn.classList.add('button-analyzed');
                 analyzeBtn.classList.remove('button-processing');
                 analyzeBtn.textContent = '🔬 Analyze Structure (Calculated)';
-                analyzeBtn.disabled = false; // 重要: 押下可能
+                analyzeBtn.disabled = false; // Important: must remain clickable
             } else {
-                // 未計算 or 構造変更 = 通常表示
+                // Not calculated or structure changed = normal display
                 analyzeBtn.classList.remove('button-analyzed');
                 analyzeBtn.classList.remove('button-processing');
                 analyzeBtn.textContent = '🔬 Analyze Structure';
@@ -1391,7 +1391,7 @@
         }
 
         function markStructureAsChanged() {
-            // 構造が変更された際の処理
+            // Handle structure change
             updateAnalyzeButtonState();
         }
 
@@ -1400,7 +1400,7 @@
 
             if (analyzeBtn) {
                 analyzeBtn.disabled = false;
-                updateAnalyzeButtonState(); // 新しい状態管理を使用
+                updateAnalyzeButtonState(); // Use the new state management
             }
 
             // Set status to ready for calculation
@@ -4775,7 +4775,7 @@ Crystal system: ${data.crystal_system}`;
                     showNotification(`Reset complete: ${backendFormula} (Note: Sync issue detected)`, 'warning');
                 }
 
-                // 構造リセット後に構造変更を通知
+                // Notify structure change after structure reset
                 markStructureAsChanged();
 
             } catch (error) {
@@ -4792,7 +4792,7 @@ Crystal system: ${data.crystal_system}`;
                     if (window.autoModeChart) window.autoModeChart.reset();
                     updateStructureVisualization();
                     dlog('⚠️ Performed frontend-only fallback reset');
-                    // フォールバックリセット後も構造変更を通知
+                    // Notify structure change after fallback reset too
                     markStructureAsChanged();
                 } catch (fallbackError) {
                     console.error('❌ Even fallback reset failed:', fallbackError);
@@ -6549,7 +6549,7 @@ Crystal system: ${data.crystal_system}`;
 
             if (typeof JSZip === 'undefined') {
                 console.error('JSZip not loaded');
-                alert('JSZipライブラリが読み込まれていません。');
+                alert('JSZip library is not loaded.');
                 return;
             }
 
@@ -6605,7 +6605,7 @@ Crystal system: ${data.crystal_system}`;
 
             } catch (error) {
                 console.error('Error generating ZIP file:', error);
-                alert('ZIPファイルの生成に失敗しました: ' + error.message);
+                alert('Failed to generate ZIP file: ' + error.message);
             }
         }
 

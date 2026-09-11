@@ -146,21 +146,21 @@ def _get_fallback_elements() -> Set[str]:
     Safe element list frequently used in Materials Project
     """
     return {
-        # 1-2周期
+        # Periods 1-2
         'H', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F',
-        # 3周期  
+        # Period 3
         'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl',
-        # 4周期
-        'K', 'Ca', 'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn', 
+        # Period 4
+        'K', 'Ca', 'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn',
         'Ga', 'Ge', 'As', 'Se', 'Br',
-        # 5周期
-        'Rb', 'Sr', 'Y', 'Zr', 'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd', 
+        # Period 5
+        'Rb', 'Sr', 'Y', 'Zr', 'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd',
         'In', 'Sn', 'Sb', 'Te', 'I',
-        # 6周期（主要）
-        'Cs', 'Ba', 'La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 
-        'Ho', 'Er', 'Tm', 'Yb', 'Lu', 'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 
+        # Period 6 (main)
+        'Cs', 'Ba', 'La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy',
+        'Ho', 'Er', 'Tm', 'Yb', 'Lu', 'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt',
         'Au', 'Hg', 'Tl', 'Pb', 'Bi',
-        # 7周期（安定）
+        # Period 7 (stable)
         'Th', 'U'
     }
 
