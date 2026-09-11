@@ -6,7 +6,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Set, Tuple
 
 import numpy as np
 from scipy.spatial import Voronoi
@@ -1182,7 +1182,7 @@ async def analyze_uploaded_cif(file: UploadFile = File(...)):
             raise HTTPException(status_code=500, detail="Windows file access error - check file permissions")
         raise HTTPException(status_code=500, detail="Internal server error occurred")
 
-async def analyze_cif_file(file_path: Path) -> Dict:
+def analyze_cif_file_sync(file_path: Path) -> Dict:
     try:
         # CIF file parsing with enhanced validation
         logger.info(f"Parsing CIF file: {file_path}")
@@ -1274,6 +1274,115 @@ async def analyze_cif_file(file_path: Path) -> Dict:
             raise HTTPException(status_code=500, detail="Windows Fortran library error - install Microsoft Visual C++ Redistributable")
         raise HTTPException(status_code=500, detail=f"Error in pymatgen analysis: {str(e)}")
 
+async def analyze_cif_file(file_path: Path) -> Dict:
+    return await asyncio.to_thread(analyze_cif_file_sync, file_path)
+
+def _load_and_build_supercell(crystal_data: dict, filename: str, a_mult: int, b_mult: int, c_mult: int) -> Tuple[Structure, Structure]:
+    """Load the original structure and build the requested supercell. CPU-bound pymatgen work — call via asyncio.to_thread."""
+    from pymatgen.io.cif import CifParser
+    from pymatgen.core import Structure
+    original_structure = None
+
+    # Method 1: Try to load from stored structure_data (for uploaded files)
+    logger.info(f" SUPERCELL: Starting structure loading for: {filename}")
+    logger.info(f" SUPERCELL: Crystal data keys available: {list(crystal_data.keys())}")
+
+    if "structure_data" in crystal_data:
+        logger.info(f" SUPERCELL: Method 1 - Trying structure_data loading")
+        try:
+            from pymatgen.core import Structure
+            structure_data = crystal_data["structure_data"]
+            logger.info(f" SUPERCELL: Structure data type: {type(structure_data)}")
+
+            if structure_data and isinstance(structure_data, dict):
+                logger.info(f" SUPERCELL: Structure data keys: {list(structure_data.keys())}")
+                # Validate client-supplied dict before Structure.from_dict
+                # (MontyDecoder performs dynamic @module/@class imports)
+                if "@module" in structure_data or "@class" in structure_data:
+                    if (structure_data.get("@module") != "pymatgen.core.structure"
+                            or structure_data.get("@class") != "Structure"):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Invalid structure_data: only pymatgen.core.structure.Structure is allowed"
+                        )
+                if "lattice" not in structure_data or "sites" not in structure_data:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid structure_data: 'lattice' and 'sites' keys are required"
+                    )
+                original_structure = Structure.from_dict(structure_data)
+                logger.info(f"✅ SUPERCELL: Structure loaded from structure_data - Formula: {original_structure.formula}, Sites: {len(original_structure.sites)}")
+
+                # Validate the loaded structure
+                if not original_structure.sites:
+                    logger.warning(f"⚠️ SUPERCELL: Structure has no sites: {filename}")
+                    original_structure = None
+                else:
+                    logger.info(f"✅ SUPERCELL: Structure validation passed for: {filename}")
+            else:
+                logger.warning(f"⚠️ SUPERCELL: Invalid structure_data format: {type(structure_data)}")
+        except HTTPException:
+            # Propagate validation errors (400) to the client
+            raise
+        except Exception as e:
+            logger.error(f"❌ SUPERCELL: Failed to load from structure_data: {e}")
+            logger.error(f"❌ SUPERCELL: Structure data content preview: {str(crystal_data.get('structure_data', 'None'))[:200]}...")
+            import traceback
+            logger.error(f"❌ SUPERCELL: Full traceback: {traceback.format_exc()}")
+            original_structure = None
+    else:
+        logger.info(f" SUPERCELL: No structure_data found, will try file loading")
+
+    # Method 2: Try to load from CIF file (for sample files and uploaded files)
+    if original_structure is None and filename != "unknown.cif":
+        logger.info(f" SUPERCELL: Method 2 - Trying file-based loading for: {filename}")
+
+        # Secure path validation (supports subdirectories)
+        try:
+            validated_filename = safe_path(filename)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid filename: {e}")
+
+        # First try sample directory
+        cif_path = SAMPLE_CIF_DIR / validated_filename
+        logger.info(f" SUPERCELL: Checking sample path: {cif_path}")
+
+        if cif_path.exists():
+            logger.info(f"✅ SUPERCELL: Found sample file, parsing...")
+            try:
+                parser = CifParser(str(cif_path))
+                original_structure = parser.get_structures()[0]
+                logger.info(f"✅ SUPERCELL: Loaded structure from sample CIF - Formula: {original_structure.formula}, Sites: {len(original_structure.sites)}")
+            except Exception as e:
+                logger.error(f"❌ SUPERCELL: Failed to parse sample file: {e}")
+        else:
+            # Uploaded files are not looked up by filename on disk:
+            # they are saved under a random UUID name (see
+            # /api/analyze-cif-upload), which has no reliable mapping
+            # back to the original filename. Uploaded structures must
+            # come through structure_data (Method 1) instead; if that
+            # was missing or invalid, this is a genuine error.
+            logger.warning(f"⚠️ SUPERCELL: Sample file not found and no structure_data available for: {filename}")
+
+    # If no structure available, this is an error condition
+    if original_structure is None:
+        logger.error(f"❌ SUPERCELL: All structure loading methods failed for: {filename}")
+        error_msg = f"Failed to load structure for {filename}. "
+        if "structure_data" in crystal_data:
+            error_msg += "Structure data was provided but could not be parsed. "
+        else:
+            error_msg += "No structure data available and file not found in sample directory. "
+        error_msg += "Please ensure the CIF file is valid and properly uploaded."
+        logger.error(f"❌ SUPERCELL: {error_msg}")
+        raise HTTPException(status_code=500, detail=error_msg)
+
+    # Create supercell
+    logger.info(f" SUPERCELL: Creating supercell {a_mult}×{b_mult}×{c_mult} from structure: {original_structure.formula}")
+    supercell_structure = original_structure.copy()
+    supercell_structure.make_supercell([a_mult, b_mult, c_mult])
+    logger.info(f"✅ SUPERCELL: Supercell created - Formula: {supercell_structure.formula}, Sites: {len(supercell_structure.sites)}")
+    return original_structure, supercell_structure
+
 @app.post("/api/create-supercell")
 async def create_supercell(data: dict):
     try:
@@ -1307,119 +1416,18 @@ async def create_supercell(data: dict):
         
         # Generate actual pymatgen Structure for 3D visualization
         try:
-            from pymatgen.io.cif import CifParser
-            from pymatgen.core import Structure
-            import os
-            
             filename = crystal_data.get("filename", "unknown.cif")
-            original_structure = None
-            
-            # Method 1: Try to load from stored structure_data (for uploaded files)
-            logger.info(f" SUPERCELL: Starting structure loading for: {filename}")
-            logger.info(f" SUPERCELL: Crystal data keys available: {list(crystal_data.keys())}")
+            original_structure, supercell_structure = await asyncio.to_thread(
+                _load_and_build_supercell, crystal_data, filename, a_mult, b_mult, c_mult
+            )
 
-            if "structure_data" in crystal_data:
-                logger.info(f" SUPERCELL: Method 1 - Trying structure_data loading")
-                try:
-                    from pymatgen.core import Structure
-                    structure_data = crystal_data["structure_data"]
-                    logger.info(f" SUPERCELL: Structure data type: {type(structure_data)}")
-
-                    if structure_data and isinstance(structure_data, dict):
-                        logger.info(f" SUPERCELL: Structure data keys: {list(structure_data.keys())}")
-                        # Validate client-supplied dict before Structure.from_dict
-                        # (MontyDecoder performs dynamic @module/@class imports)
-                        if "@module" in structure_data or "@class" in structure_data:
-                            if (structure_data.get("@module") != "pymatgen.core.structure"
-                                    or structure_data.get("@class") != "Structure"):
-                                raise HTTPException(
-                                    status_code=400,
-                                    detail="Invalid structure_data: only pymatgen.core.structure.Structure is allowed"
-                                )
-                        if "lattice" not in structure_data or "sites" not in structure_data:
-                            raise HTTPException(
-                                status_code=400,
-                                detail="Invalid structure_data: 'lattice' and 'sites' keys are required"
-                            )
-                        original_structure = Structure.from_dict(structure_data)
-                        logger.info(f"✅ SUPERCELL: Structure loaded from structure_data - Formula: {original_structure.formula}, Sites: {len(original_structure.sites)}")
-
-                        # Validate the loaded structure
-                        if not original_structure.sites:
-                            logger.warning(f"⚠️ SUPERCELL: Structure has no sites: {filename}")
-                            original_structure = None
-                        else:
-                            logger.info(f"✅ SUPERCELL: Structure validation passed for: {filename}")
-                    else:
-                        logger.warning(f"⚠️ SUPERCELL: Invalid structure_data format: {type(structure_data)}")
-                except HTTPException:
-                    # Propagate validation errors (400) to the client
-                    raise
-                except Exception as e:
-                    logger.error(f"❌ SUPERCELL: Failed to load from structure_data: {e}")
-                    logger.error(f"❌ SUPERCELL: Structure data content preview: {str(crystal_data.get('structure_data', 'None'))[:200]}...")
-                    import traceback
-                    logger.error(f"❌ SUPERCELL: Full traceback: {traceback.format_exc()}")
-                    original_structure = None
-            else:
-                logger.info(f" SUPERCELL: No structure_data found, will try file loading")
-            
-            # Method 2: Try to load from CIF file (for sample files and uploaded files)
-            if original_structure is None and filename != "unknown.cif":
-                logger.info(f" SUPERCELL: Method 2 - Trying file-based loading for: {filename}")
-
-                # Secure path validation (supports subdirectories)
-                try:
-                    validated_filename = safe_path(filename)
-                except ValueError as e:
-                    raise HTTPException(status_code=400, detail=f"Invalid filename: {e}")
-
-                # First try sample directory
-                cif_path = SAMPLE_CIF_DIR / validated_filename
-                logger.info(f" SUPERCELL: Checking sample path: {cif_path}")
-
-                if cif_path.exists():
-                    logger.info(f"✅ SUPERCELL: Found sample file, parsing...")
-                    try:
-                        parser = CifParser(str(cif_path))
-                        original_structure = parser.get_structures()[0]
-                        logger.info(f"✅ SUPERCELL: Loaded structure from sample CIF - Formula: {original_structure.formula}, Sites: {len(original_structure.sites)}")
-                    except Exception as e:
-                        logger.error(f"❌ SUPERCELL: Failed to parse sample file: {e}")
-                else:
-                    # Uploaded files are not looked up by filename on disk:
-                    # they are saved under a random UUID name (see
-                    # /api/analyze-cif-upload), which has no reliable mapping
-                    # back to the original filename. Uploaded structures must
-                    # come through structure_data (Method 1) instead; if that
-                    # was missing or invalid, this is a genuine error.
-                    logger.warning(f"⚠️ SUPERCELL: Sample file not found and no structure_data available for: {filename}")
-            
-            # If no structure available, this is an error condition
-            if original_structure is None:
-                logger.error(f"❌ SUPERCELL: All structure loading methods failed for: {filename}")
-                error_msg = f"Failed to load structure for {filename}. "
-                if "structure_data" in crystal_data:
-                    error_msg += "Structure data was provided but could not be parsed. "
-                else:
-                    error_msg += "No structure data available and file not found in sample directory. "
-                error_msg += "Please ensure the CIF file is valid and properly uploaded."
-                logger.error(f"❌ SUPERCELL: {error_msg}")
-                raise HTTPException(status_code=500, detail=error_msg)
-
-            # Create supercell
-            logger.info(f" SUPERCELL: Creating supercell {a_mult}×{b_mult}×{c_mult} from structure: {original_structure.formula}")
-            supercell_structure = original_structure.copy()
-            supercell_structure.make_supercell([a_mult, b_mult, c_mult])
-            logger.info(f"✅ SUPERCELL: Supercell created - Formula: {supercell_structure.formula}, Sites: {len(supercell_structure.sites)}")
-            
             # Create or update session with structures
             session_manager.create_session(session_id, filename, original_structure)
-            session_manager.update_structure(session_id, supercell_structure, 
+            session_manager.update_structure(session_id, supercell_structure,
                                            operations=[], supercell_size=supercell_size)
-            
-            # Get structure dictionary for CIF generation
-            structure_dict = supercell_structure.as_dict()
+
+            # Get structure dictionary for CIF generation (CPU-bound — offload)
+            structure_dict = await asyncio.to_thread(supercell_structure.as_dict)
             logger.info(f"Successfully created supercell structure and session for {filename}")
 
         except HTTPException:
@@ -2086,7 +2094,7 @@ async def chgnet_relax_structure(request: dict):
         
         # Generate relaxed structure info
         from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-        analyzer = SpacegroupAnalyzer(final_structure)
+        analyzer = await asyncio.to_thread(SpacegroupAnalyzer, final_structure)
         
         relaxed_structure_info = {
             "formula": final_formula,

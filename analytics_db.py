@@ -26,6 +26,7 @@ class AnalyticsDatabase:
     @contextmanager
     def _get_connection(self):
         conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA journal_mode=WAL")
         try:
             yield conn
         finally:
@@ -63,7 +64,12 @@ class AnalyticsDatabase:
                         session_id TEXT
                     )
                 """)
-                
+
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_access_logs_timestamp ON access_logs(timestamp)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_analysis_events_timestamp ON analysis_events(timestamp)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_analysis_events_event_type ON analysis_events(event_type)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_analysis_events_filename ON analysis_events(filename)")
+
                 conn.commit()
                 logger.info(f"Analytics database initialized at {self.db_path}")
         except Exception as e:
