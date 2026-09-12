@@ -104,6 +104,36 @@ class AnalyticsDatabase:
         except Exception as e:
             logger.error(f"Failed to log event: {e}")
 
+    def purge_old_data(self, retention_days: int = 90) -> int:
+        """
+        Delete access_logs/analysis_events rows older than retention_days.
+
+        access_logs records every visitor's IP address and User-Agent on
+        every request (see main.py's analytics_middleware); unlike
+        uploads/ (which main.py's periodic cleanup already purges after
+        SESSION_CLEANUP_HOURS), nothing previously bounded how long this
+        accumulated. Returns the total number of rows deleted.
+        """
+        try:
+            cutoff = (datetime.now() - timedelta(days=retention_days)).strftime('%Y-%m-%d %H:%M:%S')
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM access_logs WHERE timestamp < ?", (cutoff,))
+                access_deleted = cursor.rowcount
+                cursor.execute("DELETE FROM analysis_events WHERE timestamp < ?", (cutoff,))
+                events_deleted = cursor.rowcount
+                conn.commit()
+                total = access_deleted + events_deleted
+                if total:
+                    logger.info(
+                        f"Purged {access_deleted} access_logs and {events_deleted} analysis_events "
+                        f"row(s) older than {retention_days} days"
+                    )
+                return total
+        except Exception as e:
+            logger.error(f"Failed to purge old analytics data: {e}")
+            return 0
+
     # --- Aggregation Methods for Dashboard ---
 
     def get_daily_access_counts(self, days=7):

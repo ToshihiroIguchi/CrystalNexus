@@ -20,13 +20,22 @@ def _analyze_sample(client, filename="Metals/Cu.cif"):
 
 
 def _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2)):
+    """
+    Returns the server-assigned session_id. The server mints its own id
+    rather than trusting the caller's (see SessionManager.create_session),
+    so callers must capture and use the return value for any further
+    session-scoped calls -- it will differ from the session_id argument
+    whenever that value isn't already a session the server issued.
+    """
     response = client.post("/api/create-supercell", json={
         "crystal_data": crystal_data,
         "supercell_size": list(size),
         "session_id": session_id,
     })
     assert response.status_code == 200
-    assert response.json()["status"] == "supercell_created"
+    body = response.json()
+    assert body["status"] == "supercell_created"
+    return body["session_id"]
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +116,7 @@ def test_upload_cif_roundtrip_through_substitution(client, sample_cif_dir):
         assert upload_response.status_code == 200
         crystal_data = upload_response.json()
 
-        _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
+        session_id = _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
 
         ops_response = client.post("/api/apply-atomic-operations", json={
             "session_id": session_id,
@@ -175,7 +184,7 @@ def test_apply_atomic_operations_flow(client):
     """Full flow: analyze -> create supercell -> substitute an atom"""
     session_id = str(uuid.uuid4())
     crystal_data = _analyze_sample(client)
-    _create_supercell_session(client, crystal_data, session_id)
+    session_id = _create_supercell_session(client, crystal_data, session_id)
 
     response = client.post("/api/apply-atomic-operations", json={
         "session_id": session_id,
@@ -196,7 +205,7 @@ def test_apply_atomic_operations_returns_structure_state(client):
 
     session_id = str(uuid.uuid4())
     crystal_data = _analyze_sample(client)
-    _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
 
     response = client.post("/api/apply-atomic-operations", json={
         "session_id": session_id,
@@ -223,7 +232,7 @@ def test_apply_atomic_operations_delete_preserves_volume(client):
     `volume *= (n-1)/n` approximation this response now replaces did."""
     session_id = str(uuid.uuid4())
     crystal_data = _analyze_sample(client)
-    _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
 
     before = client.post("/api/apply-atomic-operations", json={
         "session_id": session_id,
@@ -245,7 +254,7 @@ def test_apply_atomic_operations_labels_match_get_element_labels(client):
     the same session's current structure."""
     session_id = str(uuid.uuid4())
     crystal_data = _analyze_sample(client)
-    _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
 
     apply_response = client.post("/api/apply-atomic-operations", json={
         "session_id": session_id,
@@ -293,7 +302,7 @@ def test_apply_atomic_operations_rejects_out_of_range_index(client):
     out-of-range index rather than silently skipping it."""
     session_id = str(uuid.uuid4())
     crystal_data = _analyze_sample(client)
-    _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
 
     response = client.post("/api/apply-atomic-operations", json={
         "session_id": session_id,
@@ -308,7 +317,7 @@ def test_insert_then_substitute_inserted_atom(client):
     of being rejected as out of range against the original supercell."""
     session_id = str(uuid.uuid4())
     crystal_data = _analyze_sample(client)
-    _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
 
     num_sites = crystal_data["num_atoms"] * 8  # 2x2x2 scaling
     response = client.post("/api/apply-atomic-operations", json={
@@ -335,7 +344,7 @@ def test_update_structure_clears_relaxed_structure():
 
     session_id = str(uuid.uuid4())
     structure = Structure.from_file(Path("sample_cif") / "Metals" / "Cu.cif")
-    session_manager.create_session(session_id, "Cu.cif", structure)
+    session_id = session_manager.create_session(session_id, "Cu.cif", structure)
     session_info = session_manager.get_session_info(session_id)
     session_info['relaxed_structure'] = structure.copy()
     session_info['chgnet_result'] = {'fmax': 0.1, 'converged': True, 'steps': 5}
@@ -356,7 +365,7 @@ def test_reset_session_structure_formula_shape(client):
     Reset even though nothing was actually out of sync."""
     session_id = str(uuid.uuid4())
     crystal_data = _analyze_sample(client)
-    _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
 
     response = client.post("/api/reset-session-structure", json={"session_id": session_id})
     assert response.status_code == 200
@@ -525,7 +534,7 @@ def test_get_insertion_voids_flow(client):
     """Full flow: analyze -> create supercell -> find insertion voids."""
     session_id = str(uuid.uuid4())
     crystal_data = _analyze_sample(client)
-    _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
 
     response = client.post("/api/get-insertion-voids", json={
         "session_id": session_id,
@@ -539,8 +548,39 @@ def test_get_insertion_voids_flow(client):
 
 
 # ---------------------------------------------------------------------------
-# /api/evaluate-insertion-energies
+# /api/evaluate-insertion-energy and /api/evaluate-insertion-energies
+#
+# Regression coverage for S-12: neither endpoint called validate_element()
+# before Structure.append(element_symbol, ...), unlike the sibling
+# /api/evaluate-candidate-energies -- an unsupported element symbol
+# reached pymatgen directly and surfaced as a raw exception.
 # ---------------------------------------------------------------------------
+
+def test_evaluate_insertion_energy_rejects_unknown_element(client):
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    response = client.post("/api/evaluate-insertion-energy", json={
+        "session_id": session_id,
+        "element": "Xx",
+        "frac_coords": [0.5, 0.5, 0.5],
+    })
+    assert response.status_code == 400
+
+
+def test_evaluate_insertion_energies_rejects_unknown_element(client):
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    response = client.post("/api/evaluate-insertion-energies", json={
+        "session_id": session_id,
+        "element": "Xx",
+        "sites": [{"id": 0, "frac_coords": [0.5, 0.5, 0.5]}],
+    })
+    assert response.status_code == 400
+
 
 def test_evaluate_insertion_energies_missing_session_id(client):
     response = client.post("/api/evaluate-insertion-energies", json={
@@ -562,7 +602,7 @@ def test_evaluate_insertion_energies_unknown_session_id(client):
 def test_evaluate_insertion_energies_exceeds_max_batch(client):
     session_id = str(uuid.uuid4())
     crystal_data = _analyze_sample(client)
-    _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
 
     from main import MAX_INSERTION_BATCH
     too_many_sites = [{"id": i, "frac_coords": [0.1, 0.1, 0.1]} for i in range(MAX_INSERTION_BATCH + 1)]
@@ -579,7 +619,7 @@ def test_evaluate_insertion_energies_flow(client):
     """Full flow: analyze -> create supercell -> batch-evaluate insertion energies."""
     session_id = str(uuid.uuid4())
     crystal_data = _analyze_sample(client)
-    _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
 
     voids_response = client.post("/api/get-insertion-voids", json={
         "session_id": session_id,
@@ -625,7 +665,7 @@ def test_evaluate_candidate_energies_unknown_session_id(client):
 def test_evaluate_candidate_energies_exceeds_max_batch(client):
     session_id = str(uuid.uuid4())
     crystal_data = _analyze_sample(client)
-    _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
 
     from main import MAX_CANDIDATE_BATCH
     too_many = [{"id": i, "action": "delete", "index": 0} for i in range(MAX_CANDIDATE_BATCH + 1)]
@@ -639,7 +679,7 @@ def test_evaluate_candidate_energies_exceeds_max_batch(client):
 def test_evaluate_candidate_energies_rejects_out_of_range_index(client):
     session_id = str(uuid.uuid4())
     crystal_data = _analyze_sample(client)
-    _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
 
     response = client.post("/api/evaluate-candidate-energies", json={
         "session_id": session_id,
@@ -653,7 +693,7 @@ def test_evaluate_candidate_energies_rejects_unknown_element(client):
     (previously untested)."""
     session_id = str(uuid.uuid4())
     crystal_data = _analyze_sample(client)
-    _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
 
     response = client.post("/api/evaluate-candidate-energies", json={
         "session_id": session_id,
@@ -668,7 +708,7 @@ def test_evaluate_candidate_energies_substitute_flow(client):
     energies for every site in one CHGNet call (Auto-mode sweep)."""
     session_id = str(uuid.uuid4())
     crystal_data = _analyze_sample(client)
-    _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
 
     num_sites = crystal_data["num_atoms"]
     candidates = [{"id": i, "action": "substitute", "index": i, "to": "Ni"} for i in range(num_sites)]
@@ -692,7 +732,7 @@ def test_evaluate_candidate_energies_delete_flow(client):
     energies for every site in one CHGNet call (Auto-mode sweep)."""
     session_id = str(uuid.uuid4())
     crystal_data = _analyze_sample(client)
-    _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
 
     num_sites = crystal_data["num_atoms"]
     candidates = [{"id": i, "action": "delete", "index": i} for i in range(num_sites)]

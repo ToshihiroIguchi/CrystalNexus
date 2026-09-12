@@ -30,9 +30,11 @@ def _cu_structure(supercell=None):
 
 
 def _create_session(structure, filename="Cu.cif"):
+    # session_manager.create_session() mints its own id rather than
+    # trusting this one (see its docstring), so the id actually usable
+    # afterward is its return value, not the local uuid.
     session_id = str(uuid.uuid4())
-    session_manager.create_session(session_id, filename, structure)
-    return session_id
+    return session_manager.create_session(session_id, filename, structure)
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import functools
 import itertools
 import json
 import logging
+import secrets
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -12,7 +13,7 @@ from typing import List, Dict, Optional, Set, Tuple
 import numpy as np
 from scipy.spatial import Voronoi
 
-from fastapi import FastAPI, Request, HTTPException, File, UploadFile
+from fastapi import FastAPI, Request, HTTPException, File, UploadFile, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
@@ -169,6 +170,10 @@ def _get_fallback_elements() -> Set[str]:
 # Memory management settings
 SESSION_CLEANUP_HOURS = int(os.getenv('SESSION_CLEANUP_HOURS', '6'))
 PERIODIC_CLEANUP_INTERVAL = int(os.getenv('PERIODIC_CLEANUP_INTERVAL', '1800'))  # 30 minutes
+# How long to keep analytics_db rows (visitor IP/User-Agent history,
+# uploaded filenames/formulas). Unlike uploads/ (purged above after
+# SESSION_CLEANUP_HOURS), nothing previously bounded this at all.
+ANALYTICS_RETENTION_DAYS = int(os.getenv('ANALYTICS_RETENTION_DAYS', '90'))
 CHGNET_BATCH_SIZE = int(os.getenv('CHGNET_BATCH_SIZE', '4'))
 
 # Atom insertion settings
@@ -561,6 +566,9 @@ async def periodic_cleanup_task():
                 if removed_files > 0:
                     logger.info(f"Cleaned up {removed_files} uploaded file(s) older than {SESSION_CLEANUP_HOURS}h")
 
+            # Purge analytics rows past the retention window (sqlite write, offload)
+            await asyncio.to_thread(analytics_db.purge_old_data, ANALYTICS_RETENTION_DAYS)
+
             # Log session statistics and perform garbage collection
             log_session_statistics()
             
@@ -583,9 +591,14 @@ def safe_filename(filename: str) -> str:
     
     # Remove path traversal characters
     safe_name = os.path.basename(filename).replace('..', '')
-    
-    # Check dangerous characters
-    if not safe_name or '/' in safe_name or '\\' in safe_name:
+
+    # Check dangerous characters. Control characters (CR/LF in particular)
+    # are rejected here too: this name is later echoed back into a
+    # Content-Disposition header and a CIF comment line (see
+    # sanitize_display_filename), and neither the '/'/'\\' checks below
+    # nor endswith('.cif') would otherwise catch a name like
+    # "a\r\nX-Injected: 1.cif".
+    if not safe_name or '/' in safe_name or '\\' in safe_name or not safe_name.isprintable():
         raise ValueError("Invalid filename")
     
     # Reject non-CIF files
@@ -619,19 +632,105 @@ def safe_path(filepath: str) -> str:
     # Final file must be CIF format
     if not path_parts[-1].lower().endswith('.cif'):
         raise ValueError("Only CIF files are allowed")
-    
+
     return normalized_path
+
+_MSONABLE_MARKER_KEYS = ("@module", "@class", "@callable", "@bound")
+
+def _reject_msonable_payload(obj, *, depth: int = 0, max_depth: int = 25) -> None:
+    """
+    Recursively reject any nested dict carrying MSONable/MontyDecoder
+    marker keys ("@module"/"@class"/"@callable"/"@bound"), anywhere below
+    the top level of obj.
+
+    Why: pymatgen's Structure.from_dict() round-trips each site's
+    `properties` dict through monty.json.MontyDecoder (see
+    PeriodicSite.from_dict in pymatgen/core/sites.py), which performs a
+    dynamic `__import__(modname)` + `getattr` + `cls.from_dict(...)` on ANY
+    dict shaped like {"@module": ..., "@class": ...} it finds -- with
+    modname/classname taken verbatim from the payload. A shallow check of
+    only the outer Structure dict (as done by the caller before this) does
+    not see markers nested inside `sites[*].properties`, so this walks the
+    whole payload to close that gap.
+
+    The caller is expected to have already validated/consumed the
+    top-level dict's own @module/@class (that's the legitimate
+    pymatgen.core.structure.Structure marker), so depth=0's own keys are
+    intentionally not checked here -- only what's nested inside its values.
+
+    Raises:
+        HTTPException(400) if a marker key is found below the top level,
+        or the payload nests deeper than max_depth (a cheap guard against
+        a pathological/recursion-bomb payload).
+    """
+    if depth > max_depth:
+        raise HTTPException(status_code=400, detail="Invalid structure_data: nesting too deep")
+    if isinstance(obj, dict):
+        if depth > 0 and any(key in obj for key in _MSONABLE_MARKER_KEYS):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid structure_data: nested MSONable markers are not allowed"
+            )
+        for value in obj.values():
+            _reject_msonable_payload(value, depth=depth + 1, max_depth=max_depth)
+    elif isinstance(obj, list):
+        for item in obj:
+            _reject_msonable_payload(item, depth=depth + 1, max_depth=max_depth)
+
+def sanitize_display_filename(filename: str) -> str:
+    """
+    Strip characters that could break out of a single Content-Disposition
+    header value or a single '# ...' CIF comment line (CR/LF and other
+    control characters).
+
+    This is NOT a path-safety check -- safe_path()/safe_filename() above
+    cover that wherever a filename touches the filesystem. This exists
+    because several CIF-generation endpoints echo the client-supplied
+    filename into both a response header and the generated CIF body's
+    metadata comment even when the actual structure came from the
+    session (skipping safe_path() entirely, since no filesystem lookup
+    happens on that path) -- an unsanitized value there let a newline
+    inject an extra line into the downloaded CIF file.
+    """
+    if not isinstance(filename, str):
+        return str(filename)
+    return "".join(ch for ch in filename if ch.isprintable())
 
 def validate_supercell_size(supercell_size: List[int]) -> List[int]:
     """Validate supercell size"""
     if not isinstance(supercell_size, list) or len(supercell_size) != 3:
         raise ValueError("Supercell size must be a list of 3 integers")
-    
+
     for dim in supercell_size:
         if not isinstance(dim, int) or dim < 1 or dim > MAX_SUPERCELL_DIM:
             raise ValueError(f"Supercell dimensions must be between 1 and {MAX_SUPERCELL_DIM}")
-    
+
     return supercell_size
+
+def check_supercell_site_limit(base_num_sites: int, supercell_size: List[int]) -> None:
+    """
+    Reject a supercell expansion whose total site count would exceed
+    MAX_TOTAL_SITES.
+
+    validate_supercell_size() bounds each dimension independently
+    (<= MAX_SUPERCELL_DIM), but never their product: a 20-atom cell at the
+    per-dimension limit (10x10x10) still expands to 20,000 atoms. This
+    catches that multiplicative blow-up before make_supercell() allocates
+    it, and must be called on every path that runs make_supercell() with a
+    size that ultimately came from the request body.
+    """
+    scaling_factor = 1
+    for dim in supercell_size:
+        scaling_factor *= dim
+    total_sites = base_num_sites * scaling_factor
+    if total_sites > MAX_TOTAL_SITES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Requested supercell would contain {total_sites} atoms, "
+                f"exceeding the limit of {MAX_TOTAL_SITES}"
+            )
+        )
 
 def validate_element(element: str) -> str:
     """Element validation (injection protection)"""
@@ -696,8 +795,25 @@ class SessionManager:
     def __init__(self):
         self.sessions: Dict[str, Dict] = {}
         
-    def create_session(self, session_id: str, filename: str, original_structure: Structure) -> None:
-        """Create new session"""
+    def create_session(self, session_id: Optional[str], filename: str, original_structure: Structure) -> str:
+        """
+        Create (or replace) a session and return the id it was stored
+        under.
+
+        session_id is the sole authorization token every session-scoped
+        endpoint checks (see get_session_info/get_current_structure), so it
+        must never be a value the client gets to choose: a client-supplied
+        id is honored only when it already names a session this server
+        previously issued (continuing it -- e.g. the browser tab loading a
+        different sample file into the same session). Any other value
+        (missing, or unknown to this server) is discarded in favor of a
+        freshly minted, cryptographically random id, which is what the
+        caller must return to the client so it can adopt it.
+        """
+        is_new_session = not session_id or session_id not in self.sessions
+        if is_new_session:
+            session_id = secrets.token_urlsafe(32)
+            self._evict_lru_if_at_capacity()
         self.sessions[session_id] = {
             'filename': filename,
             'original_structure': original_structure,
@@ -708,7 +824,23 @@ class SessionManager:
             'last_accessed': time.time()
         }
         logger.info(f"Created session {session_id[:8]}... for {filename}")
-    
+        return session_id
+
+    def _evict_lru_if_at_capacity(self) -> None:
+        """
+        Evict the least-recently-accessed session(s) so a new one can be
+        added without exceeding MAX_SESSIONS. Called only when actually
+        minting a new id -- updating an existing session never grows the
+        dict, so it never needs to evict.
+        """
+        while len(self.sessions) >= MAX_SESSIONS:
+            oldest_id = min(self.sessions, key=lambda sid: self.sessions[sid].get('last_accessed', 0))
+            del self.sessions[oldest_id]
+            logger.warning(
+                f"Session limit ({MAX_SESSIONS}) reached; evicted least-recently-accessed "
+                f"session {oldest_id[:8]}..."
+            )
+
     def get_current_structure(self, session_id: str) -> Optional[Structure]:
         """Get current structure"""
         if session_id in self.sessions:
@@ -800,9 +932,36 @@ HOST = os.getenv('CRYSTALNEXUS_HOST', '127.0.0.1')
 PORT = int(os.getenv('CRYSTALNEXUS_PORT', '8080'))
 DEBUG = os.getenv('CRYSTALNEXUS_DEBUG', 'False').lower() == 'true'
 
+# Gates the /analytics dashboard and /api/analytics/* endpoints, which
+# otherwise expose every visitor's IP/User-Agent history plus uploaded
+# filenames and formulas to anyone who can reach this server. Set this to
+# require a shared token (via the X-Analytics-Token header or a ?token=
+# query parameter) for access from beyond localhost -- see
+# require_analytics_access().
+CRYSTALNEXUS_ANALYTICS_TOKEN = os.getenv('CRYSTALNEXUS_ANALYTICS_TOKEN')
+
 # File handling limits
 MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', str(50 * 1024 * 1024)))  # 50MB
 MAX_SUPERCELL_DIM = int(os.getenv('MAX_SUPERCELL_DIM', '10'))
+# Caps the *product* of the supercell dimensions against the base
+# structure's site count; MAX_SUPERCELL_DIM only bounds each dimension
+# independently (see check_supercell_site_limit).
+MAX_TOTAL_SITES = int(os.getenv('MAX_TOTAL_SITES', '20000'))
+# Upper bound on concurrently-held sessions (each holds at least two full
+# pymatgen Structures). Without this, an anonymous caller could grow
+# session_manager.sessions without limit -- cleanup_old_sessions() only
+# evicts entries older than SESSION_CLEANUP_HOURS, on a
+# PERIODIC_CLEANUP_INTERVAL timer, so a fast loop of create-supercell
+# calls could exhaust memory long before either ever runs. See
+# SessionManager.create_session's least-recently-accessed eviction.
+MAX_SESSIONS = int(os.getenv('MAX_SESSIONS', '100'))
+
+# Per-client-IP rate limit for POST /api/* (see rate_limit_middleware):
+# there is otherwise no request-volume protection anywhere in this app,
+# so a single caller could hammer the CIF-parsing/CHGNet endpoints as
+# fast as the network allows.
+RATE_LIMIT_REQUESTS_PER_MINUTE = int(os.getenv('RATE_LIMIT_REQUESTS_PER_MINUTE', '60'))
+RATE_LIMIT_BURST = int(os.getenv('RATE_LIMIT_BURST', '20'))
 
 from contextlib import asynccontextmanager
 
@@ -833,6 +992,88 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=APP_NAME, lifespan=lifespan)
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """
+    Minimal, response-shape-preserving security headers (S-8 in the
+    security review): this app set none at all. `frame-ancestors 'none'`
+    (plus the older X-Frame-Options for browsers that don't honor CSP)
+    stops /  and /analytics from being framed -- meaningful here because
+    this app has no CSRF token and several destructive same-origin POSTs
+    (Reset, Execute) that a framed clickjack could trigger.
+
+    Deliberately NOT a full Content-Security-Policy: the pages rely on
+    inline <script> blocks and dozens of inline onclick= handlers, so a
+    script-src policy would need that inline code extracted first (a
+    separate, larger change) to avoid breaking the UI.
+    """
+    response = await call_next(request)
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "same-origin"
+    return response
+
+class _TokenBucket:
+    """Mutable per-client token-bucket state. A plain object (not a
+    tuple/dataclass) so rate_limit_middleware can update tokens/last_refill
+    in place via a single dict lookup."""
+    __slots__ = ('tokens', 'last_refill')
+
+    def __init__(self, tokens: float, last_refill: float):
+        self.tokens = tokens
+        self.last_refill = last_refill
+
+# In-process only, like session_manager.sessions and _relax_progress below
+# -- fine for this app's single-worker deployment model, and only ever
+# touched from the event loop thread, so (also like those) no lock is
+# needed. Not evicted on a timer: at realistic client counts this stays
+# far smaller than session_manager's own cap, and a stale entry is only a
+# few floats.
+_rate_limit_buckets: Dict[str, "_TokenBucket"] = {}
+
+def _rate_limit_check(client_host: str) -> bool:
+    """
+    Token-bucket rate limit: refills at RATE_LIMIT_REQUESTS_PER_MINUTE/60
+    tokens per second, capped at RATE_LIMIT_BURST. Returns True if the
+    request may proceed (and consumes one token), False if it should be
+    rejected with 429.
+    """
+    now = time.time()
+    refill_per_second = RATE_LIMIT_REQUESTS_PER_MINUTE / 60.0
+    bucket = _rate_limit_buckets.get(client_host)
+    if bucket is None:
+        # Spend the first token immediately so a burst still starts at
+        # BURST - 1, not BURST + 1 on the very next refill calculation.
+        _rate_limit_buckets[client_host] = _TokenBucket(tokens=RATE_LIMIT_BURST - 1, last_refill=now)
+        return True
+
+    elapsed = max(0.0, now - bucket.last_refill)
+    bucket.tokens = min(RATE_LIMIT_BURST, bucket.tokens + elapsed * refill_per_second)
+    bucket.last_refill = now
+
+    if bucket.tokens >= 1:
+        bucket.tokens -= 1
+        return True
+    return False
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """
+    Per-client-IP rate limit on POST /api/* (see RATE_LIMIT_* config):
+    there is no other protection anywhere in this app against a single
+    caller hammering the CIF-parsing/CHGNet endpoints as fast as the
+    network allows.
+    """
+    if request.method == "POST" and request.url.path.startswith("/api/"):
+        client_host = request.client.host if request.client else "unknown"
+        if not _rate_limit_check(client_host):
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many requests. Please slow down and try again shortly."}
+            )
+    return await call_next(request)
 
 @app.middleware("http")
 async def analytics_middleware(request: Request, call_next):
@@ -889,6 +1130,7 @@ def load_base_supercell(session_id: Optional[str], filename: Optional[str],
         if session_info:
             structure = session_info['original_structure'].copy()
             effective_size = supercell_size or session_info.get('supercell_size', [1, 1, 1])
+            check_supercell_site_limit(len(structure.sites), effective_size)
             structure.make_supercell(effective_size)
             return structure
 
@@ -900,6 +1142,7 @@ def load_base_supercell(session_id: Optional[str], filename: Optional[str],
         if sample_path.exists():
             parser = CifParser(str(sample_path))
             structure = parser.get_structures(primitive=False)[0]
+            check_supercell_site_limit(len(structure.sites), supercell_size)
             structure.make_supercell(supercell_size)
             return structure
 
@@ -1003,7 +1246,7 @@ async def apply_atomic_operations(request: dict):
         raise
     except Exception as e:
         logger.error(f"Error applying atomic operations: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.get("/api/sample-cif-files")
 async def get_sample_cif_files():
@@ -1043,7 +1286,8 @@ async def get_sample_cif_files():
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error scanning sample CIF files: {str(e)}")
+        logger.error(f"Error scanning sample CIF files: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.post("/api/analyze-cif-sample")
 async def analyze_sample_cif(data: dict):
@@ -1109,10 +1353,23 @@ async def analyze_uploaded_cif(file: UploadFile = File(...)):
         if not file.filename or not file.filename.lower().endswith('.cif'):
             raise HTTPException(status_code=400, detail="File must be a CIF file")
         
-        # File size limit
-        contents = await file.read()
-        if len(contents) > MAX_FILE_SIZE:
-            raise HTTPException(status_code=413, detail=f"File too large. Maximum size: {MAX_FILE_SIZE} bytes")
+        # File size limit -- read in bounded chunks so a request far
+        # larger than MAX_FILE_SIZE (e.g. a multi-GB POST) is rejected as
+        # soon as that much has arrived, instead of first buffering the
+        # entire body (file.read() with no size arg) and only checking
+        # afterward.
+        chunk_size = 1024 * 1024  # 1MB
+        chunks = []
+        total_size = 0
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            total_size += len(chunk)
+            if total_size > MAX_FILE_SIZE:
+                raise HTTPException(status_code=413, detail=f"File too large. Maximum size: {MAX_FILE_SIZE} bytes")
+            chunks.append(chunk)
+        contents = b"".join(chunks)
         
         # Create secure temporary file (explicit UTF-8 encoding)
         try:
@@ -1309,7 +1566,9 @@ def analyze_cif_file_sync(file_path: Path) -> Dict:
         # Report Windows-specific pymatgen errors in detail
         if WINDOWS_PLATFORM and "fortran" in str(e).lower():
             raise HTTPException(status_code=500, detail="Windows Fortran library error - install Microsoft Visual C++ Redistributable")
-        raise HTTPException(status_code=500, detail=f"Error in pymatgen analysis: {str(e)}")
+        # Generic message: pymatgen/ASE exceptions routinely embed absolute
+        # filesystem paths and library versions (already logged above).
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 async def analyze_cif_file(file_path: Path) -> Dict:
     return await asyncio.to_thread(analyze_cif_file_sync, file_path)
@@ -1333,8 +1592,10 @@ def _load_and_build_supercell(crystal_data: dict, filename: str, a_mult: int, b_
 
             if structure_data and isinstance(structure_data, dict):
                 logger.info(f" SUPERCELL: Structure data keys: {list(structure_data.keys())}")
-                # Validate client-supplied dict before Structure.from_dict
-                # (MontyDecoder performs dynamic @module/@class imports)
+                # Validate client-supplied dict before Structure.from_dict.
+                # Two layers of defense against monty.json.MontyDecoder's
+                # dynamic @module/@class imports (see _reject_msonable_payload
+                # docstring for the exact gadget this closes):
                 if "@module" in structure_data or "@class" in structure_data:
                     if (structure_data.get("@module") != "pymatgen.core.structure"
                             or structure_data.get("@class") != "Structure"):
@@ -1347,6 +1608,18 @@ def _load_and_build_supercell(crystal_data: dict, filename: str, a_mult: int, b_
                         status_code=400,
                         detail="Invalid structure_data: 'lattice' and 'sites' keys are required"
                     )
+                # 1) Reject any nested MSONable marker anywhere in the
+                #    payload (belt-and-suspenders; closes any decode path
+                #    pymatgen may add in the future).
+                _reject_msonable_payload(structure_data)
+                # 2) Drop per-site `properties` outright: this is the one
+                #    field pymatgen actually round-trips through
+                #    MontyDecoder, and this app never needs it (CIF output
+                #    always uses write_magmoms=False), so removing it is
+                #    the real fix; (1) above is defense-in-depth only.
+                for site in structure_data.get("sites", []):
+                    if isinstance(site, dict):
+                        site.pop("properties", None)
                 original_structure = Structure.from_dict(structure_data)
                 logger.info(f"✅ SUPERCELL: Structure loaded from structure_data - Formula: {original_structure.formula}, Sites: {len(original_structure.sites)}")
 
@@ -1415,6 +1688,7 @@ def _load_and_build_supercell(crystal_data: dict, filename: str, a_mult: int, b_
 
     # Create supercell
     logger.info(f" SUPERCELL: Creating supercell {a_mult}×{b_mult}×{c_mult} from structure: {original_structure.formula}")
+    check_supercell_site_limit(len(original_structure.sites), [a_mult, b_mult, c_mult])
     supercell_structure = original_structure.copy()
     supercell_structure.make_supercell([a_mult, b_mult, c_mult])
     logger.info(f"✅ SUPERCELL: Supercell created - Formula: {supercell_structure.formula}, Sites: {len(supercell_structure.sites)}")
@@ -1433,9 +1707,14 @@ async def create_supercell(data: dict):
         
         if not crystal_data:
             raise HTTPException(status_code=400, detail="Crystal data is required")
-        if not session_id:
-            raise HTTPException(status_code=400, detail="Session ID is required")
-        
+        # session_id is optional here (unlike every other session-scoped
+        # endpoint): this is the one call that may be minting a brand new
+        # session. A missing/unrecognized value causes
+        # session_manager.create_session() below to mint a fresh,
+        # server-issued id instead of trusting a client-chosen one -- see
+        # its docstring. The response always reports the id actually used
+        # so the client can adopt it.
+
         # Validate supercell size
         supercell_size = validate_supercell_size(supercell_size_raw)
         
@@ -1452,15 +1731,18 @@ async def create_supercell(data: dict):
         supercell_formula = calculate_supercell_formula(original_formula, scaling_factor)
         
         # Generate actual pymatgen Structure for 3D visualization
+        server_session_id = None
         try:
             filename = crystal_data.get("filename", "unknown.cif")
             original_structure, supercell_structure = await asyncio.to_thread(
                 _load_and_build_supercell, crystal_data, filename, a_mult, b_mult, c_mult
             )
 
-            # Create or update session with structures
-            session_manager.create_session(session_id, filename, original_structure)
-            session_manager.update_structure(session_id, supercell_structure,
+            # Create or update session with structures. server_session_id is
+            # the id actually stored under (see create_session's docstring);
+            # it may differ from the request's session_id.
+            server_session_id = session_manager.create_session(session_id, filename, original_structure)
+            session_manager.update_structure(server_session_id, supercell_structure,
                                            operations=[], supercell_size=supercell_size)
 
             # Get structure dictionary for CIF generation (CPU-bound — offload)
@@ -1505,6 +1787,11 @@ async def create_supercell(data: dict):
 
         return {
             "status": "supercell_created",
+            # Authoritative session id: the client must adopt this value
+            # (it may differ from the session_id sent in the request --
+            # see SessionManager.create_session) for every subsequent
+            # session-scoped call.
+            "session_id": server_session_id,
             "original_data": crystal_data,
             "supercell_info": supercell_info,
             "structure_dict": structure_dict,  # Add structure_dict for 3D visualization
@@ -1514,7 +1801,8 @@ async def create_supercell(data: dict):
         # Re-raise HTTPExceptions without modification
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error creating supercell: {str(e)}")
+        logger.error(f"Error creating supercell: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.post("/api/get-element-labels")
@@ -1552,7 +1840,7 @@ async def get_element_labels(data: dict):
         raise
     except Exception as e:
         logger.error(f"Error getting element labels: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error getting element labels: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.get("/api/chgnet-elements")
@@ -1590,6 +1878,7 @@ async def generate_modified_structure_cif(request: dict):
 
         if not filename:
             raise HTTPException(status_code=400, detail="Filename is required")
+        filename = sanitize_display_filename(filename)
         supercell_size = validate_supercell_size(supercell_size)
 
         logger.info(f"Generating modified structure CIF for {filename}")
@@ -1674,6 +1963,57 @@ async def generate_modified_structure_cif(request: dict):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=error_msg)
 
+def _resolve_and_expand_supercell_direct(session_structure: Optional[Structure],
+                                          filename: str,
+                                          supercell_size: List[int]) -> Tuple[Structure, str]:
+    """
+    CPU-bound: resolve the base structure (an already-loaded session
+    structure, or by parsing a sample CIF file), enforce the total-site
+    limit, then build the supercell and render its CIF text.
+    Call via asyncio.to_thread.
+    """
+    from pymatgen.io.cif import CifParser, CifWriter
+
+    original_structure = session_structure
+
+    # Method 2: Try to load from CIF file (for sample files)
+    if original_structure is None:
+        # Secure path validation (supports subdirectories)
+        try:
+            validated_filename = safe_path(filename)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid filename: {e}")
+        cif_path = SAMPLE_CIF_DIR / validated_filename
+        if cif_path.exists():
+            logger.debug(f"Reading CIF file: {cif_path}")
+            parser = CifParser(str(cif_path))
+            structures = parser.get_structures(primitive=False)  # Keep original lattice - don't convert to primitive
+            if structures:
+                original_structure = structures[0]
+                logger.info(f"Loaded structure from sample CIF file: {filename}")
+
+    if not original_structure:
+        raise HTTPException(status_code=404, detail=f"CIF file not found: {filename}")
+
+    logger.info(f"Original structure loaded: {original_structure.formula}")
+
+    # Create supercell
+    check_supercell_site_limit(len(original_structure.sites), supercell_size)
+    supercell_structure = original_structure.copy()
+    supercell_structure.make_supercell(supercell_size)
+
+    logger.info(f"Supercell created: {supercell_structure.formula}")
+    logger.info(f"Number of sites: {len(supercell_structure.sites)}")
+
+    # Generate CIF using pymatgen CifWriter
+    cif_writer = CifWriter(
+        supercell_structure,
+        write_magmoms=False,
+        significant_figures=6
+    )
+
+    return supercell_structure, str(cif_writer)
+
 @app.post("/api/generate-supercell-cif-direct")
 async def generate_supercell_cif_direct(request: dict):
     """
@@ -1683,65 +2023,34 @@ async def generate_supercell_cif_direct(request: dict):
     try:
         # Extract request parameters
         filename = request.get("filename")
-        supercell_size = request.get("supercell_size", [1, 1, 1])
+        supercell_size_raw = request.get("supercell_size", [1, 1, 1])
         session_id = request.get("session_id")
-        
+
         if not filename:
             raise HTTPException(status_code=400, detail="Filename is required")
-        
+        filename = sanitize_display_filename(filename)
+        supercell_size = validate_supercell_size(supercell_size_raw)
+
         logger.info(f"Generating supercell CIF for {filename} with size {supercell_size}")
-        
-        original_structure = None
-        
-        # Method 1: Try to get structure from session (for uploaded files)
+
+        # Method 1: Try to get structure from session (for uploaded files).
+        # This is a cheap dict lookup, so it stays on the event loop; the
+        # CPU-bound CIF parsing / make_supercell / CifWriter work below is
+        # offloaded to a thread.
+        session_structure = None
         if session_id:
             try:
                 session_info = session_manager.get_session_info(session_id)
                 if session_info and 'original_structure' in session_info:
-                    original_structure = session_info['original_structure']
+                    session_structure = session_info['original_structure']
                     logger.info(f"Loaded structure from session for uploaded file: {filename}")
             except Exception as e:
                 logger.warning(f"Could not load structure from session: {e}")
-        
-        # Method 2: Try to load from CIF file (for sample files)
-        if original_structure is None:
-            # Secure path validation (supports subdirectories)
-            try:
-                validated_filename = safe_path(filename)
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=f"Invalid filename: {e}")
-            cif_path = SAMPLE_CIF_DIR / validated_filename
-            if cif_path.exists():
-                logger.debug(f"Reading CIF file: {cif_path}")
-                from pymatgen.io.cif import CifParser
-                parser = CifParser(str(cif_path))
-                structures = parser.get_structures(primitive=False)  # Keep original lattice - don't convert to primitive
-                if structures:
-                    original_structure = structures[0]
-                    logger.info(f"Loaded structure from sample CIF file: {filename}")
-        
-        if not original_structure:
-            raise HTTPException(status_code=404, detail=f"CIF file not found: {filename}")
-        
-        logger.info(f"Original structure loaded: {original_structure.formula}")
-        
-        # Create supercell
-        supercell_structure = original_structure.copy()
-        supercell_structure.make_supercell(supercell_size)
-        
-        logger.info(f"Supercell created: {supercell_structure.formula}")
-        logger.info(f"Number of sites: {len(supercell_structure.sites)}")
-        
-        # Generate CIF using pymatgen CifWriter
-        from pymatgen.io.cif import CifWriter
-        cif_writer = CifWriter(
-            supercell_structure,
-            write_magmoms=False,
-            significant_figures=6
+
+        supercell_structure, cif_content = await asyncio.to_thread(
+            _resolve_and_expand_supercell_direct, session_structure, filename, supercell_size
         )
-        
-        cif_content = str(cif_writer)
-        
+
         # Add metadata header
         size_str = "x".join(map(str, supercell_size))
         metadata_lines = [
@@ -1770,6 +2079,10 @@ async def generate_supercell_cif_direct(request: dict):
     except HTTPException:
         # Re-raise HTTPExceptions without modification
         raise
+    except ValueError as e:
+        # e.g. validate_supercell_size() rejecting a malformed/oversized
+        # supercell_size -- a client input error, not a server error.
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         error_msg = f"Failed to generate supercell CIF: {str(e)}"
         logger.error(error_msg)
@@ -2177,7 +2490,7 @@ async def chgnet_predict_structure(request: dict):
         logger.error(f"CHGNet prediction error: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"CHGNet prediction failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.post("/api/chgnet-relax")
 async def chgnet_relax_structure(request: dict):
@@ -2453,7 +2766,7 @@ async def chgnet_relax_structure(request: dict):
         logger.error(f"CHGNet relaxation error: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"CHGNet relaxation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.get("/api/relax-progress/{session_id}")
 async def stream_relax_progress(session_id: str):
@@ -2545,7 +2858,7 @@ async def reset_session_structure(request: dict):
         logger.error(f"Session reset error: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to reset session: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.post("/api/generate-relaxed-structure-cif")
@@ -2564,7 +2877,7 @@ async def generate_relaxed_structure_cif(request: dict):
         if not session_info:
             raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
         
-        filename = session_info.get('filename', 'unknown')
+        filename = sanitize_display_filename(session_info.get('filename', 'unknown'))
         logger.info(f"Generating relaxed structure CIF for {filename}")
         
         # Check if relaxed structure exists in session
@@ -2768,7 +3081,7 @@ async def get_insertable_elements(data: dict):
         }
     except Exception as e:
         logger.error(f"Error getting insertable elements: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.post("/api/get-insertion-voids")
 async def get_insertion_voids(data: dict):
@@ -2807,7 +3120,7 @@ async def get_insertion_voids(data: dict):
                 voids = await asyncio.to_thread(find_interstitial_candidates, structure)
             except Exception as e:
                 logger.error(f"Failed to find insertion sites: {e}")
-                raise HTTPException(status_code=400, detail=f"Failed to find insertion voids: {str(e)}")
+                raise HTTPException(status_code=400, detail="Failed to find insertion voids for this structure")
             void_cache.clear()  # only the current structure state is worth keeping
             void_cache[cache_key] = voids
             logger.info(f"Found {len(voids)} potential insertion site(s) for session {session_id[:8]}...")
@@ -2822,7 +3135,7 @@ async def get_insertion_voids(data: dict):
         raise
     except Exception as e:
         logger.error(f"Error getting insertion voids: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.post("/api/evaluate-insertion-energy")
 async def evaluate_insertion_energy(data: dict):
@@ -2837,11 +3150,15 @@ async def evaluate_insertion_energy(data: dict):
         
         if not session_id or not element_symbol or frac_coords is None:
             raise HTTPException(status_code=400, detail="Session ID, element, and coords are required")
-            
+        try:
+            element_symbol = validate_element(element_symbol)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
         structure = session_manager.get_current_structure(session_id)
         if not structure:
             raise HTTPException(status_code=404, detail="Structure not found")
-            
+
         # Create candidate structure
         cand_structure = structure.copy()
         cand_structure.append(element_symbol, frac_coords)
@@ -2870,7 +3187,7 @@ async def evaluate_insertion_energy(data: dict):
         raise
     except Exception as e:
         logger.error(f"Error evaluating insertion energy: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.post("/api/evaluate-insertion-energies")
 async def evaluate_insertion_energies(data: dict):
@@ -2888,6 +3205,10 @@ async def evaluate_insertion_energies(data: dict):
 
         if not session_id or not element_symbol or not sites:
             raise HTTPException(status_code=400, detail="Session ID, element, and sites are required")
+        try:
+            element_symbol = validate_element(element_symbol)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         if not isinstance(sites, list):
             raise HTTPException(status_code=400, detail="sites must be a list")
         if len(sites) > MAX_INSERTION_BATCH:
@@ -2940,7 +3261,7 @@ async def evaluate_insertion_energies(data: dict):
         raise
     except Exception as e:
         logger.error(f"Error evaluating insertion energies: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.post("/api/evaluate-candidate-energies")
 async def evaluate_candidate_energies(data: dict):
@@ -3032,16 +3353,48 @@ async def evaluate_candidate_energies(data: dict):
         raise
     except Exception as e:
         logger.error(f"Error evaluating candidate energies: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 # --- Analytics API Routes ---
 
-@app.get("/analytics", response_class=HTMLResponse)
+def require_analytics_access(request: Request) -> None:
+    """
+    Access gate for the analytics dashboard and its APIs (S-3 in the
+    security review): with no gate at all, anyone who can reach this
+    server could read every visitor's IP/User-Agent history and every
+    uploaded filename/formula via /api/analytics/recent.
+
+    If CRYSTALNEXUS_ANALYTICS_TOKEN is set, a request must present a
+    matching token (X-Analytics-Token header, or a ?token= query
+    parameter for the plain <a href> dashboard link), compared with a
+    constant-time comparison to avoid a timing side channel.
+
+    If it is not set, fail safe by allowing only loopback requests -- the
+    same default posture as HOST (main.py defaults to 127.0.0.1), so a
+    fresh install is never silently open even on a LAN-facing deployment.
+    """
+    if CRYSTALNEXUS_ANALYTICS_TOKEN:
+        supplied = request.headers.get("x-analytics-token") or request.query_params.get("token")
+        if not supplied or not secrets.compare_digest(supplied, CRYSTALNEXUS_ANALYTICS_TOKEN):
+            raise HTTPException(status_code=401, detail="Analytics access requires a valid token")
+        return
+
+    client_host = request.client.host if request.client else None
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "Analytics dashboard is only accessible from localhost "
+                "unless CRYSTALNEXUS_ANALYTICS_TOKEN is set"
+            )
+        )
+
+@app.get("/analytics", response_class=HTMLResponse, dependencies=[Depends(require_analytics_access)])
 async def analytics_dashboard(request: Request):
     """Serve the analytics dashboard page"""
     return templates.TemplateResponse("analytics.html", {"request": request})
 
-@app.get("/api/analytics/summary")
+@app.get("/api/analytics/summary", dependencies=[Depends(require_analytics_access)])
 async def get_analytics_summary():
     """Get summary statistics for dashboard"""
     try:
@@ -3055,7 +3408,7 @@ async def get_analytics_summary():
         logger.error(f"Values to get analytics summary: {e}")
         raise HTTPException(status_code=500, detail="Failed to get analytics summary")
 
-@app.get("/api/analytics/ranking")
+@app.get("/api/analytics/ranking", dependencies=[Depends(require_analytics_access)])
 async def get_analytics_ranking():
     """Get popular samples ranking"""
     try:
@@ -3067,7 +3420,7 @@ async def get_analytics_ranking():
         logger.error(f"Failed to get analytics ranking: {e}")
         raise HTTPException(status_code=500, detail="Failed to get analytics ranking")
 
-@app.get("/api/analytics/recent")
+@app.get("/api/analytics/recent", dependencies=[Depends(require_analytics_access)])
 async def get_analytics_recent():
     """Get recent activity log"""
     try:

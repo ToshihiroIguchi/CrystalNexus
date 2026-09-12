@@ -31,6 +31,11 @@ venv_*/
 env/
 ENV/
 
+# Local environment overrides (.env.example is the tracked template)
+.env
+.env.*
+!.env.example
+
 # IDE
 .vscode/
 .idea/
