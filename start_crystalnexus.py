@@ -5,7 +5,6 @@ Checks if backend is running and starts it if necessary
 Compatible with main.py environment configuration
 """
 
-import requests
 import subprocess
 import time
 import sys
@@ -15,6 +14,41 @@ import threading
 import queue
 import signal
 from pathlib import Path
+
+
+def _relaunch_in_venv():
+    """Re-exec this script under the project's local venv Python if it isn't already running there.
+
+    Must run before `import requests` below, since a non-venv interpreter may not have
+    third-party dependencies installed.
+    """
+    script_dir = Path(__file__).resolve().parent
+    if platform.system() == "Windows":
+        venv_python = script_dir / "venv" / "Scripts" / "python.exe"
+    else:
+        venv_python = script_dir / "venv" / "bin" / "python"
+
+    if not venv_python.exists():
+        return
+
+    try:
+        already_in_venv = os.path.samefile(str(venv_python), sys.executable)
+    except OSError:
+        already_in_venv = False
+
+    if already_in_venv:
+        return
+
+    print(f"Activating local virtual environment: {venv_python}")
+    try:
+        os.execv(str(venv_python), [str(venv_python), str(Path(__file__).resolve()), *sys.argv[1:]])
+    except Exception as e:
+        print(f"Warning: failed to relaunch inside venv ({e}); continuing with current interpreter.")
+
+
+_relaunch_in_venv()
+
+import requests
 
 # Environment-aware configuration (same as main.py)
 # Default to loopback; set CRYSTALNEXUS_HOST=0.0.0.0 to expose on the network
