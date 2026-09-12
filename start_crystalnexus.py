@@ -5,7 +5,9 @@ Checks if backend is running and starts it if necessary
 Compatible with main.py environment configuration
 """
 
+import argparse
 import requests
+import socket
 import subprocess
 import time
 import sys
@@ -16,10 +18,21 @@ import queue
 import signal
 from pathlib import Path
 
+def parse_args():
+    """CLI flags for convenient LAN exposure without having to export env vars first."""
+    parser = argparse.ArgumentParser(description="CrystalNexus startup script")
+    parser.add_argument('--lan', action='store_true', help="Shorthand for --host 0.0.0.0 (expose on the local network)")
+    parser.add_argument('--host', default=None, help="Host to bind to (default: CRYSTALNEXUS_HOST env var or 127.0.0.1)")
+    parser.add_argument('--port', type=int, default=None, help="Port to bind to (default: CRYSTALNEXUS_PORT env var or 8080)")
+    return parser.parse_args()
+
+_args = parse_args()
+
 # Environment-aware configuration (same as main.py)
-# Default to loopback; set CRYSTALNEXUS_HOST=0.0.0.0 to expose on the network
-HOST = os.getenv('CRYSTALNEXUS_HOST', '127.0.0.1')
-PORT = int(os.getenv('CRYSTALNEXUS_PORT', '8080'))
+# CLI args take precedence over env vars so a one-off `--lan` run doesn't require touching env state
+# Default to loopback; pass --lan/--host 0.0.0.0 or set CRYSTALNEXUS_HOST=0.0.0.0 to expose on the network
+HOST = '0.0.0.0' if _args.lan else (_args.host or os.getenv('CRYSTALNEXUS_HOST', '127.0.0.1'))
+PORT = _args.port if _args.port is not None else int(os.getenv('CRYSTALNEXUS_PORT', '8080'))
 DEBUG = os.getenv('CRYSTALNEXUS_DEBUG', 'False').lower() == 'true'
 
 HEALTH_URL = f"http://localhost:{PORT}/health"
@@ -28,6 +41,24 @@ MAX_STARTUP_WAIT = 30  # seconds
 # Global shutdown flag
 shutdown_requested = False
 server_process = None
+
+def get_lan_ips():
+    """Best-effort LAN IP discovery; returns [] on any failure instead of raising."""
+    ips = set()
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(('8.8.8.8', 80))  # no packet actually sent; just picks the outbound interface
+            ips.add(s.getsockname()[0])
+    except OSError:
+        pass
+    try:
+        _, _, addrs = socket.gethostbyname_ex(socket.gethostname())
+        for ip in addrs:
+            if not ip.startswith('127.') and not ip.startswith('169.254.'):
+                ips.add(ip)
+    except OSError:
+        pass
+    return sorted(ips)
 
 def check_backend_status():
     """Check if the backend is already running"""
@@ -287,7 +318,12 @@ def main():
     print("CrystalNexus is ready!")
     print(f"Open your browser and go to: http://localhost:{PORT}")
     if HOST == "0.0.0.0":
-        print(f"Network access: http://<your-ip>:{PORT}")
+        lan_ips = get_lan_ips()
+        if lan_ips:
+            for ip in lan_ips:
+                print(f"Network access: http://{ip}:{PORT}")
+        else:
+            print(f"Network access: http://<your-lan-ip>:{PORT}")
     print("Press Ctrl+C to stop the server")
     print("=" * 40)
     

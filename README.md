@@ -115,7 +115,12 @@ python start_crystalnexus.py
     *   It monitors the server health continuously.
     *   Once ready, it will display: `CrystalNexus is ready! URL: http://localhost:8080`
 
-*Note: The server binds to `127.0.0.1` (loopback) by default, so it is only reachable from your own machine. To expose it on your network, set the `CRYSTALNEXUS_HOST` environment variable (e.g., `CRYSTALNEXUS_HOST=0.0.0.0`). The port can likewise be changed with `CRYSTALNEXUS_PORT`.*
+*Note: The server binds to `127.0.0.1` (loopback) by default, so it is only reachable from your own machine. To expose it on your network, either set the `CRYSTALNEXUS_HOST` environment variable (e.g., `CRYSTALNEXUS_HOST=0.0.0.0`), or pass a CLI flag to `start_crystalnexus.py`:*
+```bash
+python start_crystalnexus.py --lan          # shorthand for --host 0.0.0.0
+python start_crystalnexus.py --host 0.0.0.0 --port 9000
+```
+*CLI flags take precedence over the environment variables. The port can likewise be changed with `CRYSTALNEXUS_PORT` or `--port`. When bound to `0.0.0.0`, the script prints the LAN IP address(es) to browse to from another device on the network.*
 
 ### Workflow Guide
 
