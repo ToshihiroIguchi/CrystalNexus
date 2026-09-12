@@ -371,7 +371,7 @@
             CrystalNexus
         </h1>
         <div class="header-controls">
-            <a href="/static/user_guide.html" target="_blank" class="help-btn"
+            <a href="/static/user_guide.html" target="_blank" rel="noopener noreferrer" class="help-btn"
                 title="CrystalNexus User Guide - How to use this application">
                 📖 User Guide
             </a>
@@ -428,6 +428,14 @@
                                         <label for="max-steps-input">Max steps:</label>
                                         <input type="number" id="max-steps-input" value="100" min="10" max="500"
                                             step="10">
+                                    </div>
+                                    <div class="setting-group">
+                                        <label for="optimizer-input">Optimizer:</label>
+                                        <select id="optimizer-input">
+                                            <option value="LBFGS" selected>LBFGS (default, usually fastest)</option>
+                                            <option value="FIRE">FIRE (more robust on difficult cells)</option>
+                                            <option value="BFGS">BFGS</option>
+                                        </select>
                                     </div>
                                 </div>
                             </details>
@@ -645,9 +653,16 @@
         // Atomic operations history for complete 3D visualization
         window.atomicOperations = [];
 
-        // Generate session ID
-        window.sessionId = 'session-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
-        dlog('Session ID:', window.sessionId);
+        // Session id: server-issued only. The backend mints a
+        // cryptographically random id the first time /api/create-supercell
+        // runs (see SessionManager.create_session in main.py) and returns
+        // it in the response; createSupercell() adopts it below. A
+        // client-generated id here would be guessable/brute-forceable and
+        // every session-scoped endpoint trusts session_id as its sole
+        // access-control check, so this must stay unset until the server
+        // hands one out.
+        window.sessionId = null;
+        dlog('Session ID: (not yet assigned -- awaiting first create-supercell response)');
 
         // Unified status display system
         window.displayStatus = {
@@ -1091,11 +1106,11 @@
             infoContent.innerHTML = `
                 <div style="margin-bottom: 15px;">
                     <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Basic Structure Information:</div>
-                    <div><strong>Formula:</strong> ${data.formula}<button class="copy-btn" id="copy-formula" onclick="copyFormula('copy-formula')" title="Copy: Formula">📋</button></div>
+                    <div><strong>Formula:</strong> ${escapeHtml(data.formula)}<button class="copy-btn" id="copy-formula" onclick="copyFormula('copy-formula')" title="Copy: Formula">📋</button></div>
                     <div><strong>Number of atoms:</strong> ${data.num_atoms}</div>
                     <div><strong>Density:</strong> ${data.density.toFixed(4)} g/cm³</div>
                 </div>
-                
+
                 <div style="margin-bottom: 15px;">
                     <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Lattice Parameters:</div>
                     <div style="margin-left: 10px;">
@@ -1108,13 +1123,13 @@
                         Volume = ${data.volume.toFixed(5)} Å³
                     </div>
                 </div>
-                
+
                 <div style="margin-bottom: 15px;">
                     <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Symmetry Information (original unit cell):</div>
-                    <div><strong>International notation:</strong> ${data.space_group}</div>
+                    <div><strong>International notation:</strong> ${escapeHtml(data.space_group)}</div>
                     <div><strong>Space group number:</strong> ${data.space_group_number}</div>
-                    <div><strong>Point group:</strong> ${data.point_group}</div>
-                    <div><strong>Crystal system:</strong> ${data.crystal_system}</div>
+                    <div><strong>Point group:</strong> ${escapeHtml(data.point_group)}</div>
+                    <div><strong>Crystal system:</strong> ${escapeHtml(data.crystal_system)}</div>
                 </div>
             `;
 
@@ -1573,7 +1588,7 @@
                     siteEnergies.forEach((energy, i) => {
                         // Use current labels to reflect any element substitutions
                         const atomLabel = window.currentLabels && window.currentLabels[i] ? window.currentLabels[i] : `Site ${i + 1}`;
-                        detailsHTML += `<tr><td>${atomLabel}:</td><td class="site-energy">${energy.toFixed(6)} eV</td></tr>`;
+                        detailsHTML += `<tr><td>${escapeHtml(atomLabel)}:</td><td class="site-energy">${energy.toFixed(6)} eV</td></tr>`;
                     });
 
                     // Add verification
@@ -2344,7 +2359,7 @@ Crystal system: ${data.crystal_system}`;
                 magmoms.forEach((mag, i) => {
                     // Use current labels to reflect any element substitutions
                     const atomLabel = window.currentLabels && window.currentLabels[i] ? window.currentLabels[i] : `Site ${i + 1}`;
-                    tableHTML += `<tr><td>${atomLabel}:</td><td class="magnetic-moment">${mag.toFixed(3)} µB</td></tr>`;
+                    tableHTML += `<tr><td>${escapeHtml(atomLabel)}:</td><td class="magnetic-moment">${mag.toFixed(3)} µB</td></tr>`;
                 });
                 magneticTable.innerHTML = tableHTML;
 
@@ -2372,51 +2387,105 @@ Crystal system: ${data.crystal_system}`;
 
                 const fmax = parseFloat(document.getElementById('fmax-input').value);
                 const maxSteps = parseInt(document.getElementById('max-steps-input').value);
+                const optimizer = document.getElementById('optimizer-input').value;
 
                 const requestData = {
                     session_id: window.sessionId,
                     fmax: fmax,
-                    max_steps: maxSteps
+                    max_steps: maxSteps,
+                    optimizer: optimizer
                 };
 
                 dlog('🔬 Starting CHGNet analysis:', requestData);
 
-                const response = await fetch('/api/chgnet-relax', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(requestData)
-                });
-
-                if (!response.ok) {
-                    let errorMessage = 'Error occurred during CHGNet analysis.';
+                let maxProgressFraction = 0;
+                const progressSource = new EventSource('/api/relax-progress/' + window.sessionId);
+                progressSource.onmessage = (event) => {
                     try {
-                        const errorData = await response.json();
-                        if (errorData.detail) {
-                            errorMessage = errorData.detail;
+                        const state = JSON.parse(event.data);
+                        if (state.done) {
+                            return;
+                        }
+                        showCHGNetStatus(
+                            `Step ${state.step} / ${state.max_steps} — max force ${state.max_force_eV_per_A.toFixed(4)} eV/Å (target ${state.fmax})`,
+                            true
+                        );
+
+                        const stepFraction = state.max_steps > 0 ? state.step / state.max_steps : 0;
+                        let forceFraction = 0;
+                        if (state.max_force_eV_per_A > state.fmax) {
+                            // log-scale: how far we've come from the (unknown) initial force
+                            // towards fmax. We don't know the true initial force here, so
+                            // approximate progress from the step fraction and force ratio
+                            // together and just take whichever is more optimistic that step.
+                            forceFraction = 1 - (Math.log(state.max_force_eV_per_A) / Math.log(state.fmax));
+                        } else {
+                            forceFraction = 1;
+                        }
+                        maxProgressFraction = Math.max(maxProgressFraction, stepFraction, Math.min(1, Math.max(0, forceFraction)));
+
+                        const progressFillEl = document.querySelector('#progress-bar .progress-fill');
+                        if (progressFillEl) {
+                            progressFillEl.style.width = `${(maxProgressFraction * 100).toFixed(0)}%`;
                         }
                     } catch (e) {
-                        // If we can't parse JSON, provide user-friendly message
-                        if (response.status === 400) {
-                            errorMessage = 'Invalid structure data. Fully occupied crystal structure required.';
-                        } else if (response.status === 500) {
-                            errorMessage = 'Server error occurred. Please try again later.';
-                        }
+                        console.warn('Failed to parse relax-progress event:', e);
                     }
-                    throw new Error(errorMessage);
+                };
+                progressSource.onerror = () => {
+                    // Transient SSE connection errors are expected (e.g. stream closes
+                    // naturally when relaxation finishes); ignore them.
+                    console.warn('relax-progress EventSource error (ignored)');
+                };
+
+                let data;
+                try {
+                    const response = await fetch('/api/chgnet-relax', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(requestData)
+                    });
+
+                    if (!response.ok) {
+                        let errorMessage = 'Error occurred during CHGNet analysis.';
+                        try {
+                            const errorData = await response.json();
+                            if (errorData.detail) {
+                                errorMessage = errorData.detail;
+                            }
+                        } catch (e) {
+                            // If we can't parse JSON, provide user-friendly message
+                            if (response.status === 400) {
+                                errorMessage = 'Invalid structure data. Fully occupied crystal structure required.';
+                            } else if (response.status === 500) {
+                                errorMessage = 'Server error occurred. Please try again later.';
+                            }
+                        }
+                        throw new Error(errorMessage);
+                    }
+
+                    // Structure calculation phase
+                    setCHGNetButtonState('calculating_structure');
+
+                    data = await response.json();
+                    dlog('✅ CHGNet analysis completed:', data);
+
+                    // Properties calculation phase
+                    setCHGNetButtonState('calculating_properties');
+
+                    displayCHGNetResults(data, true);
+
+                    if (data.relaxation_info?.aborted) {
+                        showNotification('Relaxation hit the time limit; showing the best structure found so far.', 'warning');
+                    } else if (data.relaxation_info?.converged === false && data.relaxation_info?.steps === data.relaxation_info?.max_steps) {
+                        showNotification('Reached the step limit without converging; try increasing Max steps in Advanced Settings.', 'warning');
+                    }
+                } finally {
+                    progressSource.close();
+                    hideCHGNetStatus();
                 }
-
-                // Structure calculation phase
-                setCHGNetButtonState('calculating_structure');
-
-                const data = await response.json();
-                dlog('✅ CHGNet analysis completed:', data);
-
-                // Properties calculation phase
-                setCHGNetButtonState('calculating_properties');
-
-                displayCHGNetResults(data, true);
 
                 // Update structure information with relaxed data
                 if (data.relaxed_structure_info) {
@@ -2470,8 +2539,8 @@ Crystal system: ${data.crystal_system}`;
 
             infoElement.innerHTML = `
                 <div style="margin-bottom: 15px;">
-                    <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Relaxed Supercell Structure Information: <a href="/static/user_guide.html#limitations" target="_blank" title="Important: CHGNet may overestimate lattice constants and underestimate density - Click for details" style="color: #e74c3c; text-decoration: none; margin-left: 5px;">⚠️</a></div>
-                    <div><strong>Formula:</strong> ${relaxedStructureInfo.formula}<button class="copy-btn" id="copy-formula-relaxed" onclick="copyFormula('copy-formula-relaxed')" title="Copy: Formula">📋</button></div>
+                    <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Relaxed Supercell Structure Information: <a href="/static/user_guide.html#limitations" target="_blank" rel="noopener noreferrer" title="Important: CHGNet may overestimate lattice constants and underestimate density - Click for details" style="color: #e74c3c; text-decoration: none; margin-left: 5px;">⚠️</a></div>
+                    <div><strong>Formula:</strong> ${escapeHtml(relaxedStructureInfo.formula)}<button class="copy-btn" id="copy-formula-relaxed" onclick="copyFormula('copy-formula-relaxed')" title="Copy: Formula">📋</button></div>
                     <div><strong>Supercell size:</strong> ${aSize} × ${bSize} × ${cSize}</div>
                     <div><strong>Total atoms:</strong> ${relaxedStructureInfo.num_sites}</div>
                     <div><strong>Density:</strong> ${relaxedStructureInfo.density.toFixed(4)} g/cm³</div>
@@ -2667,6 +2736,15 @@ Crystal system: ${data.crystal_system}`;
 
                 const result = await response.json();
 
+                // Adopt the server-assigned session id (see main.py's
+                // SessionManager.create_session): it may differ from the
+                // one this request sent, and is the only id every later
+                // session-scoped call may use.
+                if (result.session_id) {
+                    window.sessionId = result.session_id;
+                    dlog('Session ID assigned:', window.sessionId);
+                }
+
                 // Store supercell data
                 supercellData = result;
 
@@ -2802,7 +2880,7 @@ Crystal system: ${data.crystal_system}`;
             infoElement.innerHTML = `
                 <div style="margin-bottom: 15px;">
                     <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Supercell Structure Information:</div>
-                    <div><strong>Formula:</strong> ${supercell.formula}<button class="copy-btn" id="copy-formula-supercell" onclick="copyFormula('copy-formula-supercell')" title="Copy: Formula">📋</button></div>
+                    <div><strong>Formula:</strong> ${escapeHtml(supercell.formula)}<button class="copy-btn" id="copy-formula-supercell" onclick="copyFormula('copy-formula-supercell')" title="Copy: Formula">📋</button></div>
                     <div><strong>Supercell size:</strong> ${aSize} × ${bSize} × ${cSize}</div>
                     <div><strong>Total atoms:</strong> ${supercell.num_sites}</div>
                     <div><strong>Density:</strong> ${supercellDensity.toFixed(4)} g/cm³</div>
@@ -3420,7 +3498,7 @@ Crystal system: ${data.crystal_system}`;
                     dropdown.disabled = false;
                     showNotification(`Found and evaluated ${window.insertionCandidates.length} potential sites.`, 'success');
                 } else {
-                    dropdown.innerHTML = `<option value="">${result.message || 'Evaluation failed'}</option>`;
+                    dropdown.innerHTML = `<option value="">${escapeHtml(result.message || 'Evaluation failed')}</option>`;
                     if (result.message && !result.message.includes('cancelled')) {
                         showNotification(result.message, 'error');
                     }
@@ -4030,7 +4108,7 @@ Crystal system: ${data.crystal_system}`;
             // Add blue color and spinning icon if processing/progress is shown
             if (showProgress) {
                 statusText.style.color = '#3498db';
-                statusText.innerHTML = `<span class="loading-spinner" style="display: inline-block; width: 12px; height: 12px; border: 2px solid #3498db; border-radius: 50%; border-top-color: transparent; animation: spin 1s linear infinite; margin-right: 8px; vertical-align: middle;"></span>${message}`;
+                statusText.innerHTML = `<span class="loading-spinner" style="display: inline-block; width: 12px; height: 12px; border: 2px solid #3498db; border-radius: 50%; border-top-color: transparent; animation: spin 1s linear infinite; margin-right: 8px; vertical-align: middle;"></span>${escapeHtml(message)}`;
             } else {
                 statusText.style.color = '#2c3e50';
                 statusText.textContent = message;
@@ -4545,7 +4623,7 @@ Crystal system: ${data.crystal_system}`;
                         <div class="failed-calculations">
                             <h5>Failed Calculations (${failed.length}):</h5>
                             <ul>
-                                ${failed.map(f => `<li><strong>${f.atom}:</strong> ${f.finalError}</li>`).join('')}
+                                ${failed.map(f => `<li><strong>${escapeHtml(f.atom)}:</strong> ${escapeHtml(f.finalError)}</li>`).join('')}
                             </ul>
                         </div>
                     ` : ''}
@@ -5731,6 +5809,7 @@ Crystal system: ${data.crystal_system}`;
             settingsEl.innerHTML = `
                 <div>Force Tolerance: ${data.relaxation_info?.fmax || 'N/A'} eV/Å</div>
                 <div>Max Steps: ${data.relaxation_info?.max_steps || 'N/A'}</div>
+                <div>Optimizer: ${data.relaxation_info?.optimizer || 'N/A'}</div>
                 <div>Model: CHGNet v${data.model_info?.version || '0.3.0'}</div>
                 <div>Device: ${data.model_info?.device || 'CPU'}</div>
             `;
@@ -5844,7 +5923,7 @@ Crystal system: ${data.crystal_system}`;
 
                 const row = document.createElement('tr');
                 row.innerHTML = `
-                    <td>${atomLabel}</td>
+                    <td>${escapeHtml(atomLabel)}</td>
                     <td class="site-energy">${siteEnergy}</td>
                     <td class="magnetic-moment">${magmom}</td>
                     <td>${fx}</td>
@@ -6626,7 +6705,7 @@ Crystal system: ${data.crystal_system}`;
                             'Content-Type': 'application/json',
                         },
                         body: JSON.stringify({
-                            session_id: window.sessionId || `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+                            session_id: window.sessionId
                         })
                     });
                     dlog('Response status:', response.status);
@@ -7331,18 +7410,18 @@ Crystal system: ${data.crystal_system}`;
                         potential for charge-informed atomistic modelling. <em>Nat. Mach. Intell.</em>
                         <strong>5</strong>, 1031–1041 (2023).
                     </p>
-                    <p>DOI: <a href="https://doi.org/10.1038/s42256-023-00716-3" target="_blank"
+                    <p>DOI: <a href="https://doi.org/10.1038/s42256-023-00716-3" target="_blank" rel="noopener noreferrer"
                             style="color: #2980b9;">10.1038/s42256-023-00716-3</a></p>
                 </div>
             </div>
 
             <div class="chgnet-links">
                 <h4>External Resources</h4>
-                <a href="https://www.nature.com/articles/s42256-023-00716-3" target="_blank">Nature Machine Intelligence
+                <a href="https://www.nature.com/articles/s42256-023-00716-3" target="_blank" rel="noopener noreferrer">Nature Machine Intelligence
                     Paper</a>
-                <a href="https://github.com/CederGroupHub/chgnet" target="_blank">GitHub Repository</a>
-                <a href="https://materialsproject.org/" target="_blank">Materials Project Database</a>
-                <a href="https://chgnet.lbl.gov/" target="_blank">Official Documentation</a>
+                <a href="https://github.com/CederGroupHub/chgnet" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
+                <a href="https://materialsproject.org/" target="_blank" rel="noopener noreferrer">Materials Project Database</a>
+                <a href="https://chgnet.lbl.gov/" target="_blank" rel="noopener noreferrer">Official Documentation</a>
             </div>
         </div>
     </div>

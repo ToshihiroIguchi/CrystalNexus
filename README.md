@@ -188,7 +188,8 @@ python -m pytest tests/ -m "not slow"
 *   **Correction**: This usually means a missing system dependency. Install the [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170).
 
 ### Q: Performance is slow
-*   **Correction**: Computing relaxation for large supercells (100+ atoms) can be slow because CrystalNexus is configured to run on **CPU only** to ensure broad compatibility and stability. Please be patient when analyzing complex structures or large supercells.
+*   **Correction**: Computing relaxation for large supercells (100+ atoms) can be slow because CrystalNexus is configured to run on **CPU only** to ensure broad compatibility and stability. The relaxation algorithm was changed from FIRE to LBFGS, which improves performance, but large structures on CPU are still inherently slower than on GPU. Please be patient when analyzing complex structures or large supercells.
+*   **Guardrails**: To keep long-running relaxations manageable, a timeout returns the best structure found so far if relaxation does not converge in time, and limits on atom count, step count, and force tolerance reject requests that would be too large or resource-intensive to process.
 
 ## Technology Stack
 

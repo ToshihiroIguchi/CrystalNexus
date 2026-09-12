@@ -2,7 +2,9 @@ import os
 import asyncio
 import functools
 import itertools
+import json
 import logging
+import secrets
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -11,10 +13,10 @@ from typing import List, Dict, Optional, Set, Tuple
 import numpy as np
 from scipy.spatial import Voronoi
 
-from fastapi import FastAPI, Request, HTTPException, File, UploadFile
+from fastapi import FastAPI, Request, HTTPException, File, UploadFile, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 import uvicorn
 
 from pymatgen.core import Structure, Element, PeriodicSite
@@ -168,6 +170,10 @@ def _get_fallback_elements() -> Set[str]:
 # Memory management settings
 SESSION_CLEANUP_HOURS = int(os.getenv('SESSION_CLEANUP_HOURS', '6'))
 PERIODIC_CLEANUP_INTERVAL = int(os.getenv('PERIODIC_CLEANUP_INTERVAL', '1800'))  # 30 minutes
+# How long to keep analytics_db rows (visitor IP/User-Agent history,
+# uploaded filenames/formulas). Unlike uploads/ (purged above after
+# SESSION_CLEANUP_HOURS), nothing previously bounded this at all.
+ANALYTICS_RETENTION_DAYS = int(os.getenv('ANALYTICS_RETENTION_DAYS', '90'))
 CHGNET_BATCH_SIZE = int(os.getenv('CHGNET_BATCH_SIZE', '4'))
 
 # Atom insertion settings
@@ -181,12 +187,35 @@ MAX_CANDIDATE_BATCH = int(os.getenv('MAX_CANDIDATE_BATCH', '8'))
 MAX_ATOMIC_NUMBER = int(os.getenv('MAX_ATOMIC_NUMBER', '94'))
 MIN_SUPPORTED_ELEMENTS = int(os.getenv('MIN_SUPPORTED_ELEMENTS', '50'))
 
+# CHGNet relaxation settings
+# LBFGS reaches the same or a lower energy minimum than FIRE on every
+# structure we benchmarked, and needs fewer force evaluations in most
+# cases (BaTiO3 2x2x2 + 1 substitution: 35 frames/24.6s with FIRE vs
+# 19 frames/10.1s with LBFGS, final energy -337.8715 vs -337.8779 eV).
+# Set CHGNET_RELAX_OPTIMIZER=FIRE to restore the previous default.
+RELAX_OPTIMIZER = os.getenv('CHGNET_RELAX_OPTIMIZER', 'LBFGS')
+VALID_RELAX_OPTIMIZERS = ('LBFGS', 'FIRE', 'BFGS', 'LBFGSLineSearch')
+MAX_RELAX_STEPS = int(os.getenv('MAX_RELAX_STEPS', '500'))
+MIN_RELAX_FMAX = float(os.getenv('MIN_RELAX_FMAX', '0.01'))
+MAX_RELAX_FMAX = float(os.getenv('MAX_RELAX_FMAX', '1.0'))
+MAX_RELAX_ATOMS = int(os.getenv('MAX_RELAX_ATOMS', '400'))
+RELAX_TIMEOUT_SECONDS = float(os.getenv('RELAX_TIMEOUT_SECONDS', '600'))
+
 # Initialize once as global variable
 ALLOWED_ELEMENTS: Set[str] = get_chgnet_supported_elements()
 
 # Single worker: serializes CHGNet access (model is not thread-safe) while
 # keeping inference off the event loop.
 _inference_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="chgnet")
+
+# Relaxation can run for minutes; block a second concurrent relaxation
+# immediately with a clear error instead of silently queuing behind the
+# only CHGNet worker thread (which would also starve Auto-mode screening).
+_relax_semaphore = asyncio.Semaphore(1)
+
+# session_id -> {"state": {...}} published by RelaxationWatcher from the
+# executor thread and polled/streamed by GET /api/relax-progress/{id}.
+_relax_progress: Dict[str, dict] = {}
 
 # CHGNet Model Manager (Singleton Pattern)
 class CHGNetModelManager:
@@ -197,15 +226,21 @@ class CHGNetModelManager:
     """
     _instance: Optional['CHGNetModelManager'] = None
     _model = None
-    _relaxer = None
+    _calculator = None
+    _device = "cpu"
     _lock = asyncio.Lock()
     batch_size = CHGNET_BATCH_SIZE  # Configurable batch size for CPU processing
-    
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
-    
+
+    @property
+    def device(self) -> str:
+        """The device CHGNet is actually running on (always 'cpu' today)."""
+        return self._device
+
     async def get_model(self):
         """Get CHGNet model instance (lazy loading)"""
         if self._model is None:
@@ -213,33 +248,40 @@ class CHGNetModelManager:
                 if self._model is None:  # Double-check locking
                     await self._load_model()
         return self._model
-    
-    async def get_relaxer(self):
-        """Get StructOptimizer instance (lazy loading)"""
-        if self._relaxer is None:
+
+    async def get_calculator(self):
+        """Get the shared CHGNetCalculator instance (lazy loading).
+
+        A single calculator is reused across every optimizer choice --
+        switching optimizers (main.py run_relaxation()) is just a different
+        ASE Optimizer wrapped around the same calculator, so there is no
+        need to keep one StructOptimizer per optimizer name.
+        """
+        # Resolved (and, on a cold start, loaded) BEFORE this method takes
+        # its own lock below: get_model() acquires the same self._lock
+        # internally, and asyncio.Lock is not reentrant, so calling it from
+        # inside an already-held `async with self._lock` block here would
+        # deadlock the very first request in a fresh process.
+        model = await self.get_model()
+        if self._calculator is None:
             async with self._lock:
-                if self._relaxer is None:  # Double-check locking
-                    model = await self.get_model()
-                    from chgnet.model import StructOptimizer
-                    self._relaxer = StructOptimizer(model=model, use_device="cpu", optimizer_class="FIRE")
-                    logger.info("CHGNet StructOptimizer created and cached")
-        return self._relaxer
-    
+                if self._calculator is None:  # Double-check locking
+                    from chgnet.model.dynamics import CHGNetCalculator
+                    self._calculator = CHGNetCalculator(model=model, use_device=self._device)
+                    logger.info("CHGNet calculator created and cached")
+        return self._calculator
+
     async def _load_model(self):
         """Internal method to load CHGNet model"""
         if not CHGNET_AVAILABLE:
             raise RuntimeError("CHGNet not available")
-        
+
         try:
             from chgnet.model.model import CHGNet
-            
-            if WINDOWS_PLATFORM:
-                self._model = CHGNet.load(use_device="cpu", verbose=False)
-                logger.info("CHGNet model loaded with Windows compatibility settings (cached)")
-            else:
-                self._model = CHGNet.load(use_device="cpu", verbose=False)
-                logger.info("CHGNet model loaded and cached")
-                
+
+            self._model = CHGNet.load(use_device=self._device, verbose=False)
+            logger.info(f"CHGNet model loaded and cached (device={self._device})")
+
         except Exception as load_error:
             if WINDOWS_PLATFORM and "Buffer dtype mismatch" in str(load_error):
                 raise RuntimeError("Windows CHGNet compatibility issue. Solution: Install Microsoft Visual C++ Redistributable")
@@ -524,6 +566,9 @@ async def periodic_cleanup_task():
                 if removed_files > 0:
                     logger.info(f"Cleaned up {removed_files} uploaded file(s) older than {SESSION_CLEANUP_HOURS}h")
 
+            # Purge analytics rows past the retention window (sqlite write, offload)
+            await asyncio.to_thread(analytics_db.purge_old_data, ANALYTICS_RETENTION_DAYS)
+
             # Log session statistics and perform garbage collection
             log_session_statistics()
             
@@ -546,9 +591,14 @@ def safe_filename(filename: str) -> str:
     
     # Remove path traversal characters
     safe_name = os.path.basename(filename).replace('..', '')
-    
-    # Check dangerous characters
-    if not safe_name or '/' in safe_name or '\\' in safe_name:
+
+    # Check dangerous characters. Control characters (CR/LF in particular)
+    # are rejected here too: this name is later echoed back into a
+    # Content-Disposition header and a CIF comment line (see
+    # sanitize_display_filename), and neither the '/'/'\\' checks below
+    # nor endswith('.cif') would otherwise catch a name like
+    # "a\r\nX-Injected: 1.cif".
+    if not safe_name or '/' in safe_name or '\\' in safe_name or not safe_name.isprintable():
         raise ValueError("Invalid filename")
     
     # Reject non-CIF files
@@ -582,19 +632,105 @@ def safe_path(filepath: str) -> str:
     # Final file must be CIF format
     if not path_parts[-1].lower().endswith('.cif'):
         raise ValueError("Only CIF files are allowed")
-    
+
     return normalized_path
+
+_MSONABLE_MARKER_KEYS = ("@module", "@class", "@callable", "@bound")
+
+def _reject_msonable_payload(obj, *, depth: int = 0, max_depth: int = 25) -> None:
+    """
+    Recursively reject any nested dict carrying MSONable/MontyDecoder
+    marker keys ("@module"/"@class"/"@callable"/"@bound"), anywhere below
+    the top level of obj.
+
+    Why: pymatgen's Structure.from_dict() round-trips each site's
+    `properties` dict through monty.json.MontyDecoder (see
+    PeriodicSite.from_dict in pymatgen/core/sites.py), which performs a
+    dynamic `__import__(modname)` + `getattr` + `cls.from_dict(...)` on ANY
+    dict shaped like {"@module": ..., "@class": ...} it finds -- with
+    modname/classname taken verbatim from the payload. A shallow check of
+    only the outer Structure dict (as done by the caller before this) does
+    not see markers nested inside `sites[*].properties`, so this walks the
+    whole payload to close that gap.
+
+    The caller is expected to have already validated/consumed the
+    top-level dict's own @module/@class (that's the legitimate
+    pymatgen.core.structure.Structure marker), so depth=0's own keys are
+    intentionally not checked here -- only what's nested inside its values.
+
+    Raises:
+        HTTPException(400) if a marker key is found below the top level,
+        or the payload nests deeper than max_depth (a cheap guard against
+        a pathological/recursion-bomb payload).
+    """
+    if depth > max_depth:
+        raise HTTPException(status_code=400, detail="Invalid structure_data: nesting too deep")
+    if isinstance(obj, dict):
+        if depth > 0 and any(key in obj for key in _MSONABLE_MARKER_KEYS):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid structure_data: nested MSONable markers are not allowed"
+            )
+        for value in obj.values():
+            _reject_msonable_payload(value, depth=depth + 1, max_depth=max_depth)
+    elif isinstance(obj, list):
+        for item in obj:
+            _reject_msonable_payload(item, depth=depth + 1, max_depth=max_depth)
+
+def sanitize_display_filename(filename: str) -> str:
+    """
+    Strip characters that could break out of a single Content-Disposition
+    header value or a single '# ...' CIF comment line (CR/LF and other
+    control characters).
+
+    This is NOT a path-safety check -- safe_path()/safe_filename() above
+    cover that wherever a filename touches the filesystem. This exists
+    because several CIF-generation endpoints echo the client-supplied
+    filename into both a response header and the generated CIF body's
+    metadata comment even when the actual structure came from the
+    session (skipping safe_path() entirely, since no filesystem lookup
+    happens on that path) -- an unsanitized value there let a newline
+    inject an extra line into the downloaded CIF file.
+    """
+    if not isinstance(filename, str):
+        return str(filename)
+    return "".join(ch for ch in filename if ch.isprintable())
 
 def validate_supercell_size(supercell_size: List[int]) -> List[int]:
     """Validate supercell size"""
     if not isinstance(supercell_size, list) or len(supercell_size) != 3:
         raise ValueError("Supercell size must be a list of 3 integers")
-    
+
     for dim in supercell_size:
         if not isinstance(dim, int) or dim < 1 or dim > MAX_SUPERCELL_DIM:
             raise ValueError(f"Supercell dimensions must be between 1 and {MAX_SUPERCELL_DIM}")
-    
+
     return supercell_size
+
+def check_supercell_site_limit(base_num_sites: int, supercell_size: List[int]) -> None:
+    """
+    Reject a supercell expansion whose total site count would exceed
+    MAX_TOTAL_SITES.
+
+    validate_supercell_size() bounds each dimension independently
+    (<= MAX_SUPERCELL_DIM), but never their product: a 20-atom cell at the
+    per-dimension limit (10x10x10) still expands to 20,000 atoms. This
+    catches that multiplicative blow-up before make_supercell() allocates
+    it, and must be called on every path that runs make_supercell() with a
+    size that ultimately came from the request body.
+    """
+    scaling_factor = 1
+    for dim in supercell_size:
+        scaling_factor *= dim
+    total_sites = base_num_sites * scaling_factor
+    if total_sites > MAX_TOTAL_SITES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Requested supercell would contain {total_sites} atoms, "
+                f"exceeding the limit of {MAX_TOTAL_SITES}"
+            )
+        )
 
 def validate_element(element: str) -> str:
     """Element validation (injection protection)"""
@@ -659,8 +795,25 @@ class SessionManager:
     def __init__(self):
         self.sessions: Dict[str, Dict] = {}
         
-    def create_session(self, session_id: str, filename: str, original_structure: Structure) -> None:
-        """Create new session"""
+    def create_session(self, session_id: Optional[str], filename: str, original_structure: Structure) -> str:
+        """
+        Create (or replace) a session and return the id it was stored
+        under.
+
+        session_id is the sole authorization token every session-scoped
+        endpoint checks (see get_session_info/get_current_structure), so it
+        must never be a value the client gets to choose: a client-supplied
+        id is honored only when it already names a session this server
+        previously issued (continuing it -- e.g. the browser tab loading a
+        different sample file into the same session). Any other value
+        (missing, or unknown to this server) is discarded in favor of a
+        freshly minted, cryptographically random id, which is what the
+        caller must return to the client so it can adopt it.
+        """
+        is_new_session = not session_id or session_id not in self.sessions
+        if is_new_session:
+            session_id = secrets.token_urlsafe(32)
+            self._evict_lru_if_at_capacity()
         self.sessions[session_id] = {
             'filename': filename,
             'original_structure': original_structure,
@@ -671,7 +824,23 @@ class SessionManager:
             'last_accessed': time.time()
         }
         logger.info(f"Created session {session_id[:8]}... for {filename}")
-    
+        return session_id
+
+    def _evict_lru_if_at_capacity(self) -> None:
+        """
+        Evict the least-recently-accessed session(s) so a new one can be
+        added without exceeding MAX_SESSIONS. Called only when actually
+        minting a new id -- updating an existing session never grows the
+        dict, so it never needs to evict.
+        """
+        while len(self.sessions) >= MAX_SESSIONS:
+            oldest_id = min(self.sessions, key=lambda sid: self.sessions[sid].get('last_accessed', 0))
+            del self.sessions[oldest_id]
+            logger.warning(
+                f"Session limit ({MAX_SESSIONS}) reached; evicted least-recently-accessed "
+                f"session {oldest_id[:8]}..."
+            )
+
     def get_current_structure(self, session_id: str) -> Optional[Structure]:
         """Get current structure"""
         if session_id in self.sessions:
@@ -763,9 +932,36 @@ HOST = os.getenv('CRYSTALNEXUS_HOST', '127.0.0.1')
 PORT = int(os.getenv('CRYSTALNEXUS_PORT', '8080'))
 DEBUG = os.getenv('CRYSTALNEXUS_DEBUG', 'False').lower() == 'true'
 
+# Gates the /analytics dashboard and /api/analytics/* endpoints, which
+# otherwise expose every visitor's IP/User-Agent history plus uploaded
+# filenames and formulas to anyone who can reach this server. Set this to
+# require a shared token (via the X-Analytics-Token header or a ?token=
+# query parameter) for access from beyond localhost -- see
+# require_analytics_access().
+CRYSTALNEXUS_ANALYTICS_TOKEN = os.getenv('CRYSTALNEXUS_ANALYTICS_TOKEN')
+
 # File handling limits
 MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', str(50 * 1024 * 1024)))  # 50MB
 MAX_SUPERCELL_DIM = int(os.getenv('MAX_SUPERCELL_DIM', '10'))
+# Caps the *product* of the supercell dimensions against the base
+# structure's site count; MAX_SUPERCELL_DIM only bounds each dimension
+# independently (see check_supercell_site_limit).
+MAX_TOTAL_SITES = int(os.getenv('MAX_TOTAL_SITES', '20000'))
+# Upper bound on concurrently-held sessions (each holds at least two full
+# pymatgen Structures). Without this, an anonymous caller could grow
+# session_manager.sessions without limit -- cleanup_old_sessions() only
+# evicts entries older than SESSION_CLEANUP_HOURS, on a
+# PERIODIC_CLEANUP_INTERVAL timer, so a fast loop of create-supercell
+# calls could exhaust memory long before either ever runs. See
+# SessionManager.create_session's least-recently-accessed eviction.
+MAX_SESSIONS = int(os.getenv('MAX_SESSIONS', '100'))
+
+# Per-client-IP rate limit for POST /api/* (see rate_limit_middleware):
+# there is otherwise no request-volume protection anywhere in this app,
+# so a single caller could hammer the CIF-parsing/CHGNet endpoints as
+# fast as the network allows.
+RATE_LIMIT_REQUESTS_PER_MINUTE = int(os.getenv('RATE_LIMIT_REQUESTS_PER_MINUTE', '60'))
+RATE_LIMIT_BURST = int(os.getenv('RATE_LIMIT_BURST', '20'))
 
 from contextlib import asynccontextmanager
 
@@ -796,6 +992,88 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=APP_NAME, lifespan=lifespan)
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """
+    Minimal, response-shape-preserving security headers (S-8 in the
+    security review): this app set none at all. `frame-ancestors 'none'`
+    (plus the older X-Frame-Options for browsers that don't honor CSP)
+    stops /  and /analytics from being framed -- meaningful here because
+    this app has no CSRF token and several destructive same-origin POSTs
+    (Reset, Execute) that a framed clickjack could trigger.
+
+    Deliberately NOT a full Content-Security-Policy: the pages rely on
+    inline <script> blocks and dozens of inline onclick= handlers, so a
+    script-src policy would need that inline code extracted first (a
+    separate, larger change) to avoid breaking the UI.
+    """
+    response = await call_next(request)
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "same-origin"
+    return response
+
+class _TokenBucket:
+    """Mutable per-client token-bucket state. A plain object (not a
+    tuple/dataclass) so rate_limit_middleware can update tokens/last_refill
+    in place via a single dict lookup."""
+    __slots__ = ('tokens', 'last_refill')
+
+    def __init__(self, tokens: float, last_refill: float):
+        self.tokens = tokens
+        self.last_refill = last_refill
+
+# In-process only, like session_manager.sessions and _relax_progress below
+# -- fine for this app's single-worker deployment model, and only ever
+# touched from the event loop thread, so (also like those) no lock is
+# needed. Not evicted on a timer: at realistic client counts this stays
+# far smaller than session_manager's own cap, and a stale entry is only a
+# few floats.
+_rate_limit_buckets: Dict[str, "_TokenBucket"] = {}
+
+def _rate_limit_check(client_host: str) -> bool:
+    """
+    Token-bucket rate limit: refills at RATE_LIMIT_REQUESTS_PER_MINUTE/60
+    tokens per second, capped at RATE_LIMIT_BURST. Returns True if the
+    request may proceed (and consumes one token), False if it should be
+    rejected with 429.
+    """
+    now = time.time()
+    refill_per_second = RATE_LIMIT_REQUESTS_PER_MINUTE / 60.0
+    bucket = _rate_limit_buckets.get(client_host)
+    if bucket is None:
+        # Spend the first token immediately so a burst still starts at
+        # BURST - 1, not BURST + 1 on the very next refill calculation.
+        _rate_limit_buckets[client_host] = _TokenBucket(tokens=RATE_LIMIT_BURST - 1, last_refill=now)
+        return True
+
+    elapsed = max(0.0, now - bucket.last_refill)
+    bucket.tokens = min(RATE_LIMIT_BURST, bucket.tokens + elapsed * refill_per_second)
+    bucket.last_refill = now
+
+    if bucket.tokens >= 1:
+        bucket.tokens -= 1
+        return True
+    return False
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """
+    Per-client-IP rate limit on POST /api/* (see RATE_LIMIT_* config):
+    there is no other protection anywhere in this app against a single
+    caller hammering the CIF-parsing/CHGNet endpoints as fast as the
+    network allows.
+    """
+    if request.method == "POST" and request.url.path.startswith("/api/"):
+        client_host = request.client.host if request.client else "unknown"
+        if not _rate_limit_check(client_host):
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many requests. Please slow down and try again shortly."}
+            )
+    return await call_next(request)
 
 @app.middleware("http")
 async def analytics_middleware(request: Request, call_next):
@@ -852,6 +1130,7 @@ def load_base_supercell(session_id: Optional[str], filename: Optional[str],
         if session_info:
             structure = session_info['original_structure'].copy()
             effective_size = supercell_size or session_info.get('supercell_size', [1, 1, 1])
+            check_supercell_site_limit(len(structure.sites), effective_size)
             structure.make_supercell(effective_size)
             return structure
 
@@ -863,6 +1142,7 @@ def load_base_supercell(session_id: Optional[str], filename: Optional[str],
         if sample_path.exists():
             parser = CifParser(str(sample_path))
             structure = parser.get_structures(primitive=False)[0]
+            check_supercell_site_limit(len(structure.sites), supercell_size)
             structure.make_supercell(supercell_size)
             return structure
 
@@ -966,7 +1246,7 @@ async def apply_atomic_operations(request: dict):
         raise
     except Exception as e:
         logger.error(f"Error applying atomic operations: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.get("/api/sample-cif-files")
 async def get_sample_cif_files():
@@ -1006,7 +1286,8 @@ async def get_sample_cif_files():
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error scanning sample CIF files: {str(e)}")
+        logger.error(f"Error scanning sample CIF files: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.post("/api/analyze-cif-sample")
 async def analyze_sample_cif(data: dict):
@@ -1072,10 +1353,23 @@ async def analyze_uploaded_cif(file: UploadFile = File(...)):
         if not file.filename or not file.filename.lower().endswith('.cif'):
             raise HTTPException(status_code=400, detail="File must be a CIF file")
         
-        # File size limit
-        contents = await file.read()
-        if len(contents) > MAX_FILE_SIZE:
-            raise HTTPException(status_code=413, detail=f"File too large. Maximum size: {MAX_FILE_SIZE} bytes")
+        # File size limit -- read in bounded chunks so a request far
+        # larger than MAX_FILE_SIZE (e.g. a multi-GB POST) is rejected as
+        # soon as that much has arrived, instead of first buffering the
+        # entire body (file.read() with no size arg) and only checking
+        # afterward.
+        chunk_size = 1024 * 1024  # 1MB
+        chunks = []
+        total_size = 0
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            total_size += len(chunk)
+            if total_size > MAX_FILE_SIZE:
+                raise HTTPException(status_code=413, detail=f"File too large. Maximum size: {MAX_FILE_SIZE} bytes")
+            chunks.append(chunk)
+        contents = b"".join(chunks)
         
         # Create secure temporary file (explicit UTF-8 encoding)
         try:
@@ -1272,7 +1566,9 @@ def analyze_cif_file_sync(file_path: Path) -> Dict:
         # Report Windows-specific pymatgen errors in detail
         if WINDOWS_PLATFORM and "fortran" in str(e).lower():
             raise HTTPException(status_code=500, detail="Windows Fortran library error - install Microsoft Visual C++ Redistributable")
-        raise HTTPException(status_code=500, detail=f"Error in pymatgen analysis: {str(e)}")
+        # Generic message: pymatgen/ASE exceptions routinely embed absolute
+        # filesystem paths and library versions (already logged above).
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 async def analyze_cif_file(file_path: Path) -> Dict:
     return await asyncio.to_thread(analyze_cif_file_sync, file_path)
@@ -1296,8 +1592,10 @@ def _load_and_build_supercell(crystal_data: dict, filename: str, a_mult: int, b_
 
             if structure_data and isinstance(structure_data, dict):
                 logger.info(f" SUPERCELL: Structure data keys: {list(structure_data.keys())}")
-                # Validate client-supplied dict before Structure.from_dict
-                # (MontyDecoder performs dynamic @module/@class imports)
+                # Validate client-supplied dict before Structure.from_dict.
+                # Two layers of defense against monty.json.MontyDecoder's
+                # dynamic @module/@class imports (see _reject_msonable_payload
+                # docstring for the exact gadget this closes):
                 if "@module" in structure_data or "@class" in structure_data:
                     if (structure_data.get("@module") != "pymatgen.core.structure"
                             or structure_data.get("@class") != "Structure"):
@@ -1310,6 +1608,18 @@ def _load_and_build_supercell(crystal_data: dict, filename: str, a_mult: int, b_
                         status_code=400,
                         detail="Invalid structure_data: 'lattice' and 'sites' keys are required"
                     )
+                # 1) Reject any nested MSONable marker anywhere in the
+                #    payload (belt-and-suspenders; closes any decode path
+                #    pymatgen may add in the future).
+                _reject_msonable_payload(structure_data)
+                # 2) Drop per-site `properties` outright: this is the one
+                #    field pymatgen actually round-trips through
+                #    MontyDecoder, and this app never needs it (CIF output
+                #    always uses write_magmoms=False), so removing it is
+                #    the real fix; (1) above is defense-in-depth only.
+                for site in structure_data.get("sites", []):
+                    if isinstance(site, dict):
+                        site.pop("properties", None)
                 original_structure = Structure.from_dict(structure_data)
                 logger.info(f"✅ SUPERCELL: Structure loaded from structure_data - Formula: {original_structure.formula}, Sites: {len(original_structure.sites)}")
 
@@ -1378,6 +1688,7 @@ def _load_and_build_supercell(crystal_data: dict, filename: str, a_mult: int, b_
 
     # Create supercell
     logger.info(f" SUPERCELL: Creating supercell {a_mult}×{b_mult}×{c_mult} from structure: {original_structure.formula}")
+    check_supercell_site_limit(len(original_structure.sites), [a_mult, b_mult, c_mult])
     supercell_structure = original_structure.copy()
     supercell_structure.make_supercell([a_mult, b_mult, c_mult])
     logger.info(f"✅ SUPERCELL: Supercell created - Formula: {supercell_structure.formula}, Sites: {len(supercell_structure.sites)}")
@@ -1396,9 +1707,14 @@ async def create_supercell(data: dict):
         
         if not crystal_data:
             raise HTTPException(status_code=400, detail="Crystal data is required")
-        if not session_id:
-            raise HTTPException(status_code=400, detail="Session ID is required")
-        
+        # session_id is optional here (unlike every other session-scoped
+        # endpoint): this is the one call that may be minting a brand new
+        # session. A missing/unrecognized value causes
+        # session_manager.create_session() below to mint a fresh,
+        # server-issued id instead of trusting a client-chosen one -- see
+        # its docstring. The response always reports the id actually used
+        # so the client can adopt it.
+
         # Validate supercell size
         supercell_size = validate_supercell_size(supercell_size_raw)
         
@@ -1415,15 +1731,18 @@ async def create_supercell(data: dict):
         supercell_formula = calculate_supercell_formula(original_formula, scaling_factor)
         
         # Generate actual pymatgen Structure for 3D visualization
+        server_session_id = None
         try:
             filename = crystal_data.get("filename", "unknown.cif")
             original_structure, supercell_structure = await asyncio.to_thread(
                 _load_and_build_supercell, crystal_data, filename, a_mult, b_mult, c_mult
             )
 
-            # Create or update session with structures
-            session_manager.create_session(session_id, filename, original_structure)
-            session_manager.update_structure(session_id, supercell_structure,
+            # Create or update session with structures. server_session_id is
+            # the id actually stored under (see create_session's docstring);
+            # it may differ from the request's session_id.
+            server_session_id = session_manager.create_session(session_id, filename, original_structure)
+            session_manager.update_structure(server_session_id, supercell_structure,
                                            operations=[], supercell_size=supercell_size)
 
             # Get structure dictionary for CIF generation (CPU-bound — offload)
@@ -1468,6 +1787,11 @@ async def create_supercell(data: dict):
 
         return {
             "status": "supercell_created",
+            # Authoritative session id: the client must adopt this value
+            # (it may differ from the session_id sent in the request --
+            # see SessionManager.create_session) for every subsequent
+            # session-scoped call.
+            "session_id": server_session_id,
             "original_data": crystal_data,
             "supercell_info": supercell_info,
             "structure_dict": structure_dict,  # Add structure_dict for 3D visualization
@@ -1477,7 +1801,8 @@ async def create_supercell(data: dict):
         # Re-raise HTTPExceptions without modification
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error creating supercell: {str(e)}")
+        logger.error(f"Error creating supercell: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.post("/api/get-element-labels")
@@ -1515,7 +1840,7 @@ async def get_element_labels(data: dict):
         raise
     except Exception as e:
         logger.error(f"Error getting element labels: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error getting element labels: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.get("/api/chgnet-elements")
@@ -1553,6 +1878,7 @@ async def generate_modified_structure_cif(request: dict):
 
         if not filename:
             raise HTTPException(status_code=400, detail="Filename is required")
+        filename = sanitize_display_filename(filename)
         supercell_size = validate_supercell_size(supercell_size)
 
         logger.info(f"Generating modified structure CIF for {filename}")
@@ -1637,6 +1963,57 @@ async def generate_modified_structure_cif(request: dict):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=error_msg)
 
+def _resolve_and_expand_supercell_direct(session_structure: Optional[Structure],
+                                          filename: str,
+                                          supercell_size: List[int]) -> Tuple[Structure, str]:
+    """
+    CPU-bound: resolve the base structure (an already-loaded session
+    structure, or by parsing a sample CIF file), enforce the total-site
+    limit, then build the supercell and render its CIF text.
+    Call via asyncio.to_thread.
+    """
+    from pymatgen.io.cif import CifParser, CifWriter
+
+    original_structure = session_structure
+
+    # Method 2: Try to load from CIF file (for sample files)
+    if original_structure is None:
+        # Secure path validation (supports subdirectories)
+        try:
+            validated_filename = safe_path(filename)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid filename: {e}")
+        cif_path = SAMPLE_CIF_DIR / validated_filename
+        if cif_path.exists():
+            logger.debug(f"Reading CIF file: {cif_path}")
+            parser = CifParser(str(cif_path))
+            structures = parser.get_structures(primitive=False)  # Keep original lattice - don't convert to primitive
+            if structures:
+                original_structure = structures[0]
+                logger.info(f"Loaded structure from sample CIF file: {filename}")
+
+    if not original_structure:
+        raise HTTPException(status_code=404, detail=f"CIF file not found: {filename}")
+
+    logger.info(f"Original structure loaded: {original_structure.formula}")
+
+    # Create supercell
+    check_supercell_site_limit(len(original_structure.sites), supercell_size)
+    supercell_structure = original_structure.copy()
+    supercell_structure.make_supercell(supercell_size)
+
+    logger.info(f"Supercell created: {supercell_structure.formula}")
+    logger.info(f"Number of sites: {len(supercell_structure.sites)}")
+
+    # Generate CIF using pymatgen CifWriter
+    cif_writer = CifWriter(
+        supercell_structure,
+        write_magmoms=False,
+        significant_figures=6
+    )
+
+    return supercell_structure, str(cif_writer)
+
 @app.post("/api/generate-supercell-cif-direct")
 async def generate_supercell_cif_direct(request: dict):
     """
@@ -1646,65 +2023,34 @@ async def generate_supercell_cif_direct(request: dict):
     try:
         # Extract request parameters
         filename = request.get("filename")
-        supercell_size = request.get("supercell_size", [1, 1, 1])
+        supercell_size_raw = request.get("supercell_size", [1, 1, 1])
         session_id = request.get("session_id")
-        
+
         if not filename:
             raise HTTPException(status_code=400, detail="Filename is required")
-        
+        filename = sanitize_display_filename(filename)
+        supercell_size = validate_supercell_size(supercell_size_raw)
+
         logger.info(f"Generating supercell CIF for {filename} with size {supercell_size}")
-        
-        original_structure = None
-        
-        # Method 1: Try to get structure from session (for uploaded files)
+
+        # Method 1: Try to get structure from session (for uploaded files).
+        # This is a cheap dict lookup, so it stays on the event loop; the
+        # CPU-bound CIF parsing / make_supercell / CifWriter work below is
+        # offloaded to a thread.
+        session_structure = None
         if session_id:
             try:
                 session_info = session_manager.get_session_info(session_id)
                 if session_info and 'original_structure' in session_info:
-                    original_structure = session_info['original_structure']
+                    session_structure = session_info['original_structure']
                     logger.info(f"Loaded structure from session for uploaded file: {filename}")
             except Exception as e:
                 logger.warning(f"Could not load structure from session: {e}")
-        
-        # Method 2: Try to load from CIF file (for sample files)
-        if original_structure is None:
-            # Secure path validation (supports subdirectories)
-            try:
-                validated_filename = safe_path(filename)
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=f"Invalid filename: {e}")
-            cif_path = SAMPLE_CIF_DIR / validated_filename
-            if cif_path.exists():
-                logger.debug(f"Reading CIF file: {cif_path}")
-                from pymatgen.io.cif import CifParser
-                parser = CifParser(str(cif_path))
-                structures = parser.get_structures(primitive=False)  # Keep original lattice - don't convert to primitive
-                if structures:
-                    original_structure = structures[0]
-                    logger.info(f"Loaded structure from sample CIF file: {filename}")
-        
-        if not original_structure:
-            raise HTTPException(status_code=404, detail=f"CIF file not found: {filename}")
-        
-        logger.info(f"Original structure loaded: {original_structure.formula}")
-        
-        # Create supercell
-        supercell_structure = original_structure.copy()
-        supercell_structure.make_supercell(supercell_size)
-        
-        logger.info(f"Supercell created: {supercell_structure.formula}")
-        logger.info(f"Number of sites: {len(supercell_structure.sites)}")
-        
-        # Generate CIF using pymatgen CifWriter
-        from pymatgen.io.cif import CifWriter
-        cif_writer = CifWriter(
-            supercell_structure,
-            write_magmoms=False,
-            significant_figures=6
+
+        supercell_structure, cif_content = await asyncio.to_thread(
+            _resolve_and_expand_supercell_direct, session_structure, filename, supercell_size
         )
-        
-        cif_content = str(cif_writer)
-        
+
         # Add metadata header
         size_str = "x".join(map(str, supercell_size))
         metadata_lines = [
@@ -1733,6 +2079,10 @@ async def generate_supercell_cif_direct(request: dict):
     except HTTPException:
         # Re-raise HTTPExceptions without modification
         raise
+    except ValueError as e:
+        # e.g. validate_supercell_size() rejecting a malformed/oversized
+        # supercell_size -- a client input error, not a server error.
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         error_msg = f"Failed to generate supercell CIF: {str(e)}"
         logger.error(error_msg)
@@ -1776,15 +2126,14 @@ def _get_chgnet_version():
             return "unknown"
 
 def _get_device_info():
-    """Get current device information for CHGNet"""
-    try:
-        import torch
-        if torch.cuda.is_available():
-            return f"cuda:{torch.cuda.current_device()}"
-        else:
-            return "cpu"
-    except ImportError:
-        return "cpu"
+    """Report the device CHGNet is actually running on.
+
+    This used to return "cuda:N" whenever torch.cuda.is_available(), while
+    the model was unconditionally loaded with use_device="cpu" -- so the
+    reported device (shown in the analysis modal) could disagree with
+    reality on any CUDA-capable machine. Report what was actually loaded.
+    """
+    return chgnet_manager.device or "cpu"
 
 def evaluate_convergence(trajectory, fmax):
     """
@@ -1803,8 +2152,193 @@ def evaluate_convergence(trajectory, fmax):
     
     converged = max_force < fmax
     logger.info(f"Convergence check: max_force={max_force:.4f} eV/A, fmax={fmax}, converged={converged}")
-    
+
     return bool(converged)
+
+
+class RelaxationAborted(Exception):
+    """Raised from an optimizer observer to stop a run cooperatively.
+
+    This is the only reliable way to stop an in-progress ASE relaxation:
+    asyncio.wait_for() would abandon the awaiting coroutine while the
+    executor thread kept running and kept the single CHGNet worker
+    (_inference_executor, max_workers=1) busy for the rest of its steps.
+    """
+
+
+class TrajectoryRecorder:
+    """Records the same fields as chgnet.model.dynamics.TrajectoryObserver
+    (energies, forces, stresses, magmoms, atom_positions, cells) so the
+    existing evaluate_convergence() and trajectory_data extraction code
+    (main.py) can consume it unchanged.
+    """
+
+    def __init__(self, atoms):
+        self.atoms = atoms
+        self.energies = []
+        self.forces = []
+        self.stresses = []
+        self.magmoms = []
+        self.atom_positions = []
+        self.cells = []
+
+    def __call__(self):
+        self.energies.append(float(self.atoms.get_potential_energy()))
+        self.forces.append(self.atoms.get_forces())
+        try:
+            self.stresses.append(self.atoms.get_stress())
+        except Exception:
+            self.stresses.append(None)
+        self.magmoms.append(self.atoms.get_magnetic_moments())
+        self.atom_positions.append(self.atoms.get_positions())
+        self.cells.append(self.atoms.get_cell()[:])
+
+    def __len__(self):
+        return len(self.energies)
+
+
+class RelaxationWatcher:
+    """ASE observer: publishes progress and enforces a wall-clock deadline.
+
+    Attached with interval=1, so ASE calls it once per optimizer step plus
+    once at step 0 (ase.optimize.optimize.Dynamics.call_observers). The
+    force/energy reads below are served from the calculator's cache -- the
+    optimizer has just computed them for its own convergence check -- so
+    the observer triggers no extra CHGNet evaluation.
+
+    Raising RelaxationAborted here propagates out of optimizer.run(); see
+    the class docstring for why that (rather than asyncio.wait_for) is the
+    correct way to enforce a timeout.
+    """
+
+    def __init__(self, atoms, fmax, max_steps, deadline, progress_slot=None):
+        self.atoms = atoms  # the UNFILTERED Atoms object (raw atomic forces)
+        self.fmax = fmax
+        self.max_steps = max_steps
+        self.deadline = deadline
+        self.progress_slot = progress_slot
+        self.started_at = time.monotonic()
+        self.step = -1
+
+    def __call__(self):
+        self.step += 1
+        max_force = float(np.linalg.norm(self.atoms.get_forces(), axis=1).max())
+        if self.progress_slot is not None:
+            # Plain dict assignment is atomic under the GIL, so the executor
+            # thread (writer) and the event loop (reader, via the progress
+            # polling/SSE endpoint) need no lock between them.
+            self.progress_slot["state"] = {
+                "step": self.step,
+                "max_steps": self.max_steps,
+                "max_force_eV_per_A": max_force,
+                "fmax": self.fmax,
+                "energy_eV": float(self.atoms.get_potential_energy()),
+                "elapsed_s": time.monotonic() - self.started_at,
+            }
+        if time.monotonic() > self.deadline:
+            raise RelaxationAborted(f"time limit reached at step {self.step}")
+
+
+def run_relaxation(calculator, structure, *, fmax, steps, optimizer_name,
+                    deadline, relax_cell=True, progress_slot=None):
+    """Run an ASE relaxation with full control over observers and stopping.
+
+    Reimplements chgnet.model.dynamics.StructOptimizer.relax (which this
+    replaces at the call site) because that method exposes neither the
+    Optimizer object -- so no progress/timeout observer can be attached and
+    ASE's own convergence verdict cannot be read -- nor a way to skip its
+    duplicated final obs() call, which is why the old code had to subtract
+    2 from the trajectory length to get the true step count.
+
+    Returns a dict with:
+        final_structure: the relaxed pymatgen Structure
+        trajectory: a TrajectoryRecorder (same shape as chgnet's own)
+        ase_converged: bool, ASE's own verdict from optimizer.run(). With
+            relax_cell=True this is computed on the FrechetCellFilter's
+            extended force array (atomic forces + cell stress terms), which
+            can disagree with evaluate_convergence()'s atomic-forces-only
+            check.
+        optimizer_steps: int, optimizer.get_number_of_steps() -- exact,
+            unlike the old len(trajectory) - 2 approximation.
+        aborted: bool, True if the wall-clock deadline was hit first.
+    """
+    from ase.filters import FrechetCellFilter
+    from ase.optimize import BFGS, FIRE, LBFGS, LBFGSLineSearch
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    optimizers = {"FIRE": FIRE, "BFGS": BFGS, "LBFGS": LBFGS,
+                  "LBFGSLineSearch": LBFGSLineSearch}
+    if optimizer_name not in optimizers:
+        raise ValueError(f"Unknown optimizer {optimizer_name!r}; "
+                         f"must be one of {sorted(optimizers)}")
+
+    atoms = AseAtomsAdaptor().get_atoms(structure)
+    atoms.calc = calculator
+
+    obs = TrajectoryRecorder(atoms)
+    watcher = RelaxationWatcher(atoms, fmax, steps, deadline, progress_slot)
+
+    target = FrechetCellFilter(atoms) if relax_cell else atoms
+    optimizer = optimizers[optimizer_name](target, logfile=None)
+    optimizer.attach(obs, interval=1)
+    optimizer.attach(watcher, interval=1)
+
+    aborted = False
+    try:
+        # ASE 3.27's Optimizer.run() returns the convergence verdict
+        # directly; Optimizer.converged() takes a mandatory gradient
+        # argument and is not meant to be called standalone here.
+        ase_converged = bool(optimizer.run(fmax=fmax, steps=steps))
+    except RelaxationAborted as e:
+        logger.warning(f"Relaxation aborted: {e}")
+        aborted = True
+        ase_converged = False
+
+    final_structure = AseAtomsAdaptor.get_structure(atoms)
+    final_structure.add_site_property(
+        "magmom", [float(m) for m in atoms.get_magnetic_moments()])
+
+    return {
+        "final_structure": final_structure,
+        "trajectory": obs,
+        "ase_converged": ase_converged,
+        "optimizer_steps": int(optimizer.get_number_of_steps()),
+        "aborted": aborted,
+    }
+
+
+def _validate_relax_params(request: dict) -> Tuple[float, int, str]:
+    """Validate and clamp relaxation parameters before any model loading.
+
+    Raises HTTPException(400) on invalid input so bad requests are rejected
+    without ever touching the (slow, singleton, serialized) CHGNet model.
+    """
+    try:
+        fmax = float(request.get("fmax", 0.1))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="fmax must be a number")
+    try:
+        max_steps = int(request.get("max_steps", 100))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="max_steps must be an integer")
+
+    if not (MIN_RELAX_FMAX <= fmax <= MAX_RELAX_FMAX):
+        raise HTTPException(
+            status_code=400,
+            detail=f"fmax must be between {MIN_RELAX_FMAX} and {MAX_RELAX_FMAX} eV/A")
+    if not (1 <= max_steps <= MAX_RELAX_STEPS):
+        raise HTTPException(
+            status_code=400,
+            detail=f"max_steps must be between 1 and {MAX_RELAX_STEPS}")
+
+    optimizer_name = request.get("optimizer", RELAX_OPTIMIZER) or RELAX_OPTIMIZER
+    if optimizer_name not in VALID_RELAX_OPTIMIZERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"optimizer must be one of {VALID_RELAX_OPTIMIZERS}")
+
+    return fmax, max_steps, optimizer_name
+
 
 def safe_get_prediction(pred, num_atoms=None):
     """Extract prediction results safely from CHGNet output"""
@@ -1956,7 +2490,7 @@ async def chgnet_predict_structure(request: dict):
         logger.error(f"CHGNet prediction error: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"CHGNet prediction failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.post("/api/chgnet-relax")
 async def chgnet_relax_structure(request: dict):
@@ -1965,226 +2499,263 @@ async def chgnet_relax_structure(request: dict):
     """
     try:
         session_id = request.get("session_id")
-        fmax = float(request.get("fmax", 0.1))
-        max_steps = int(request.get("max_steps", 100))
-        
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required")
-        
+
+        # Validated and clamped before any model loading, so malformed or
+        # out-of-range requests never touch the slow, serialized CHGNet model.
+        fmax, max_steps, optimizer_name = _validate_relax_params(request)
+
         # Get the current structure from session (already has supercell + operations applied)
         structure = session_manager.get_current_structure(session_id)
         if structure is None:
             raise HTTPException(status_code=404, detail=f"No structure found for session {session_id}")
-        
+
+        if len(structure) > MAX_RELAX_ATOMS:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Structure has {len(structure)} atoms; the relaxation limit is "
+                       f"{MAX_RELAX_ATOMS}. Reduce the supercell size.")
+
         session_info = session_manager.get_session_info(session_id)
         filename = session_info.get('filename', 'unknown') if session_info else 'unknown'
-        
-        logger.info(f"CHGNet relaxation for session {session_id[:8]}... ({filename}) with fmax={fmax}, max_steps={max_steps}")
-        logger.info(f"Structure: {structure.composition} ({len(structure)} sites)")
-        
-        # Load CHGNet model and relaxer (using singleton pattern)
-        try:
-            chgnet = await chgnet_manager.get_model()
-            relaxer = await chgnet_manager.get_relaxer()
-        except RuntimeError as e:
-            raise HTTPException(status_code=503, detail=str(e))
-        
-        # Predict initial structure using optimized prediction
-        try:
-            pred_initial = await chgnet_manager.predict_single_optimized(structure,
-                                                                       return_site_energies=True,
-                                                                       return_atom_feas=True,
-                                                                       return_crystal_feas=True)
-            initial_results = safe_get_prediction(pred_initial, num_atoms=len(structure.sites))
-        except TypeError:
-            # Fallback if detailed prediction fails
-            pred_initial = await chgnet_manager.predict_single_optimized(structure)
-            initial_results = safe_get_prediction(pred_initial, num_atoms=len(structure.sites))
-        except Exception as e:
-            logger.warning(f"Initial prediction failed: {e}")
-            initial_results = {"energy_eV_per_atom": None}
-        
-        # CHGNet structure relaxation
-        logger.info(f"Starting CHGNet relaxation: fmax={fmax}, max_steps={max_steps}")
-        result = await asyncio.get_running_loop().run_in_executor(
-            _inference_executor,
-            functools.partial(relaxer.relax, structure, fmax=fmax, steps=max_steps,
-                              verbose=True, relax_cell=True))
-        
-        # Basic result validation
-        logger.info(f"CHGNet result keys: {sorted(result.keys())}")
-        if 'final_structure' not in result:
-            raise RuntimeError("CHGNet relaxation failed: no final_structure returned")
-        if 'trajectory' not in result:
-            logger.warning("CHGNet relaxation warning: no trajectory returned")
-        
-        final_structure = result.get("final_structure")
-        if final_structure is None:
-            raise RuntimeError("Relaxation failed: no final structure returned")
-        
-        # Predict relaxed structure using optimized prediction
-        try:
-            pred_final = await chgnet_manager.predict_single_optimized(final_structure,
-                                                                     return_site_energies=True,
-                                                                     return_atom_feas=True,
-                                                                     return_crystal_feas=True)
-            final_results = safe_get_prediction(pred_final, num_atoms=len(final_structure.sites))
-        except TypeError:
-            # Fallback if detailed prediction fails
-            pred_final = await chgnet_manager.predict_single_optimized(final_structure)
-            final_results = safe_get_prediction(pred_final, num_atoms=len(final_structure.sites))
-        except Exception as e:
-            logger.warning(f"Final prediction failed: {e}")
-            final_results = {"energy_eV_per_atom": None}
-        
-        # Calculate energy difference in total eV
-        energy_diff = None
-        energy_diff_per_atom = None
-        if (initial_results.get("total_energy_eV") is not None and 
-            final_results.get("total_energy_eV") is not None):
-            energy_diff = final_results["total_energy_eV"] - initial_results["total_energy_eV"]
-            energy_diff_per_atom = final_results["energy_eV_per_atom"] - initial_results["energy_eV_per_atom"]
-        
-        # Extract relaxation information with CHGNet-compliant convergence evaluation
-        trajectory = result.get("trajectory")
-        steps = len(trajectory) if trajectory else 0
-        
-        # Use our own convergence evaluation (CHGNet spec-compliant)
-        converged = evaluate_convergence(trajectory, fmax)
-        
-        # Log convergence evaluation details using consistent force calculation method
-        if trajectory and hasattr(trajectory, 'forces') and len(trajectory.forces) > 0:
-            import numpy as np
-            final_forces = trajectory.forces[-1]
-            final_forces_array = np.array(final_forces)
-            max_final_force = np.linalg.norm(final_forces_array, axis=1).max()
-            logger.info(f"Convergence evaluation: max_force={max_final_force:.6f} eV/A, fmax={fmax}, converged={converged}")
-        else:
-            logger.info(f"Convergence evaluation: no force data available, converged={converged}")
-            
-        logger.info(f"Final relaxation status: converged={converged}, steps={steps}, trajectory_exists={trajectory is not None}")
-        logger.info("=== CHGNet SPEC-COMPLIANT CONVERGENCE EVALUATION COMPLETE ===")
-        
-        relaxation_info = {
-            "converged": converged,
-            "steps": steps,
-            "fmax": fmax,
-            "max_steps": max_steps,
-            "energy_change_eV": energy_diff,
-            "energy_change_eV_per_atom": energy_diff_per_atom,
-            "optimizer_steps": max(0, steps - 2) if steps >= 2 else 0,
-            "trajectory_frames": steps
-        }
-        
-        # Calculate structure properties once to avoid redundancy
-        final_formula = str(final_structure.formula)
-        final_volume = float(final_structure.volume)
-        final_density = float(final_structure.density)
-        final_num_sites = len(final_structure.sites)
-        
-        # Add structure information
-        final_results.update({
-            "formula": final_formula,
-            "num_sites": final_num_sites,
-            "volume": final_volume,
-            "density": final_density
-        })
-        
-        logger.info(f"CHGNet relaxation completed: {relaxation_info['steps']} steps, converged: {relaxation_info['converged']}")
-        
-        # Generate relaxed structure info
-        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-        analyzer = await asyncio.to_thread(SpacegroupAnalyzer, final_structure)
-        
-        relaxed_structure_info = {
-            "formula": final_formula,
-            "num_atoms": len(final_structure),
-            "density": final_density,
-            "lattice_parameters": {
-                "a": float(final_structure.lattice.a),
-                "b": float(final_structure.lattice.b),
-                "c": float(final_structure.lattice.c),
-                "alpha": float(final_structure.lattice.alpha),
-                "beta": float(final_structure.lattice.beta),
-                "gamma": float(final_structure.lattice.gamma)
-            },
-            "volume": float(final_structure.lattice.volume),
-            "space_group": analyzer.get_space_group_symbol(),
-            "space_group_number": analyzer.get_space_group_number(),
-            "point_group": analyzer.get_point_group_symbol(),
-            "crystal_system": analyzer.get_crystal_system(),
-            "num_sites": len(final_structure.sites)
-        }
-        
-        # Extract trajectory data for analysis modal
-        # Use all steps as provided by CHGNet - no unnecessary optimization
-        trajectory_data = None
-        if trajectory:
-            import numpy as np
-            trajectory_data = {
-                "steps": len(trajectory.forces) if hasattr(trajectory, 'forces') else 0,
-                "energies": [float(e) for e in trajectory.energies] if hasattr(trajectory, 'energies') else [],
-                "forces": [],
-                "force_magnitudes": []
-            }
-            
-            # Extract force data for all steps
-            if hasattr(trajectory, 'forces'):
-                for step_forces in trajectory.forces:
-                    # Store detailed forces only for final step
-                    if step_forces is trajectory.forces[-1]:
-                        step_force_data = step_forces.tolist() if hasattr(step_forces, 'tolist') else step_forces
-                        trajectory_data["forces"].append(step_force_data)
-                    
-                    # Calculate force magnitudes efficiently for all steps
-                    step_forces_array = np.array(step_forces)
-                    force_mags = np.linalg.norm(step_forces_array, axis=1).tolist()
-                    trajectory_data["force_magnitudes"].append(force_mags)
-        
-        # Save relaxed structure and CHGNet result metadata to session for later use
-        session_info['relaxed_structure'] = final_structure
-        session_info['chgnet_result'] = {
-            'fmax': fmax,
-            'converged': relaxation_info.get('converged', False),
-            'steps': relaxation_info.get('optimizer_steps', 0)
-        }
-        logger.info(f"Saved relaxed structure to session {session_id[:8]}...")
-        
-        # Analytics Logging - Log successful relaxation
-        try:
-            start_time = time.time() # This is only approximate as we don't track start in this scope precisely
-            # But we have steps and conversion info
-            
-            analytics_db.log_event(
-                event_type="relax",
-                filename=filename,
-                formula=final_formula, # Use final formula
-                num_atoms=final_num_sites,
-                execution_time=None, # We don't have precise execution time here easily without refactoring
-                parameters={
-                    "fmax": fmax,
-                    "steps": relaxation_info["optimizer_steps"],
-                    "converged": converged,
-                    "energy_change_eV": energy_diff
-                },
-                session_id=session_id
-            )
-        except Exception as e:
-            logger.error(f"Failed to log relaxation event: {e}")
 
-        return {
-            "status": "success",
-            "initial_prediction": initial_results,
-            "final_prediction": final_results,
-            "relaxation_info": relaxation_info,
-            "relaxed_structure_info": relaxed_structure_info,
-            "trajectory_data": trajectory_data,
-            "model_info": {
-                "version": _get_chgnet_version(),
-                "device": _get_device_info()
+        logger.info(f"CHGNet relaxation for session {session_id[:8]}... ({filename}) "
+                    f"with fmax={fmax}, max_steps={max_steps}, optimizer={optimizer_name}")
+        logger.info(f"Structure: {structure.composition} ({len(structure)} sites)")
+
+        # A relaxation can run for minutes; refuse a second concurrent one
+        # immediately rather than silently queuing it behind the single
+        # CHGNet worker thread (which would also starve Auto-mode screening).
+        # No await happens between this check and the acquire() call below,
+        # so the check-then-acquire is atomic on the single-threaded event
+        # loop -- acquire() only suspends when the semaphore is contended.
+        if _relax_semaphore.locked():
+            raise HTTPException(
+                status_code=429,
+                detail="Another relaxation is already running. Please wait for it to finish.")
+        await _relax_semaphore.acquire()
+        try:
+            # Load CHGNet model/calculator (using singleton pattern)
+            try:
+                calculator = await chgnet_manager.get_calculator()
+            except RuntimeError as e:
+                raise HTTPException(status_code=503, detail=str(e))
+
+            # Predict initial structure using optimized prediction
+            try:
+                pred_initial = await chgnet_manager.predict_single_optimized(structure,
+                                                                           return_site_energies=True,
+                                                                           return_atom_feas=True,
+                                                                           return_crystal_feas=True)
+                initial_results = safe_get_prediction(pred_initial, num_atoms=len(structure.sites))
+            except TypeError:
+                # Fallback if detailed prediction fails
+                pred_initial = await chgnet_manager.predict_single_optimized(structure)
+                initial_results = safe_get_prediction(pred_initial, num_atoms=len(structure.sites))
+            except Exception as e:
+                logger.warning(f"Initial prediction failed: {e}")
+                initial_results = {"energy_eV_per_atom": None}
+
+            # CHGNet structure relaxation
+            logger.info(f"Starting CHGNet relaxation: fmax={fmax}, max_steps={max_steps}, optimizer={optimizer_name}")
+            deadline = time.monotonic() + RELAX_TIMEOUT_SECONDS
+            progress_slot = _relax_progress.setdefault(session_id, {})
+            progress_slot.clear()
+            try:
+                result = await asyncio.get_running_loop().run_in_executor(
+                    _inference_executor,
+                    functools.partial(run_relaxation, calculator, structure,
+                                      fmax=fmax, steps=max_steps,
+                                      optimizer_name=optimizer_name,
+                                      deadline=deadline, relax_cell=True,
+                                      progress_slot=progress_slot))
+            finally:
+                _relax_progress.pop(session_id, None)
+
+            final_structure = result.get("final_structure")
+            if final_structure is None:
+                raise RuntimeError("Relaxation failed: no final structure returned")
+            trajectory = result.get("trajectory")
+            aborted = result.get("aborted", False)
+            if aborted:
+                logger.warning(f"Relaxation for session {session_id[:8]}... hit the "
+                               f"{RELAX_TIMEOUT_SECONDS}s time limit; returning the best "
+                               f"structure found so far")
+
+            # Predict relaxed structure using optimized prediction
+            try:
+                pred_final = await chgnet_manager.predict_single_optimized(final_structure,
+                                                                         return_site_energies=True,
+                                                                         return_atom_feas=True,
+                                                                         return_crystal_feas=True)
+                final_results = safe_get_prediction(pred_final, num_atoms=len(final_structure.sites))
+            except TypeError:
+                # Fallback if detailed prediction fails
+                pred_final = await chgnet_manager.predict_single_optimized(final_structure)
+                final_results = safe_get_prediction(pred_final, num_atoms=len(final_structure.sites))
+            except Exception as e:
+                logger.warning(f"Final prediction failed: {e}")
+                final_results = {"energy_eV_per_atom": None}
+
+            # Calculate energy difference in total eV
+            energy_diff = None
+            energy_diff_per_atom = None
+            if (initial_results.get("total_energy_eV") is not None and
+                final_results.get("total_energy_eV") is not None):
+                energy_diff = final_results["total_energy_eV"] - initial_results["total_energy_eV"]
+                energy_diff_per_atom = final_results["energy_eV_per_atom"] - initial_results["energy_eV_per_atom"]
+
+            # Extract relaxation information. "converged" keeps its original
+            # meaning (max atomic force < fmax) so the CIF header and the
+            # analytics history stay comparable across versions.
+            # "converged_optimizer" is ASE's own verdict from run_relaxation():
+            # with relax_cell=True it additionally requires the
+            # FrechetCellFilter's cell-stress terms to be below fmax, so it
+            # can disagree with "converged" (see run_relaxation docstring).
+            steps = len(trajectory) if trajectory else 0
+
+            converged = evaluate_convergence(trajectory, fmax)
+
+            # Log convergence evaluation details using consistent force calculation method
+            if trajectory and hasattr(trajectory, 'forces') and len(trajectory.forces) > 0:
+                final_forces_array = np.array(trajectory.forces[-1])
+                max_final_force = np.linalg.norm(final_forces_array, axis=1).max()
+                logger.info(f"Convergence evaluation: max_force={max_final_force:.6f} eV/A, fmax={fmax}, converged={converged}")
+            else:
+                logger.info(f"Convergence evaluation: no force data available, converged={converged}")
+
+            logger.info(f"Final relaxation status: converged={converged}, steps={steps}, aborted={aborted}")
+
+            relaxation_info = {
+                "converged": converged,
+                "converged_optimizer": result.get("ase_converged", False),
+                "steps": steps,
+                "fmax": fmax,
+                "max_steps": max_steps,
+                "energy_change_eV": energy_diff,
+                "energy_change_eV_per_atom": energy_diff_per_atom,
+                # Exact now: optimizer.get_number_of_steps() from
+                # run_relaxation(), instead of the old len(trajectory) - 2
+                # approximation needed to undo chgnet's duplicated final
+                # observer call.
+                "optimizer_steps": result.get("optimizer_steps", 0),
+                "trajectory_frames": steps,
+                "optimizer": optimizer_name,
+                "aborted": aborted,
+                "abort_reason": "timeout" if aborted else None,
             }
-        }
-        
+
+            # Calculate structure properties once to avoid redundancy
+            final_formula = str(final_structure.formula)
+            final_volume = float(final_structure.volume)
+            final_density = float(final_structure.density)
+            final_num_sites = len(final_structure.sites)
+
+            # Add structure information
+            final_results.update({
+                "formula": final_formula,
+                "num_sites": final_num_sites,
+                "volume": final_volume,
+                "density": final_density
+            })
+
+            logger.info(f"CHGNet relaxation completed: {relaxation_info['steps']} steps, converged: {relaxation_info['converged']}")
+
+            # Generate relaxed structure info
+            from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+            analyzer = await asyncio.to_thread(SpacegroupAnalyzer, final_structure)
+
+            relaxed_structure_info = {
+                "formula": final_formula,
+                "num_atoms": len(final_structure),
+                "density": final_density,
+                "lattice_parameters": {
+                    "a": float(final_structure.lattice.a),
+                    "b": float(final_structure.lattice.b),
+                    "c": float(final_structure.lattice.c),
+                    "alpha": float(final_structure.lattice.alpha),
+                    "beta": float(final_structure.lattice.beta),
+                    "gamma": float(final_structure.lattice.gamma)
+                },
+                "volume": float(final_structure.lattice.volume),
+                "space_group": analyzer.get_space_group_symbol(),
+                "space_group_number": analyzer.get_space_group_number(),
+                "point_group": analyzer.get_point_group_symbol(),
+                "crystal_system": analyzer.get_crystal_system(),
+                "num_sites": len(final_structure.sites)
+            }
+
+            # Extract trajectory data for analysis modal
+            # Use all steps as provided by CHGNet - no unnecessary optimization
+            trajectory_data = None
+            if trajectory:
+                trajectory_data = {
+                    "steps": len(trajectory.forces) if hasattr(trajectory, 'forces') else 0,
+                    "energies": [float(e) for e in trajectory.energies] if hasattr(trajectory, 'energies') else [],
+                    "forces": [],
+                    "force_magnitudes": []
+                }
+
+                # Extract force data for all steps
+                if hasattr(trajectory, 'forces'):
+                    for step_forces in trajectory.forces:
+                        # Store detailed forces only for final step
+                        if step_forces is trajectory.forces[-1]:
+                            step_force_data = step_forces.tolist() if hasattr(step_forces, 'tolist') else step_forces
+                            trajectory_data["forces"].append(step_force_data)
+
+                        # Calculate force magnitudes efficiently for all steps
+                        step_forces_array = np.array(step_forces)
+                        force_mags = np.linalg.norm(step_forces_array, axis=1).tolist()
+                        trajectory_data["force_magnitudes"].append(force_mags)
+
+            # Save relaxed structure and CHGNet result metadata to session for later use
+            session_info['relaxed_structure'] = final_structure
+            session_info['chgnet_result'] = {
+                'fmax': fmax,
+                'converged': relaxation_info.get('converged', False),
+                'steps': relaxation_info.get('optimizer_steps', 0),
+                'optimizer': optimizer_name,
+            }
+            logger.info(f"Saved relaxed structure to session {session_id[:8]}...")
+
+            # Analytics Logging - Log successful relaxation
+            try:
+                analytics_db.log_event(
+                    event_type="relax",
+                    filename=filename,
+                    formula=final_formula, # Use final formula
+                    num_atoms=final_num_sites,
+                    execution_time=None, # We don't have precise execution time here easily without refactoring
+                    parameters={
+                        "fmax": fmax,
+                        "steps": relaxation_info["optimizer_steps"],
+                        "converged": converged,
+                        "energy_change_eV": energy_diff,
+                        "optimizer": optimizer_name,
+                        "aborted": aborted,
+                    },
+                    session_id=session_id
+                )
+            except Exception as e:
+                logger.error(f"Failed to log relaxation event: {e}")
+
+            return {
+                "status": "success",
+                "initial_prediction": initial_results,
+                "final_prediction": final_results,
+                "relaxation_info": relaxation_info,
+                "relaxed_structure_info": relaxed_structure_info,
+                "trajectory_data": trajectory_data,
+                "model_info": {
+                    "version": _get_chgnet_version(),
+                    "device": _get_device_info()
+                }
+            }
+        finally:
+            _relax_semaphore.release()
+
     except ValueError as e:
         logger.error(f"CHGNet relaxation validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -2195,7 +2766,31 @@ async def chgnet_relax_structure(request: dict):
         logger.error(f"CHGNet relaxation error: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"CHGNet relaxation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/api/relax-progress/{session_id}")
+async def stream_relax_progress(session_id: str):
+    """Server-sent events for an in-flight relaxation.
+
+    RelaxationWatcher (run inside the CHGNet executor thread) publishes into
+    _relax_progress[session_id] as the optimizer steps; a plain dict
+    assignment is atomic under the GIL, so neither side needs a lock. The
+    stream ends on its own once /api/chgnet-relax's finally block removes
+    the session's slot.
+    """
+    async def events():
+        last = None
+        while session_id in _relax_progress:
+            state = _relax_progress[session_id].get("state")
+            if state is not None and state != last:
+                last = state
+                yield f"data: {json.dumps(state)}\n\n"
+            await asyncio.sleep(0.5)
+        yield 'data: {"done": true}\n\n'
+
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
 
 @app.post("/api/reset-session-structure")
 async def reset_session_structure(request: dict):
@@ -2263,7 +2858,7 @@ async def reset_session_structure(request: dict):
         logger.error(f"Session reset error: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to reset session: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.post("/api/generate-relaxed-structure-cif")
@@ -2282,7 +2877,7 @@ async def generate_relaxed_structure_cif(request: dict):
         if not session_info:
             raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
         
-        filename = session_info.get('filename', 'unknown')
+        filename = sanitize_display_filename(session_info.get('filename', 'unknown'))
         logger.info(f"Generating relaxed structure CIF for {filename}")
         
         # Check if relaxed structure exists in session
@@ -2307,6 +2902,9 @@ async def generate_relaxed_structure_cif(request: dict):
         fmax = chgnet_result.get('fmax', 'N/A')
         converged = chgnet_result.get('converged', 'N/A')
         steps = chgnet_result.get('steps', 'N/A')
+        # Default to FIRE for CIFs from sessions relaxed before the
+        # optimizer became selectable, so old sessions still read sensibly.
+        optimizer_used = chgnet_result.get('optimizer', 'FIRE')
         
         # Generate CIF using pymatgen CifWriter
         from pymatgen.io.cif import CifWriter
@@ -2331,7 +2929,7 @@ async def generate_relaxed_structure_cif(request: dict):
             f"# Original file: {filename}",
             f"# Supercell size: {size_str}",
             f"# Operations: {operations_summary}",
-            f"# CHGNet relaxation: fmax={fmax}, steps={steps}, converged={converged}",
+            f"# CHGNet relaxation: fmax={fmax}, steps={steps}, converged={converged}, optimizer={optimizer_used}",
             f"# Final formula: {final_formula_str}",
             f"# Number of atoms: {final_num_atoms}",
             f"# Volume: {final_volume_val:.2f} A^3",
@@ -2483,7 +3081,7 @@ async def get_insertable_elements(data: dict):
         }
     except Exception as e:
         logger.error(f"Error getting insertable elements: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.post("/api/get-insertion-voids")
 async def get_insertion_voids(data: dict):
@@ -2522,7 +3120,7 @@ async def get_insertion_voids(data: dict):
                 voids = await asyncio.to_thread(find_interstitial_candidates, structure)
             except Exception as e:
                 logger.error(f"Failed to find insertion sites: {e}")
-                raise HTTPException(status_code=400, detail=f"Failed to find insertion voids: {str(e)}")
+                raise HTTPException(status_code=400, detail="Failed to find insertion voids for this structure")
             void_cache.clear()  # only the current structure state is worth keeping
             void_cache[cache_key] = voids
             logger.info(f"Found {len(voids)} potential insertion site(s) for session {session_id[:8]}...")
@@ -2537,7 +3135,7 @@ async def get_insertion_voids(data: dict):
         raise
     except Exception as e:
         logger.error(f"Error getting insertion voids: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.post("/api/evaluate-insertion-energy")
 async def evaluate_insertion_energy(data: dict):
@@ -2552,11 +3150,15 @@ async def evaluate_insertion_energy(data: dict):
         
         if not session_id or not element_symbol or frac_coords is None:
             raise HTTPException(status_code=400, detail="Session ID, element, and coords are required")
-            
+        try:
+            element_symbol = validate_element(element_symbol)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
         structure = session_manager.get_current_structure(session_id)
         if not structure:
             raise HTTPException(status_code=404, detail="Structure not found")
-            
+
         # Create candidate structure
         cand_structure = structure.copy()
         cand_structure.append(element_symbol, frac_coords)
@@ -2585,7 +3187,7 @@ async def evaluate_insertion_energy(data: dict):
         raise
     except Exception as e:
         logger.error(f"Error evaluating insertion energy: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.post("/api/evaluate-insertion-energies")
 async def evaluate_insertion_energies(data: dict):
@@ -2603,6 +3205,10 @@ async def evaluate_insertion_energies(data: dict):
 
         if not session_id or not element_symbol or not sites:
             raise HTTPException(status_code=400, detail="Session ID, element, and sites are required")
+        try:
+            element_symbol = validate_element(element_symbol)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         if not isinstance(sites, list):
             raise HTTPException(status_code=400, detail="sites must be a list")
         if len(sites) > MAX_INSERTION_BATCH:
@@ -2655,7 +3261,7 @@ async def evaluate_insertion_energies(data: dict):
         raise
     except Exception as e:
         logger.error(f"Error evaluating insertion energies: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.post("/api/evaluate-candidate-energies")
 async def evaluate_candidate_energies(data: dict):
@@ -2747,16 +3353,48 @@ async def evaluate_candidate_energies(data: dict):
         raise
     except Exception as e:
         logger.error(f"Error evaluating candidate energies: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 # --- Analytics API Routes ---
 
-@app.get("/analytics", response_class=HTMLResponse)
+def require_analytics_access(request: Request) -> None:
+    """
+    Access gate for the analytics dashboard and its APIs (S-3 in the
+    security review): with no gate at all, anyone who can reach this
+    server could read every visitor's IP/User-Agent history and every
+    uploaded filename/formula via /api/analytics/recent.
+
+    If CRYSTALNEXUS_ANALYTICS_TOKEN is set, a request must present a
+    matching token (X-Analytics-Token header, or a ?token= query
+    parameter for the plain <a href> dashboard link), compared with a
+    constant-time comparison to avoid a timing side channel.
+
+    If it is not set, fail safe by allowing only loopback requests -- the
+    same default posture as HOST (main.py defaults to 127.0.0.1), so a
+    fresh install is never silently open even on a LAN-facing deployment.
+    """
+    if CRYSTALNEXUS_ANALYTICS_TOKEN:
+        supplied = request.headers.get("x-analytics-token") or request.query_params.get("token")
+        if not supplied or not secrets.compare_digest(supplied, CRYSTALNEXUS_ANALYTICS_TOKEN):
+            raise HTTPException(status_code=401, detail="Analytics access requires a valid token")
+        return
+
+    client_host = request.client.host if request.client else None
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "Analytics dashboard is only accessible from localhost "
+                "unless CRYSTALNEXUS_ANALYTICS_TOKEN is set"
+            )
+        )
+
+@app.get("/analytics", response_class=HTMLResponse, dependencies=[Depends(require_analytics_access)])
 async def analytics_dashboard(request: Request):
     """Serve the analytics dashboard page"""
     return templates.TemplateResponse("analytics.html", {"request": request})
 
-@app.get("/api/analytics/summary")
+@app.get("/api/analytics/summary", dependencies=[Depends(require_analytics_access)])
 async def get_analytics_summary():
     """Get summary statistics for dashboard"""
     try:
@@ -2770,7 +3408,7 @@ async def get_analytics_summary():
         logger.error(f"Values to get analytics summary: {e}")
         raise HTTPException(status_code=500, detail="Failed to get analytics summary")
 
-@app.get("/api/analytics/ranking")
+@app.get("/api/analytics/ranking", dependencies=[Depends(require_analytics_access)])
 async def get_analytics_ranking():
     """Get popular samples ranking"""
     try:
@@ -2782,7 +3420,7 @@ async def get_analytics_ranking():
         logger.error(f"Failed to get analytics ranking: {e}")
         raise HTTPException(status_code=500, detail="Failed to get analytics ranking")
 
-@app.get("/api/analytics/recent")
+@app.get("/api/analytics/recent", dependencies=[Depends(require_analytics_access)])
 async def get_analytics_recent():
     """Get recent activity log"""
     try:
