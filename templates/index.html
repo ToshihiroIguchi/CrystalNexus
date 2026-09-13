@@ -410,7 +410,7 @@
                 </div>
                 <div id="chgnet-content">
                     <div class="chgnet-controls">
-                        <button class="button" id="analyze-btn" disabled>🔬 Analyze Structure</button>
+                        <button class="button" id="analyze-btn" disabled>Analyze Structure</button>
 
                         <div class="relax-settings" style="margin-top: 15px;" id="relax-settings">
                             <details style="margin-bottom: 10px;">
@@ -458,7 +458,7 @@
                         <!-- Energy Result Item -->
                         <div class="result-item" id="energy-item">
                             <div class="result-summary">
-                                <span id="energy-summary">⚡ Energy: - eV</span>
+                                <span id="energy-summary">Energy: - eV</span>
                                 <button class="detail-btn" onclick="toggleDetail(event, 'energy')" id="energy-detail-btn"
                                     style="display: none;">Details ▼</button>
                             </div>
@@ -472,7 +472,7 @@
                         <!-- Magnetic Properties Result Item -->
                         <div class="result-item" id="magnetic-item">
                             <div class="result-summary">
-                                <span id="magnetic-summary">🧲 Magnetic: - µB total</span>
+                                <span id="magnetic-summary">Magnetic: - µB total</span>
                                 <button class="detail-btn" onclick="toggleDetail(event, 'magnetic')" id="magnetic-detail-btn"
                                     style="display: none;">Details ▼</button>
                             </div>
@@ -708,7 +708,6 @@
 
             if (!summaryElement) return;
 
-            const icon = type === 'energy' ? '⚡' : '🧲';
             const unit = type === 'energy' ? 'eV' : 'µB total';
 
             if (statusObj.calculated && statusObj.value !== null) {
@@ -719,9 +718,9 @@
 
                 if (type === 'energy') {
                     const valueClass = statusObj.value < 0 ? 'energy-negative' : 'energy-positive';
-                    summaryElement.innerHTML = `${icon} Energy: <span class="${valueClass}">${statusObj.value.toFixed(2)} eV</span><button class="copy-btn" id="${copyBtnId}" onclick="${copyFunction}" title="${title}">📋</button>`;
+                    summaryElement.innerHTML = `Energy: <span class="${valueClass}">${statusObj.value.toFixed(2)} eV</span><button class="copy-btn" id="${copyBtnId}" onclick="${copyFunction}" title="${title}">📋</button>`;
                 } else {
-                    summaryElement.innerHTML = `${icon} Magnetic: <span class="magnetic-moment">${statusObj.value.toFixed(3)} µB total</span><button class="copy-btn" id="${copyBtnId}" onclick="${copyFunction}" title="${title}">📋</button>`;
+                    summaryElement.innerHTML = `Magnetic: <span class="magnetic-moment">${statusObj.value.toFixed(3)} µB total</span><button class="copy-btn" id="${copyBtnId}" onclick="${copyFunction}" title="${title}">📋</button>`;
                 }
 
                 if (detailBtn) detailBtn.style.display = 'inline-block';
@@ -739,7 +738,7 @@
                     message = STATUS_MESSAGES.error;
                 }
 
-                summaryElement.textContent = `${icon} ${type === 'energy' ? 'Energy' : 'Magnetic'}: ${message}`;
+                summaryElement.textContent = `${type === 'energy' ? 'Energy' : 'Magnetic'}: ${message}`;
                 if (detailBtn) detailBtn.style.display = 'none';
                 // Always show magnetic item to display status messages
                 if (item && type === 'magnetic') item.style.display = 'block';
@@ -1388,13 +1387,13 @@
                 // Calculated + structure unchanged = grayed out but still clickable
                 analyzeBtn.classList.add('button-analyzed');
                 analyzeBtn.classList.remove('button-processing');
-                analyzeBtn.textContent = '🔬 Analyze Structure (Calculated)';
+                analyzeBtn.textContent = 'Analyze Structure (Calculated)';
                 analyzeBtn.disabled = false; // Important: must remain clickable
             } else {
                 // Not calculated or structure changed = normal display
                 analyzeBtn.classList.remove('button-analyzed');
                 analyzeBtn.classList.remove('button-processing');
-                analyzeBtn.textContent = '🔬 Analyze Structure';
+                analyzeBtn.textContent = 'Analyze Structure';
                 analyzeBtn.disabled = false;
             }
         }
@@ -1451,12 +1450,12 @@
                 case 'complete':
                     analyzeBtn.disabled = false;
                     analyzeBtn.classList.remove('button-processing');
-                    analyzeBtn.textContent = '🔬 Analyze Structure';
+                    analyzeBtn.textContent = 'Analyze Structure';
                     break;
                 default:
                     analyzeBtn.disabled = false;
                     analyzeBtn.classList.remove('button-processing');
-                    analyzeBtn.textContent = '🔬 Analyze Structure';
+                    analyzeBtn.textContent = 'Analyze Structure';
             }
         }
 
@@ -3010,10 +3009,10 @@ Crystal system: ${data.crystal_system}`;
             operationsElement.innerHTML = `
                 <div style="display: flex; gap: 6px; margin-bottom: 15px;">
                     <button class="secondary-action" id="reset-operations-btn" disabled title="Reset operations to return to supercell state" style="flex: 1; padding: 6px 10px; font-size: 12px; font-weight: 500;">
-                        🔄 Reset
+                        Reset
                     </button>
                     <button class="secondary-action" id="load-new-cif-btn" onclick="resetAndLoadNewCIF()" title="Reset everything and load a new CIF file" style="flex: 1; padding: 6px 10px; font-size: 12px; font-weight: 500;">
-                        🆕 New CIF
+                        New CIF
                     </button>
                 </div>
                 
@@ -5586,7 +5585,7 @@ Crystal system: ${data.crystal_system}`;
             const analyzeBtn = document.getElementById('analyze-btn');
             if (analyzeBtn) {
                 analyzeBtn.disabled = true;
-                analyzeBtn.textContent = '🔬 Analyze Structure';
+                analyzeBtn.textContent = 'Analyze Structure';
             }
 
             const analysisActions = document.getElementById('analysisActions');
@@ -6542,8 +6541,10 @@ Crystal system: ${data.crystal_system}`;
                 a.download = filename;
                 document.body.appendChild(a);
                 a.click();
-                document.body.removeChild(a);
-                window.URL.revokeObjectURL(url);
+                setTimeout(() => {
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                }, 1000);
 
                 dlog(`CIF file downloaded: ${filename}`);
 
@@ -6679,7 +6680,10 @@ Crystal system: ${data.crystal_system}`;
                 link.download = fileName;
                 document.body.appendChild(link);
                 link.click();
-                document.body.removeChild(link);
+                setTimeout(() => {
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(link.href);
+                }, 1000);
                 dlog('Download completed');
 
             } catch (error) {

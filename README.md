@@ -108,6 +108,15 @@ Run the following command in your terminal:
 ```bash
 python start_crystalnexus.py
 ```
+The script auto-detects the project's local `venv` and relaunches itself under it if present, so manually activating the virtual environment first is optional for this command.
+
+**Manual start (without the startup script):**
+If you prefer to manage the environment yourself, activate the virtual environment (see step 2 above) and run `uvicorn` directly:
+
+```bash
+uvicorn main:app --host 127.0.0.1 --port 8080
+```
+This skips the port-checking, health-monitoring, and auto-restart features of `start_crystalnexus.py`, but is useful for debugging or when you want full control over the process (e.g., attaching a debugger).
 
 *   **What happens next?**
     *   The script checks if port `8080` is free.
@@ -131,8 +140,8 @@ python start_crystalnexus.py
 *   **Inspect**: Hover over atoms to see their element and coordinates.
 
 #### 3. Structure Analysis (CHGNet)
-*   **Static Calculation**: Click **"Analyze Structure"** (Default). This calculates the energy of the *current* geometry without moving atoms.
-*   **Relaxation**: Check the **"Relax Structure"** box before analyzing. This will optimize the geometry. The 3D view will update to show the new, relaxed structure.
+*   **Analyze & Relax**: Click **"Analyze Structure"**. CHGNet relaxes the geometry (optimizing atomic positions and the cell) and reports the energy of the resulting structure. The 3D view updates to show the relaxed structure.
+*   **Advanced Settings**: Expand **"⚙️ Advanced Settings"** to tune the force tolerance, max steps, and optimizer (LBFGS/FIRE/BFGS) before analyzing.
 
 #### 4. Advanced Editing
 *   **Supercell**: Open the **"Structure Operations"** menu. Enter dimensions (e.g., 2 2 2) and click **"Create Supercell"**.
