@@ -140,8 +140,8 @@ This skips the port-checking, health-monitoring, and auto-restart features of `s
 *   **Inspect**: Hover over atoms to see their element and coordinates.
 
 #### 3. Structure Analysis (CHGNet)
-*   **Static Calculation**: Click **"Analyze Structure"** (Default). This calculates the energy of the *current* geometry without moving atoms.
-*   **Relaxation**: Check the **"Relax Structure"** box before analyzing. This will optimize the geometry. The 3D view will update to show the new, relaxed structure.
+*   **Analyze & Relax**: Click **"Analyze Structure"**. CHGNet relaxes the geometry (optimizing atomic positions and the cell) and reports the energy of the resulting structure. The 3D view updates to show the relaxed structure.
+*   **Advanced Settings**: Expand **"⚙️ Advanced Settings"** to tune the force tolerance, max steps, and optimizer (LBFGS/FIRE/BFGS) before analyzing.
 
 #### 4. Advanced Editing
 *   **Supercell**: Open the **"Structure Operations"** menu. Enter dimensions (e.g., 2 2 2) and click **"Create Supercell"**.
