@@ -122,9 +122,39 @@ This skips the port-checking, health-monitoring, and auto-restart features of `s
     *   The script checks if port `8080` is free.
     *   It starts the FastAPI backend server.
     *   It monitors the server health continuously.
-    *   Once ready, it will display: `CrystalNexus is ready! URL: http://localhost:8080`
+    *   Once ready, it prints `Local: http://127.0.0.1:{PORT}`. In LAN mode (see below) it additionally prints a `Network: http://<lan-ip>:{PORT}` line and a security warning.
 
-*Note: The server binds to `127.0.0.1` (loopback) by default, so it is only reachable from your own machine. To expose it on your network, set the `CRYSTALNEXUS_HOST` environment variable (e.g., `CRYSTALNEXUS_HOST=0.0.0.0`). The port can likewise be changed with `CRYSTALNEXUS_PORT`.*
+#### LAN access
+
+By default the server binds to `127.0.0.1` (loopback), so it is only reachable from your own machine. To expose it to other devices on your network, run:
+
+```bash
+python start_crystalnexus.py --lan
+```
+
+This binds `0.0.0.0` and:
+*   Detects and prints your machine's LAN IP address(es), so you can share the `http://<lan-ip>:{PORT}` URL with other devices.
+*   Auto-generates a fresh random analytics dashboard token for this run (unless `CRYSTALNEXUS_ANALYTICS_TOKEN` is already set in your environment, in which case that value is used unchanged) and prints ready-to-use dashboard URLs with the token attached.
+*   Prints a security warning summarizing the risks (see below).
+*   On Windows, performs a **read-only** check of whether an inbound firewall rule exists for the port, and tells you the exact command to add one if not.
+
+**Host precedence**: `--lan` (binds `0.0.0.0`) beats the `CRYSTALNEXUS_HOST` environment variable, which beats the `127.0.0.1` default. Setting `CRYSTALNEXUS_HOST=0.0.0.0` by hand (without `--lan`) triggers the exact same LAN-mode behavior — the warning banner, token auto-generation, and firewall check — since the script decides "LAN mode" from the resolved bind address, not from whether `--lan` was literally passed. The port can be changed with `--port PORT` (equivalent to setting `CRYSTALNEXUS_PORT`). Use `--no-firewall-check` to skip the Windows Firewall inspection.
+
+**Security implications of LAN mode** — this is a genuinely unauthenticated app, so only expose it on a network you trust:
+*   There is no authentication on `/` or on any `/api/*` endpoint; anyone who can reach the machine on that port can use the full application.
+*   Any LAN device can upload CIF files and trigger CHGNet relaxations, consuming this machine's CPU and RAM. `POST /api/*` requests are rate-limited per client IP (60 requests/min, burst 20), but this only throttles abuse, it doesn't prevent it.
+*   Sessions are shared globally across all clients (`MAX_SESSIONS=100`, least-recently-used eviction), so concurrent LAN users can evict each other's in-progress work.
+*   Every visitor's IP address and User-Agent is logged to `analytics.db`, retained for `ANALYTICS_RETENTION_DAYS` (default 90) days.
+
+**Windows Firewall**: the check the script performs is read-only — it never modifies firewall state itself. If no inbound allow rule is found for the port, it prints the exact command to add one, which you run yourself in an **elevated** PowerShell or Command Prompt:
+
+```
+netsh advfirewall firewall add rule name="CrystalNexus 8080" dir=in action=allow protocol=TCP localport=8080 profile=private
+```
+
+(`profile=private` keeps the rule off public/untrusted networks.) The script also prints the matching `delete rule` command so you can remove it later.
+
+LAN IP detection is best-effort: it may list several candidate addresses if your machine has VPN/WSL/Hyper-V virtual adapters, and it may occasionally fail to detect anything, in which case run `ipconfig` and look for your Wi-Fi/Ethernet adapter's IPv4 address.
 
 ### Workflow Guide
 
@@ -159,6 +189,7 @@ This skips the port-checking, health-monitoring, and auto-restart features of `s
     *   Daily usage trends
     *   Most analyzed structures
     *   Recent calculation logs
+*   By default the dashboard is loopback-only: no token is needed when accessing it from `127.0.0.1`/`localhost`. Once `CRYSTALNEXUS_ANALYTICS_TOKEN` is set — including automatically when you run `python start_crystalnexus.py --lan` — access from anywhere, including localhost, requires that token, either as a `?token=...` query parameter or an `X-Analytics-Token` header. When `--lan` auto-generates a token, it prints ready-to-use `?token=...` URLs for both `127.0.0.1` and your LAN IP.
 
 ---
 

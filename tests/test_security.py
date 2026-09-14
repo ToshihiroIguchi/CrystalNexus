@@ -565,6 +565,28 @@ def test_analytics_ranking_accepts_correct_query_token(client, monkeypatch):
     assert response.status_code == 200
 
 
+def test_analytics_api_accepts_header_token(client, monkeypatch):
+    """A request presenting the correct X-Analytics-Token header is allowed
+    even though TestClient's client host ("testclient") is not loopback --
+    this is the LAN-mode code path start_crystalnexus.py --lan relies on."""
+    monkeypatch.setattr(main, "CRYSTALNEXUS_ANALYTICS_TOKEN", "tok")
+    ok = client.get("/api/analytics/summary", headers={"X-Analytics-Token": "tok"})
+    assert ok.status_code == 200
+    denied = client.get("/api/analytics/summary")
+    assert denied.status_code == 401
+
+
+def test_analytics_js_forwards_token():
+    """Static guard: static/js/analytics.js must forward the token on its
+    fetches, or the dashboard silently 401s once CRYSTALNEXUS_ANALYTICS_TOKEN
+    is set (including via start_crystalnexus.py --lan's auto-generated token)."""
+    js_path = Path(__file__).resolve().parent.parent / "static" / "js" / "analytics.js"
+    content = js_path.read_text(encoding="utf-8")
+    assert "X-Analytics-Token" in content
+    assert "fetch('/api/analytics" not in content
+    assert 'fetch("/api/analytics' not in content
+
+
 # ---------------------------------------------------------------------------
 # Resource limits -- regression tests for S-4b/c (unbounded upload buffering
 # and unbounded session storage)

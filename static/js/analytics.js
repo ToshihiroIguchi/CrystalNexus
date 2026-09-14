@@ -7,6 +7,52 @@ function escapeHtml(value) {
     }[ch]));
 }
 
+// require_analytics_access (main.py) accepts either an X-Analytics-Token header
+// or a ?token= query parameter. A browser cannot set a header on an address-bar
+// navigation, so the dashboard is always reached as /analytics?token=... when a
+// token is configured; forward that same token on the three XHRs below, which
+// would otherwise 401 -- even from localhost.
+function getAnalyticsToken() {
+    try {
+        return new URLSearchParams(window.location.search).get('token') || '';
+    } catch (e) {
+        return '';
+    }
+}
+
+async function analyticsFetch(path) {
+    const token = getAnalyticsToken();
+    const options = { credentials: 'same-origin' };
+    if (token) {
+        options.headers = { 'X-Analytics-Token': token };
+    }
+    const response = await fetch(path, options);
+    if (response.status === 401) {
+        showAnalyticsError(
+            'Analytics access denied (401). Open this page as ' +
+            '/analytics?token=YOUR_TOKEN using the token printed by ' +
+            'start_crystalnexus.py.'
+        );
+    }
+    return response;
+}
+
+function showAnalyticsError(message) {
+    const containerSelector = '.analytics-container';
+    const container = document.querySelector(containerSelector) || document.body;
+    let banner = document.getElementById('analyticsErrorBanner');
+    if (banner) {
+        // Idempotent: three failing fetches must produce exactly one banner.
+        return;
+    }
+    banner = document.createElement('div');
+    banner.id = 'analyticsErrorBanner';
+    banner.style.cssText = 'background:#fee;color:#900;border:1px solid #c00;' +
+        'padding:12px 16px;margin-bottom:16px;border-radius:4px;font-weight:bold;';
+    banner.textContent = message; // textContent, not innerHTML -- message may include user-influenced text
+    container.insertBefore(banner, container.firstChild);
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
     // Fetch and render data
     await loadSummaryData();
@@ -16,7 +62,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function loadSummaryData() {
     try {
-        const response = await fetch('/api/analytics/summary');
+        const response = await analyticsFetch('/api/analytics/summary');
         if (!response.ok) throw new Error('Failed to fetch summary');
         const data = await response.json();
 
@@ -29,7 +75,7 @@ async function loadSummaryData() {
 
 async function loadPopularSamples() {
     try {
-        const response = await fetch('/api/analytics/ranking');
+        const response = await analyticsFetch('/api/analytics/ranking');
         if (!response.ok) throw new Error('Failed to fetch ranking');
         const data = await response.json();
 
@@ -51,7 +97,7 @@ async function loadPopularSamples() {
 
 async function loadRecentActivity() {
     try {
-        const response = await fetch('/api/analytics/recent');
+        const response = await analyticsFetch('/api/analytics/recent');
         if (!response.ok) throw new Error('Failed to fetch activity');
         const data = await response.json();
 
