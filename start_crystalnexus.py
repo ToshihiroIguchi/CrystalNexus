@@ -13,7 +13,12 @@ import platform
 import threading
 import queue
 import signal
+import argparse
+import secrets
+import socket
+import ipaddress
 from pathlib import Path
+from typing import Optional
 
 
 def _relaunch_in_venv():
@@ -46,9 +51,163 @@ def _relaunch_in_venv():
         print(f"Warning: failed to relaunch inside venv ({e}); continuing with current interpreter.")
 
 
-_relaunch_in_venv()
+if __name__ == "__main__":
+    _relaunch_in_venv()
 
 import requests
+
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", ""})
+
+
+def resolve_host(lan: bool, env_host: Optional[str]) -> str:
+    """CLI --lan beats the CRYSTALNEXUS_HOST env var, which beats the loopback default."""
+    if lan:
+        return "0.0.0.0"
+    return env_host if env_host else "127.0.0.1"
+
+
+def is_lan_binding(host: str) -> bool:
+    """True when the bind address is reachable from other machines on the network."""
+    return host not in LOOPBACK_HOSTS  # 0.0.0.0, ::, or an explicit interface IP
+
+
+def health_host(host: str) -> str:
+    """Which address the launcher itself should probe for /health.
+
+    The launcher always runs on the same machine as the server, so probing
+    loopback is correct and robust even when the server also binds 0.0.0.0
+    (it listens on loopback too in that case). On Windows, `localhost` can
+    resolve to ::1 first, and uvicorn bound to 0.0.0.0 is IPv4-only, so use
+    the literal 127.0.0.1 instead of the hostname `localhost`.
+    """
+    if host in ("0.0.0.0", "127.0.0.1", "localhost", ""):
+        return "127.0.0.1"
+    if host in ("::", "::1"):
+        return "[::1]"
+    return host  # an explicit interface IP: uvicorn is NOT listening on loopback here
+
+
+def resolve_analytics_token(lan_mode: bool) -> Optional[str]:
+    """Decide what CRYSTALNEXUS_ANALYTICS_TOKEN the child server process should run with.
+
+    Precedence:
+      env var set to a non-empty value -> use it verbatim (never overwrite the user's choice)
+      env var present but set to ""    -> explicit opt-out; warn when lan_mode, return None
+      env var unset and lan_mode       -> generate a fresh secrets.token_urlsafe(32)
+      env var unset and not lan_mode   -> None (main.py's existing loopback-only default applies)
+
+    Not generating a token outside LAN mode is deliberate: forcing a token on
+    loopback-only use would make the analytics dashboard *less* usable there
+    (main.py's loopback bypass would no longer apply) for no security benefit.
+    """
+    raw = os.environ.get("CRYSTALNEXUS_ANALYTICS_TOKEN")
+    if raw:
+        return raw
+    if raw is not None:  # present but empty string: deliberate opt-out
+        if lan_mode:
+            print("WARNING: CRYSTALNEXUS_ANALYTICS_TOKEN is set to an empty value.")
+            print("         /analytics and /api/analytics/* will be reachable from")
+            print("         any LAN client with no token. This exposes every visitor")
+            print("         IP/User-Agent and uploaded filename/formula on your LAN.")
+        return None
+    if lan_mode:
+        return secrets.token_urlsafe(32)
+    return None
+
+
+def detect_lan_ipv4():
+    """Best-effort LAN IPv4 detection. Never raises. Returns (primary_or_None, other_candidates).
+
+    Primary: connect() a UDP socket to a public IP (no packet is actually sent
+    for UDP connect -- it only asks the OS routing table which local address
+    would be used to reach the internet). This is preferred over
+    socket.getaddrinfo(socket.gethostname()) because on a typical Windows
+    machine that call often returns Hyper-V/WSL/Docker/VPN virtual adapter
+    addresses ahead of the real Wi-Fi/Ethernet address, which would print a
+    URL no other device on the LAN can actually reach.
+    """
+    primary = None
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.settimeout(0.5)
+        s.connect(("8.8.8.8", 80))
+        primary = s.getsockname()[0]
+    except OSError:
+        primary = None
+    finally:
+        s.close()
+
+    others = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            try:
+                addr = ipaddress.IPv4Address(ip)
+            except ValueError:
+                continue
+            if addr.is_loopback or addr.is_link_local:
+                continue
+            if ip != primary and ip not in others:
+                others.append(ip)
+    except OSError:
+        pass
+    return primary, others
+
+
+_FIREWALL_CHECK_PS = (
+    "$p = {port}; "
+    "Get-NetFirewallPortFilter -PolicyStore ActiveStore | "
+    "Where-Object {{ $_.Protocol -eq 'TCP' -and "
+    "($_.LocalPort -contains [string]$p -or $_.LocalPort -contains 'Any') }} | "
+    "ForEach-Object {{ $r = $_ | Get-NetFirewallRule; "
+    "if ($r.Enabled -eq 'True' -and $r.Direction -eq 'Inbound' -and "
+    "$r.Action -eq 'Allow') {{ 'MATCH:' + $r.DisplayName }} }}"
+)
+
+
+def check_firewall_rule(port: int) -> Optional[bool]:
+    """Read-only Windows Firewall inspection. True/False, or None if undetermined.
+
+    Uses PowerShell's Get-NetFirewallRule/Get-NetFirewallPortFilter cmdlets
+    (readable by a standard user on a default Windows 11 install) rather than
+    parsing `netsh` text output, because netsh's localized text (e.g. on a
+    Japanese Windows install) will not match an English-language pattern.
+    This function must NEVER call any New-/Set-/Remove- cmdlet or `netsh ...
+    add/delete` -- it only ever reads firewall state.
+    """
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             _FIREWALL_CHECK_PS.format(port=port)],
+            capture_output=True, text=True, errors="replace", timeout=15,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    return any(line.startswith("MATCH:") for line in result.stdout.splitlines())
+
+
+def _child_env(host: str, port: int, token: Optional[str]) -> dict:
+    """Build the environment for the uvicorn child process.
+
+    Returns a full COPY of os.environ (never mutates the parent's os.environ)
+    with HOST/PORT/token overridden. A full copy (not a partial dict) is
+    required on Windows -- python -m uvicorn needs PATH/SystemRoot and other
+    inherited variables to run at all. Passing this via subprocess.Popen's
+    env= keyword (rather than mutating os.environ in the launcher process)
+    also keeps the analytics token out of the launcher's own environment,
+    which matters because the launcher itself shells out to netstat/tasklist/
+    powershell elsewhere (stop_existing_server, check_firewall_rule).
+    """
+    env = dict(os.environ)
+    env["CRYSTALNEXUS_HOST"] = host
+    env["CRYSTALNEXUS_PORT"] = str(port)
+    if token:
+        env["CRYSTALNEXUS_ANALYTICS_TOKEN"] = token
+    return env
+
 
 # Environment-aware configuration (same as main.py)
 # Default to loopback; set CRYSTALNEXUS_HOST=0.0.0.0 to expose on the network
@@ -57,11 +216,52 @@ PORT = int(os.getenv('CRYSTALNEXUS_PORT', '8080'))
 DEBUG = os.getenv('CRYSTALNEXUS_DEBUG', 'False').lower() == 'true'
 
 HEALTH_URL = f"http://localhost:{PORT}/health"
+LAN_MODE = is_lan_binding(HOST)
+ANALYTICS_TOKEN = None
 MAX_STARTUP_WAIT = 30  # seconds
 
 # Global shutdown flag
 shutdown_requested = False
 server_process = None
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="start_crystalnexus.py",
+        description="Start the CrystalNexus backend (loopback by default).",
+        epilog=(
+            "Host precedence: --lan (binds 0.0.0.0) beats CRYSTALNEXUS_HOST, "
+            "which beats the 127.0.0.1 default."
+        ),
+    )
+    parser.add_argument(
+        "--lan", action="store_true",
+        help="Bind 0.0.0.0 and print the LAN URL. Exposes this unauthenticated "
+             "app to every device on your network.",
+    )
+    parser.add_argument(
+        "--port", type=int, default=None,
+        help="Override CRYSTALNEXUS_PORT (default 8080).",
+    )
+    parser.add_argument(
+        "--no-firewall-check", action="store_true",
+        help="Skip the read-only Windows Firewall inspection.",
+    )
+    return parser.parse_args(argv)
+
+
+def _apply_runtime_config(args):
+    """Resolve CLI args + env into the module's runtime globals. Must run
+    before check_backend_status()/stop_existing_server() are called so they
+    see the final HOST/PORT."""
+    global HOST, PORT, HEALTH_URL, LAN_MODE, ANALYTICS_TOKEN
+    if args.port is not None:
+        PORT = args.port
+    HOST = resolve_host(args.lan, os.getenv("CRYSTALNEXUS_HOST"))
+    LAN_MODE = is_lan_binding(HOST)
+    HEALTH_URL = f"http://{health_host(HOST)}:{PORT}/health"
+    ANALYTICS_TOKEN = resolve_analytics_token(LAN_MODE)
+
 
 def check_backend_status():
     """Check if the backend is already running"""
@@ -78,7 +278,6 @@ def check_backend_status():
 def stop_existing_server():
     """Stop existing CrystalNexus server if running"""
     try:
-        import subprocess
         # Get process using port 8080 using netstat
         result = subprocess.run(
             ['netstat', '-ano'], 
@@ -130,7 +329,10 @@ def stop_existing_server():
 def start_backend():
     """Start the FastAPI backend with environment-aware configuration"""
     print("Starting CrystalNexus backend...")
-    print(f"Configuration: HOST={HOST}, PORT={PORT}, DEBUG={DEBUG}")
+    token_status = "generated" if (ANALYTICS_TOKEN and not os.environ.get("CRYSTALNEXUS_ANALYTICS_TOKEN")) else (
+        "from environment" if ANALYTICS_TOKEN else "none"
+    )
+    print(f"Configuration: HOST={HOST}, PORT={PORT}, DEBUG={DEBUG}, LAN_MODE={LAN_MODE}, ANALYTICS_TOKEN={token_status}")
     
     # Change to the script directory
     script_dir = Path(__file__).parent
@@ -156,7 +358,7 @@ def start_backend():
             kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
         
         print("Starting server with direct output mode...")
-        process = subprocess.Popen(cmd, **kwargs)
+        process = subprocess.Popen(cmd, env=_child_env(HOST, PORT, ANALYTICS_TOKEN), **kwargs)
         
         # Wait for startup
         print(f"Waiting for backend to start on port {PORT}...")
@@ -288,7 +490,10 @@ def signal_handler(signum, frame):
 def main():
     """Main startup routine"""
     global server_process, shutdown_requested
-    
+
+    args = parse_args()
+    _apply_runtime_config(args)
+
     print("CrystalNexus Startup Script")
     print("=" * 40)
     
@@ -319,12 +524,74 @@ def main():
     
     print("\n" + "=" * 40)
     print("CrystalNexus is ready!")
-    print(f"Open your browser and go to: http://localhost:{PORT}")
-    if HOST == "0.0.0.0":
-        print(f"Network access: http://<your-ip>:{PORT}")
+    print(f"Local: http://127.0.0.1:{PORT}")
+
+    lan_primary_ip = None
+    if LAN_MODE:
+        lan_primary_ip, lan_other_ips = detect_lan_ipv4()
+        if lan_primary_ip:
+            print(f"Network: http://{lan_primary_ip}:{PORT}")
+        else:
+            print("Network: could not auto-detect a LAN IP. Run `ipconfig` and look")
+            print(f"         for your Wi-Fi/Ethernet adapter's IPv4 address, then use http://<that-ip>:{PORT}")
+        if lan_other_ips:
+            print("Other interfaces (VPN/WSL/Hyper-V may appear here):")
+            for ip in lan_other_ips:
+                print(f"  http://{ip}:{PORT}")
+
+        print()
+        print("!!  LAN EXPOSURE WARNING  !!")
+        print("  * There is NO authentication on / or on any /api/* endpoint.")
+        print(f"    Any device that can reach this machine on port {PORT} can use the app.")
+        print("  * Any LAN device can upload CIF files and start CHGNet relaxations,")
+        print("    consuming this machine's CPU and RAM. Only POST /api/* is rate limited")
+        print("    (60 req/min, burst 20, per client IP).")
+        print("  * Sessions are shared globally, not per user: MAX_SESSIONS=100 with")
+        print("    least-recently-used eviction, so one busy client can evict another")
+        print("    client's in-progress structure.")
+        print("  * Every visitor's IP address and User-Agent is logged to analytics.db")
+        print("    (retained ANALYTICS_RETENTION_DAYS=90 days).")
+        print("  * Only run this on a network you trust. Stop with Ctrl+C when finished.")
+
+        if ANALYTICS_TOKEN and not os.environ.get("CRYSTALNEXUS_ANALYTICS_TOKEN"):
+            print()
+            print(f"Analytics token (generated for this run): {ANALYTICS_TOKEN}")
+            print(f"  Dashboard:  http://127.0.0.1:{PORT}/analytics?token={ANALYTICS_TOKEN}")
+            if lan_primary_ip:
+                print(f"  From LAN:   http://{lan_primary_ip}:{PORT}/analytics?token={ANALYTICS_TOKEN}")
+            print("  This token changes on every launch. Export CRYSTALNEXUS_ANALYTICS_TOKEN")
+            print("  to keep it stable. The token appears in the URL, so it lands in browser history.")
+
+        print()
+
     print("Press Ctrl+C to stop the server")
     print("=" * 40)
-    
+
+    if LAN_MODE and platform.system() == "Windows" and not args.no_firewall_check:
+        fw_result = check_firewall_rule(PORT)
+        if fw_result is True:
+            print(f"Windows Firewall: an inbound allow rule for TCP {PORT} already exists.")
+        elif fw_result is False:
+            print(f"Windows Firewall: no inbound allow rule found for TCP {PORT}.")
+            print("  Other devices probably cannot reach this server. To add one, run this in an")
+            print("  ELEVATED PowerShell / Command Prompt (this script will not do it for you and")
+            print("  does not need admin rights):")
+            print()
+            print(f'    netsh advfirewall firewall add rule name="CrystalNexus {PORT}" dir=in action=allow protocol=TCP localport={PORT} profile=private')
+            print()
+            print("  profile=private keeps the rule off public/untrusted networks.")
+            print("  To remove it later:")
+            print()
+            print(f'    netsh advfirewall firewall delete rule name="CrystalNexus {PORT}" protocol=TCP localport={PORT}')
+            print()
+            print('  Note: Windows may also show its own "Allow python.exe?" dialog when uvicorn')
+            print("  first binds. If it was dismissed or denied before, a block rule exists and")
+            print("  must be removed in wf.msc.")
+        else:
+            print(f"Windows Firewall: could not determine whether port {PORT} is allowed (the check")
+            print("  was skipped; this is not an error). If LAN clients cannot connect, see the")
+            print("  netsh command in the README.")
+
     # Countermeasure 3: Start process monitoring thread
     status_queue = queue.Queue()
     
