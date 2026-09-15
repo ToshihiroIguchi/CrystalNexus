@@ -17,6 +17,7 @@ import argparse
 import secrets
 import socket
 import ipaddress
+import collections
 from pathlib import Path
 from typing import Optional
 
@@ -326,6 +327,37 @@ def stop_existing_server():
         print(f"ERROR Failed to stop existing server: {e}")
         return False
 
+def _stream_child_output(process: subprocess.Popen, tail: "collections.deque[str]") -> None:
+    """Relay the child's stdout/stderr to our console and keep the last lines in `tail`.
+
+    Must start right after Popen: the OS pipe buffer is small (a few tens of
+    KB on Windows), and an uvicorn process writes to it continuously, so a
+    pipe nobody drains will eventually block the child. Combining
+    stderr into stdout (see start_backend) means a single reader here
+    captures both.
+    """
+    try:
+        assert process.stdout is not None
+        for line in process.stdout:
+            print(line, end="")
+            tail.append(line)
+    except Exception:
+        pass
+
+
+def _print_captured_output(tail: "collections.deque[str]") -> None:
+    """Show the child's last output lines to help diagnose a startup failure."""
+    if not tail:
+        print("(No output was captured from the server process.)")
+        return
+    print()
+    print("Captured server output (most recent lines):")
+    print("-" * 40)
+    for line in tail:
+        print(line, end="")
+    print("-" * 40)
+
+
 def start_backend():
     """Start the FastAPI backend with environment-aware configuration"""
     print("Starting CrystalNexus backend...")
@@ -352,32 +384,54 @@ def start_backend():
             print("Debug mode: Auto-reload enabled")
         
         # Countermeasure 1: Proper handling of process output
-        # Do not pipe stdout/stderr (output directly to console to avoid buffer clogging)
+        # Pipe stdout/stderr (merged) through a dedicated reader thread started
+        # immediately below, so the pipe is continuously drained (avoiding the
+        # buffer-clogging this used to dodge by not piping at all) while also
+        # letting us show the child's own error output if startup fails --
+        # inherited console handles do not reliably surface here on Windows.
         kwargs = {}
         if platform.system() == "Windows":
             kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-        
+
         print("Starting server with direct output mode...")
-        process = subprocess.Popen(cmd, env=_child_env(HOST, PORT, ANALYTICS_TOKEN), **kwargs)
-        
+        process = subprocess.Popen(
+            cmd,
+            env=_child_env(HOST, PORT, ANALYTICS_TOKEN),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            **kwargs,
+        )
+
+        output_tail = collections.deque(maxlen=200)
+        output_thread = threading.Thread(
+            target=_stream_child_output, args=(process, output_tail), daemon=True
+        )
+        output_thread.start()
+
         # Wait for startup
         print(f"Waiting for backend to start on port {PORT}...")
-        
+
         for i in range(MAX_STARTUP_WAIT):
             time.sleep(1)
             if check_backend_status():
                 print(f"OK Backend started successfully!")
                 print(f"OK CrystalNexus is now available at http://localhost:{PORT}")
                 return process
-            
+
             # Check if process is still running
             if process.poll() is not None:
                 print("ERROR Backend failed to start!")
                 print("Process terminated unexpectedly during startup")
+                output_thread.join(timeout=2)
+                _print_captured_output(output_tail)
                 return None
                 
         print("ERROR Backend startup timeout!")
         process.terminate()
+        output_thread.join(timeout=2)
+        _print_captured_output(output_tail)
         return None
         
     except Exception as e:
