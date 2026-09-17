@@ -653,6 +653,11 @@
         // Atomic operations history for complete 3D visualization
         window.atomicOperations = [];
 
+        // Manual mode 3D atom highlight state (wireframe sphere + 3D badge label)
+        window.manualHighlightShape = null;
+        window.manualHighlightLabel = null;
+        window.selectedManualAtomLabel = null;
+
         // Session id: server-issued only. The backend mints a
         // cryptographically random id the first time /api/create-supercell
         // runs (see SessionManager.create_session in main.py) and returns
@@ -1744,6 +1749,151 @@
             updateMoleculeStyleRobust();
         }
 
+        // Clear manual mode selected atom visual highlight (wireframe sphere + 3D badge)
+        function clearManualAtomHighlight() {
+            if (!window.viewer3D) {
+                window.manualHighlightShape = null;
+                window.manualHighlightLabel = null;
+                window.selectedManualAtomLabel = null;
+                return;
+            }
+
+            let needsRender = false;
+
+            if (window.manualHighlightShape) {
+                try {
+                    window.viewer3D.removeShape(window.manualHighlightShape);
+                    needsRender = true;
+                } catch (e) {
+                    console.warn('⚠️ Could not remove manual highlight shape:', e);
+                }
+                window.manualHighlightShape = null;
+            }
+
+            if (window.manualHighlightLabel) {
+                try {
+                    window.viewer3D.removeLabel(window.manualHighlightLabel);
+                    needsRender = true;
+                } catch (e) {
+                    console.warn('⚠️ Could not remove manual highlight label:', e);
+                }
+                window.manualHighlightLabel = null;
+            }
+
+            window.selectedManualAtomLabel = null;
+
+            if (needsRender) {
+                window.viewer3D.render();
+            }
+        }
+
+        // Highlight selected atom in 3Dmol viewer:
+        // 1. Enclosing neon wireframe sphere (preserves CPK color and stick bonds underneath)
+        // 2. High-contrast floating 3D badge label
+        function highlightManualAtom(atomLabel) {
+            clearManualAtomHighlight();
+
+            if (!atomLabel || !window.viewer3D) return;
+
+            const labels = window.currentLabels || [];
+            const atomIndex = labels.indexOf(atomLabel);
+            if (atomIndex === -1) {
+                dlog(`⚠️ Atom label ${atomLabel} not found in currentLabels`);
+                return;
+            }
+
+            const model = window.viewer3D.getModel();
+            if (!model) return;
+
+            const atoms = model.selectedAtoms({});
+            if (!atoms || atomIndex >= atoms.length) {
+                dlog(`⚠️ Atom index ${atomIndex} out of range in 3Dmol model atoms`);
+                return;
+            }
+
+            const targetAtom = atoms[atomIndex];
+            if (!targetAtom) return;
+
+            try {
+                // 1. Enclosing neon-yellow wireframe sphere
+                const vdwRadius = targetAtom.radius || 1.5;
+                const sphereRadius = Math.max(0.75, (vdwRadius * 0.35) + 0.15);
+
+                window.manualHighlightShape = window.viewer3D.addSphere({
+                    center: { x: targetAtom.x, y: targetAtom.y, z: targetAtom.z },
+                    radius: sphereRadius,
+                    color: '#ffdd00',
+                    wireframe: true,
+                    alpha: 0.95
+                });
+
+                // 2. High-contrast 3D badge label with red background
+                window.manualHighlightLabel = window.viewer3D.addLabel(atomLabel, {
+                    position: { x: targetAtom.x, y: targetAtom.y, z: targetAtom.z },
+                    backgroundColor: 'rgba(231, 76, 60, 0.92)',
+                    fontColor: '#ffffff',
+                    fontSize: 13,
+                    borderRadius: 4,
+                    padding: 4,
+                    backgroundOpacity: 0.92,
+                    borderThickness: 1,
+                    borderColor: '#c0392b',
+                    inFront: true
+                });
+
+                window.selectedManualAtomLabel = atomLabel;
+                window.viewer3D.render();
+            } catch (error) {
+                console.error('❌ Failed to highlight manual atom in 3D viewer:', error);
+            }
+        }
+
+        // Setup 3D click & hover interactions for direct atom selection in Manual mode
+        function setupViewerAtomInteractions() {
+            if (!window.viewer3D) return;
+
+            try {
+                // Direct 3D click on an atom selects it in Manual mode
+                window.viewer3D.setClickable({}, true, function (atom, viewer, event, container) {
+                    const manualMode = document.getElementById('manual-mode');
+                    const tabModify = document.getElementById('tab-modify');
+                    const isModifyActive = tabModify ? tabModify.classList.contains('active') : true;
+
+                    if (isModifyActive && manualMode && manualMode.checked) {
+                        if (atom && typeof atom.index === 'number' && window.currentLabels && window.currentLabels[atom.index]) {
+                            const label = window.currentLabels[atom.index];
+                            const atomDropdown = document.getElementById('element-dropdown');
+                            if (atomDropdown && atomDropdown.value !== label) {
+                                atomDropdown.value = label;
+                                atomDropdown.dispatchEvent(new Event('change'));
+                            }
+                        }
+                    }
+                });
+
+                // Hover interaction: set pointer cursor when hovering over atoms in Manual mode
+                window.viewer3D.setHoverable({}, true,
+                    function (atom, viewer, event, container) {
+                        const manualMode = document.getElementById('manual-mode');
+                        const tabModify = document.getElementById('tab-modify');
+                        const isModifyActive = tabModify ? tabModify.classList.contains('active') : true;
+                        if (isModifyActive && manualMode && manualMode.checked) {
+                            if (container && container.style) {
+                                container.style.cursor = 'pointer';
+                            }
+                        }
+                    },
+                    function (atom, viewer, event, container) {
+                        if (container && container.style) {
+                            container.style.cursor = 'default';
+                        }
+                    }
+                );
+            } catch (err) {
+                console.warn('⚠️ Could not setup viewer atom interactions:', err);
+            }
+        }
+
         // Update molecule style based on bond display state
         function updateMoleculeStyleRobust() {
             if (!window.viewer3D) {
@@ -1761,6 +1911,20 @@
                 }
 
                 window.viewer3D.setStyle({}, style);
+                setupViewerAtomInteractions();
+
+                // Re-apply manual highlight if an atom was already selected
+                if (window.selectedManualAtomLabel) {
+                    const manualMode = document.getElementById('manual-mode');
+                    const tabModify = document.getElementById('tab-modify');
+                    const isModifyActive = tabModify ? tabModify.classList.contains('active') : true;
+                    if (isModifyActive && manualMode && manualMode.checked) {
+                        highlightManualAtom(window.selectedManualAtomLabel);
+                    } else {
+                        clearManualAtomHighlight();
+                    }
+                }
+
                 window.viewer3D.render();
                 syncBondButtonState();
 
@@ -2994,6 +3158,10 @@ Crystal system: ${data.crystal_system}`;
         }
 
         function buildStructureOperationsPanel(labels) {
+            if (typeof clearManualAtomHighlight === 'function') {
+                clearManualAtomHighlight();
+            }
+
             const operationsElement = document.getElementById('structure-operations-content');
             operationsElement.classList.remove('mock-text');
 
@@ -3219,6 +3387,16 @@ Crystal system: ${data.crystal_system}`;
                 operationSelect.disabled = (manualMode && manualMode.checked)
                     ? !atomDropdown?.value
                     : !elementTypeDropdown?.value;
+            }
+
+            // Synchronize 3D highlight with current dropdown value
+            if (typeof highlightManualAtom === 'function') {
+                const manualMode = document.getElementById('manual-mode');
+                if (manualMode && manualMode.checked && atomDropdown && atomDropdown.value) {
+                    highlightManualAtom(atomDropdown.value);
+                } else if (typeof clearManualAtomHighlight === 'function') {
+                    clearManualAtomHighlight();
+                }
             }
 
             updateExecuteButton();
@@ -3544,6 +3722,7 @@ Crystal system: ${data.crystal_system}`;
 
             async function switchTab(mode) {
                 if (window.viewer3D && typeof clearGhostAtom === 'function') clearGhostAtom(); // Clear preview
+                if (typeof clearManualAtomHighlight === 'function') clearManualAtomHighlight();
                 window.currentOperationMode = mode;
 
                 if (mode === 'insert') {
@@ -3577,6 +3756,11 @@ Crystal system: ${data.crystal_system}`;
                     autoSelector.style.display = 'none';
                     elementTypeDropdown.value = '';
                     operationSelect.disabled = !atomDropdown.value;
+                    if (atomDropdown.value && typeof highlightManualAtom === 'function') {
+                        highlightManualAtom(atomDropdown.value);
+                    } else if (typeof clearManualAtomHighlight === 'function') {
+                        clearManualAtomHighlight();
+                    }
                     updateExecuteButton();
                 }
             });
@@ -3587,12 +3771,20 @@ Crystal system: ${data.crystal_system}`;
                     autoSelector.style.display = 'block';
                     atomDropdown.value = '';
                     operationSelect.disabled = !elementTypeDropdown.value;
+                    if (typeof clearManualAtomHighlight === 'function') clearManualAtomHighlight();
                     updateExecuteButton();
                 }
             });
 
             atomDropdown.addEventListener('change', function () {
-                if (manualMode.checked) operationSelect.disabled = !this.value;
+                if (manualMode.checked) {
+                    operationSelect.disabled = !this.value;
+                    if (this.value && typeof highlightManualAtom === 'function') {
+                        highlightManualAtom(this.value);
+                    } else if (typeof clearManualAtomHighlight === 'function') {
+                        clearManualAtomHighlight();
+                    }
+                }
                 updateExecuteButton();
             });
 
@@ -4765,6 +4957,10 @@ Crystal system: ${data.crystal_system}`;
         }
 
         async function resetToOriginalStructure() {
+            if (typeof clearManualAtomHighlight === 'function') {
+                clearManualAtomHighlight();
+            }
+
             if (!window.originalSupercellData || window.originalLabels.length === 0) {
                 showNotification('No original data to reset to', 'warning');
                 return;
@@ -5171,6 +5367,10 @@ Crystal system: ${data.crystal_system}`;
         }
 
         async function updateStructureVisualization() {
+            if (typeof clearManualAtomHighlight === 'function') {
+                clearManualAtomHighlight();
+            }
+
             if (!window.viewer3D || !window.currentFilename || !window.currentSupercellSize) {
                 dlog('3D viewer or structure parameters not available, skipping update');
                 return;
