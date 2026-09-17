@@ -1852,32 +1852,53 @@
         function setupViewerAtomInteractions() {
             if (!window.viewer3D) return;
 
+            function isOperationProcessing() {
+                const executeBtn = document.getElementById('execute-btn');
+                return (executeBtn && executeBtn.classList.contains('button-processing')) ||
+                       (typeof currentAbortController !== 'undefined' && currentAbortController !== null);
+            }
+
             try {
                 // Direct 3D click on an atom selects it in Manual mode
                 window.viewer3D.setClickable({}, true, function (atom, viewer, event, container) {
-                    const manualMode = document.getElementById('manual-mode');
                     const tabModify = document.getElementById('tab-modify');
                     const isModifyActive = tabModify ? tabModify.classList.contains('active') : true;
 
-                    if (isModifyActive && manualMode && manualMode.checked) {
-                        if (atom && typeof atom.index === 'number' && window.currentLabels && window.currentLabels[atom.index]) {
-                            const label = window.currentLabels[atom.index];
-                            const atomDropdown = document.getElementById('element-dropdown');
-                            if (atomDropdown && atomDropdown.value !== label) {
-                                atomDropdown.value = label;
-                                atomDropdown.dispatchEvent(new Event('change'));
+                    if (!isModifyActive || isOperationProcessing()) return;
+
+                    if (atom && typeof atom.index === 'number' && window.currentLabels && window.currentLabels[atom.index]) {
+                        const label = window.currentLabels[atom.index];
+                        const atomDropdown = document.getElementById('element-dropdown');
+                        if (!atomDropdown || !atomDropdown.querySelector(`option[value="${label}"]`)) return;
+
+                        const manualMode = document.getElementById('manual-mode');
+                        const autoMode = document.getElementById('auto-mode');
+                        if (manualMode && !manualMode.checked) {
+                            manualMode.checked = true;
+                            if (autoMode) autoMode.checked = false;
+                            manualMode.dispatchEvent(new Event('change'));
+                        }
+
+                        if (atomDropdown.value !== label) {
+                            atomDropdown.value = label;
+                            atomDropdown.dispatchEvent(new Event('change'));
+                        } else {
+                            if (typeof highlightManualAtom === 'function') {
+                                highlightManualAtom(label);
+                            }
+                            if (typeof updateExecuteButton === 'function') {
+                                updateExecuteButton();
                             }
                         }
                     }
                 });
 
-                // Hover interaction: set pointer cursor when hovering over atoms in Manual mode
+                // Hover interaction: set pointer cursor when hovering over atoms in Modify tab
                 window.viewer3D.setHoverable({}, true,
                     function (atom, viewer, event, container) {
-                        const manualMode = document.getElementById('manual-mode');
                         const tabModify = document.getElementById('tab-modify');
                         const isModifyActive = tabModify ? tabModify.classList.contains('active') : true;
-                        if (isModifyActive && manualMode && manualMode.checked) {
+                        if (isModifyActive && !isOperationProcessing()) {
                             if (container && container.style) {
                                 container.style.cursor = 'pointer';
                             }
@@ -3186,7 +3207,7 @@ Crystal system: ${data.crystal_system}`;
                     <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
                         <span style="font-size: 14px; font-weight: bold;">Mode:</span>
                         <label style="display: flex; align-items: center; gap: 3px; font-size: 13px; cursor: pointer;"
-                               title="Select element type - automatically finds the most energy-stable atom of that type">
+                               title="Select element type - automatically finds the most energy-stable atom of that type (or click any atom in 3D to switch to Manual)">
                             <input type="radio" name="selection-mode" value="auto" id="auto-mode" checked>Auto
                         </label>
                         <label style="display: flex; align-items: center; gap: 3px; font-size: 13px; cursor: pointer;" 
