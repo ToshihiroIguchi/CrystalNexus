@@ -1817,7 +1817,7 @@
             try {
                 // 1. Enclosing neon-yellow wireframe sphere
                 const vdwRadius = targetAtom.radius || 1.5;
-                const sphereRadius = Math.max(0.75, (vdwRadius * 0.35) + 0.15);
+                const sphereRadius = Math.max(0.95, (vdwRadius * 0.3) + 0.35);
 
                 window.manualHighlightShape = window.viewer3D.addSphere({
                     center: { x: targetAtom.x, y: targetAtom.y, z: targetAtom.z },
