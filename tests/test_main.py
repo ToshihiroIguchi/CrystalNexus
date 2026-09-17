@@ -175,3 +175,9 @@ def test_chgnet_predict_reports_skipped_operations(client):
     assert response.status_code == 200
     prediction = response.json()["prediction"]
     assert len(prediction["operations_skipped"]) == 1
+
+
+def test_default_port():
+    """Verify default PORT is 8090."""
+    import main
+    assert main.PORT == 8090

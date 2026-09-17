@@ -114,12 +114,12 @@ The script auto-detects the project's local `venv` and relaunches itself under i
 If you prefer to manage the environment yourself, activate the virtual environment (see step 2 above) and run `uvicorn` directly:
 
 ```bash
-uvicorn main:app --host 127.0.0.1 --port 8080
+uvicorn main:app --host 127.0.0.1 --port 8090
 ```
 This skips the port-checking, health-monitoring, and auto-restart features of `start_crystalnexus.py`, but is useful for debugging or when you want full control over the process (e.g., attaching a debugger).
 
 *   **What happens next?**
-    *   The script checks if port `8080` is free.
+    *   The script checks if port `8090` is free.
     *   It starts the FastAPI backend server.
     *   It monitors the server health continuously.
     *   Once ready, it prints `Local: http://127.0.0.1:{PORT}`. In LAN mode (see below) it additionally prints a `Network: http://<lan-ip>:{PORT}` line and a security warning.
@@ -149,7 +149,7 @@ This binds `0.0.0.0` and:
 **Windows Firewall**: the check the script performs is read-only — it never modifies firewall state itself. If no inbound allow rule is found for the port, it prints the exact command to add one, which you run yourself in an **elevated** PowerShell or Command Prompt:
 
 ```
-netsh advfirewall firewall add rule name="CrystalNexus 8080" dir=in action=allow protocol=TCP localport=8080 profile=private
+netsh advfirewall firewall add rule name="CrystalNexus 8090" dir=in action=allow protocol=TCP localport=8090 profile=private
 ```
 
 (`profile=private` keeps the rule off public/untrusted networks.) The script also prints the matching `delete rule` command so you can remove it later.
@@ -185,7 +185,7 @@ LAN IP detection is best-effort: it may list several candidate addresses if your
 *   In the modal, click **"Download All Data (ZIP)"** to save your work.
 
 #### 6. View Analytics
-*   Access the local analytics dashboard at `http://localhost:8080/analytics` to monitor:
+*   Access the local analytics dashboard at `http://localhost:8090/analytics` to monitor:
     *   Daily usage trends
     *   Most analyzed structures
     *   Recent calculation logs
@@ -218,8 +218,8 @@ python -m pytest tests/ -m "not slow"
 
 ## Troubleshooting
 
-### Q: "Backend failed to start" or "Port 8080 is in use"
-*   **Solution**: The `start_crystalnexus.py` script automatically detects and stops any existing process using port 8080. Simply running `python start_crystalnexus.py` again should resolve the issue. Manual intervention is only necessary in rare cases where the script lacks permission to terminate the process.
+### Q: "Backend failed to start" or "Port 8090 is in use"
+*   **Solution**: The `start_crystalnexus.py` script automatically detects and stops any existing process using port 8090. Simply running `python start_crystalnexus.py` again should resolve the issue. Manual intervention is only necessary in rare cases where the script lacks permission to terminate the process.
 
 ### Q: "Module not found: chgnet"
 *   **Correction**: Ensure you activated your virtual environment (`venv`) before running the server. Re-run `pip install -r requirements.txt`.

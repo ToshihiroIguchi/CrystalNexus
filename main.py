@@ -929,7 +929,7 @@ APP_NAME = os.getenv('CRYSTALNEXUS_APP_NAME', 'CrystalNexus')
 
 # Server configuration (default to loopback; set CRYSTALNEXUS_HOST=0.0.0.0 to expose on the network)
 HOST = os.getenv('CRYSTALNEXUS_HOST', '127.0.0.1')
-PORT = int(os.getenv('CRYSTALNEXUS_PORT', '8080'))
+PORT = int(os.getenv('CRYSTALNEXUS_PORT', '8090'))
 DEBUG = os.getenv('CRYSTALNEXUS_DEBUG', 'False').lower() == 'true'
 
 # Gates the /analytics dashboard and /api/analytics/* endpoints, which

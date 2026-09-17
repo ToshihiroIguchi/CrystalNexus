@@ -28,6 +28,8 @@ def test_import_does_not_relaunch_or_hang():
     module loaded cleanly and exposes a sane default HOST."""
     assert sx.HOST  # some default value was computed at import time
     assert isinstance(sx.HOST, str)
+    assert sx.PORT == 8090
+    assert isinstance(sx.PORT, int)
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +133,7 @@ def test_child_env_sets_host_port_and_token(monkeypatch):
 
 def test_child_env_inherits_path(monkeypatch):
     monkeypatch.delenv("CRYSTALNEXUS_ANALYTICS_TOKEN", raising=False)
-    env = sx._child_env("127.0.0.1", 8080, None)
+    env = sx._child_env("127.0.0.1", 8090, None)
     assert "PATH" in env or "Path" in env
 
 
@@ -145,7 +147,7 @@ def test_child_env_does_not_mutate_real_os_environ(monkeypatch):
 
 def test_child_env_none_token_omits_key(monkeypatch):
     monkeypatch.delenv("CRYSTALNEXUS_ANALYTICS_TOKEN", raising=False)
-    env = sx._child_env("127.0.0.1", 8080, None)
+    env = sx._child_env("127.0.0.1", 8090, None)
     assert "CRYSTALNEXUS_ANALYTICS_TOKEN" not in env
 
 
@@ -211,7 +213,7 @@ def test_check_firewall_rule_returns_none_on_subprocess_error(monkeypatch):
         raise OSError("powershell not found")
 
     monkeypatch.setattr(sx.subprocess, "run", fake_run)
-    assert sx.check_firewall_rule(8080) is None
+    assert sx.check_firewall_rule(8090) is None
 
 
 @pytest.mark.skipif(platform.system() != "Windows", reason="Windows-only firewall check")
@@ -220,16 +222,16 @@ def test_check_firewall_rule_returns_none_on_nonzero_returncode(monkeypatch):
         return SimpleNamespace(returncode=1, stdout="")
 
     monkeypatch.setattr(sx.subprocess, "run", fake_run)
-    assert sx.check_firewall_rule(8080) is None
+    assert sx.check_firewall_rule(8090) is None
 
 
 @pytest.mark.skipif(platform.system() != "Windows", reason="Windows-only firewall check")
 def test_check_firewall_rule_returns_true_on_match(monkeypatch):
     def fake_run(*args, **kwargs):
-        return SimpleNamespace(returncode=0, stdout="MATCH:CrystalNexus 8080\n")
+        return SimpleNamespace(returncode=0, stdout="MATCH:CrystalNexus 8090\n")
 
     monkeypatch.setattr(sx.subprocess, "run", fake_run)
-    assert sx.check_firewall_rule(8080) is True
+    assert sx.check_firewall_rule(8090) is True
 
 
 @pytest.mark.skipif(platform.system() != "Windows", reason="Windows-only firewall check")
@@ -238,7 +240,7 @@ def test_check_firewall_rule_returns_false_on_no_match(monkeypatch):
         return SimpleNamespace(returncode=0, stdout="")
 
     monkeypatch.setattr(sx.subprocess, "run", fake_run)
-    assert sx.check_firewall_rule(8080) is False
+    assert sx.check_firewall_rule(8090) is False
 
 
 @pytest.mark.skipif(platform.system() != "Windows", reason="Windows-only firewall check")

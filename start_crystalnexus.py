@@ -213,7 +213,7 @@ def _child_env(host: str, port: int, token: Optional[str]) -> dict:
 # Environment-aware configuration (same as main.py)
 # Default to loopback; set CRYSTALNEXUS_HOST=0.0.0.0 to expose on the network
 HOST = os.getenv('CRYSTALNEXUS_HOST', '127.0.0.1')
-PORT = int(os.getenv('CRYSTALNEXUS_PORT', '8080'))
+PORT = int(os.getenv('CRYSTALNEXUS_PORT', '8090'))
 DEBUG = os.getenv('CRYSTALNEXUS_DEBUG', 'False').lower() == 'true'
 
 HEALTH_URL = f"http://localhost:{PORT}/health"
@@ -242,7 +242,7 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "--port", type=int, default=None,
-        help="Override CRYSTALNEXUS_PORT (default 8080).",
+        help="Override CRYSTALNEXUS_PORT (default 8090).",
     )
     parser.add_argument(
         "--no-firewall-check", action="store_true",
@@ -279,7 +279,7 @@ def check_backend_status():
 def stop_existing_server():
     """Stop existing CrystalNexus server if running"""
     try:
-        # Get process using port 8080 using netstat
+        # Get process using target port using netstat
         result = subprocess.run(
             ['netstat', '-ano'], 
             capture_output=True, text=True, shell=True
@@ -572,7 +572,7 @@ def main():
         print("\nERROR Failed to start CrystalNexus backend")
         print("Please check the following:")
         print("1. All dependencies are installed (pip install -r requirements.txt)")
-        print("2. Port 8080 is not in use by another application")
+        print(f"2. Port {PORT} is not in use by another application")
         print("3. Python environment has the necessary permissions")
         sys.exit(1)
     
