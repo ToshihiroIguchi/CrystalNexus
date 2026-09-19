@@ -818,6 +818,7 @@ class SessionManager:
             'filename': filename,
             'original_structure': original_structure,
             'current_structure': original_structure.copy(),
+            'structure_version': 0,
             'operations': [],
             'supercell_size': [1, 1, 1],
             'created_at': time.time(),
@@ -852,6 +853,7 @@ class SessionManager:
         """Update structure"""
         if session_id in self.sessions:
             self.sessions[session_id]['current_structure'] = structure
+            self.sessions[session_id]['structure_version'] = self.sessions[session_id].get('structure_version', 0) + 1
             self.sessions[session_id]['last_accessed'] = time.time()  # Track access time
             if operations is not None:
                 self.sessions[session_id]['operations'] = operations
@@ -2519,6 +2521,10 @@ async def chgnet_relax_structure(request: dict):
 
         session_info = session_manager.get_session_info(session_id)
         filename = session_info.get('filename', 'unknown') if session_info else 'unknown'
+        # Captured now so the write-back below can detect whether this
+        # session's structure was edited by another request while this
+        # (possibly minutes-long) relaxation was still running.
+        structure_version_at_start = session_info.get('structure_version', 0) if session_info else 0
 
         logger.info(f"CHGNet relaxation for session {session_id[:8]}... ({filename}) "
                     f"with fmax={fmax}, max_steps={max_steps}, optimizer={optimizer_name}")
@@ -2710,15 +2716,27 @@ async def chgnet_relax_structure(request: dict):
                         force_mags = np.linalg.norm(step_forces_array, axis=1).tolist()
                         trajectory_data["force_magnitudes"].append(force_mags)
 
-            # Save relaxed structure and CHGNet result metadata to session for later use
-            session_info['relaxed_structure'] = final_structure
-            session_info['chgnet_result'] = {
-                'fmax': fmax,
-                'converged': relaxation_info.get('converged', False),
-                'steps': relaxation_info.get('optimizer_steps', 0),
-                'optimizer': optimizer_name,
-            }
-            logger.info(f"Saved relaxed structure to session {session_id[:8]}...")
+            # Save relaxed structure and CHGNet result metadata to session for
+            # later use -- but only if the session's structure hasn't been
+            # edited (substitution, reset, etc.) since this relaxation started.
+            # Otherwise this result is stale and must not resurrect
+            # relaxed_structure/chgnet_result after update_structure() already
+            # invalidated them for the edit (see update_structure's comment).
+            if session_info.get('structure_version', 0) == structure_version_at_start:
+                session_info['relaxed_structure'] = final_structure
+                session_info['chgnet_result'] = {
+                    'fmax': fmax,
+                    'converged': relaxation_info.get('converged', False),
+                    'steps': relaxation_info.get('optimizer_steps', 0),
+                    'optimizer': optimizer_name,
+                }
+                logger.info(f"Saved relaxed structure to session {session_id[:8]}...")
+            else:
+                logger.warning(
+                    f"Session {session_id[:8]}... structure changed while this "
+                    f"relaxation was running; discarding its now-stale result "
+                    f"instead of saving relaxed_structure/chgnet_result."
+                )
 
             # Analytics Logging - Log successful relaxation
             try:

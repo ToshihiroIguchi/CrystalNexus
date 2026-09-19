@@ -197,6 +197,42 @@ def test_relax_second_concurrent_request_returns_429(client):
 
 
 @pytest.mark.slow
+def test_relax_stale_result_not_saved_after_concurrent_edit(client):
+    """If the session's structure is edited while a relaxation on it is still
+    running, the relaxation's own completion must not resurrect
+    relaxed_structure/chgnet_result for a structure that is no longer current."""
+    structure = _cu_structure(supercell=(2, 2, 2))
+    session_id = _create_session(structure)
+
+    relax_thread_response = {}
+
+    def _run_relax():
+        resp = client.post("/api/chgnet-relax", json={
+            "session_id": session_id, "fmax": 0.01, "max_steps": 500, "optimizer": "LBFGS",
+        })
+        relax_thread_response["status_code"] = resp.status_code
+
+    thread = threading.Thread(target=_run_relax)
+    thread.start()
+    time.sleep(1)  # let the relaxation start
+
+    # Simulate a same-session structure edit (e.g. atom substitution) while
+    # the relaxation above is still running.
+    edited_structure = _cu_structure()  # different atom count from the 2x2x2 supercell
+    session_manager.update_structure(session_id, edited_structure)
+
+    thread.join(timeout=300)
+    assert relax_thread_response.get("status_code") == 200
+
+    session_info = session_manager.get_session_info(session_id)
+    # The edit must win: no stale relaxed_structure/chgnet_result from the
+    # relaxation that was running against the pre-edit structure.
+    assert "relaxed_structure" not in session_info
+    assert "chgnet_result" not in session_info
+    assert session_info["current_structure"] is edited_structure
+
+
+@pytest.mark.slow
 def test_relax_cif_header_includes_optimizer(client):
     session_id = _create_session(_cu_structure(supercell=(2, 2, 2)))
 
