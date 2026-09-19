@@ -2661,7 +2661,8 @@ Crystal system: ${data.crystal_system}`;
 
                     if (data.relaxation_info?.aborted) {
                         showNotification('Relaxation hit the time limit; showing the best structure found so far.', 'warning');
-                    } else if (data.relaxation_info?.converged === false && data.relaxation_info?.steps === data.relaxation_info?.max_steps) {
+                    } else if (data.relaxation_info?.converged === false &&
+                               (data.relaxation_info?.optimizer_steps ?? data.relaxation_info?.steps) === data.relaxation_info?.max_steps) {
                         showNotification('Reached the step limit without converging; try increasing Max steps in Advanced Settings.', 'warning');
                     }
                 } finally {
