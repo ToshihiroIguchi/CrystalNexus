@@ -115,7 +115,7 @@ class AnalyticsDatabase:
         accumulated. Returns the total number of rows deleted.
         """
         try:
-            cutoff = (datetime.now() - timedelta(days=retention_days)).strftime('%Y-%m-%d %H:%M:%S')
+            cutoff = (datetime.utcnow() - timedelta(days=retention_days)).strftime('%Y-%m-%d %H:%M:%S')
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM access_logs WHERE timestamp < ?", (cutoff,))
@@ -139,7 +139,7 @@ class AnalyticsDatabase:
     def get_daily_access_counts(self, days=7):
         """Get daily access counts for the last N days."""
         try:
-            date_threshold = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+            date_threshold = (datetime.utcnow() - timedelta(days=days)).strftime('%Y-%m-%d')
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""

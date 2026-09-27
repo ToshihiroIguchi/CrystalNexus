@@ -385,7 +385,7 @@ def validate_atomic_operation(operation, structure_size, operation_index=None):
             
             # Validate index type and range
             index = operation["index"]
-            if not isinstance(index, int):
+            if isinstance(index, bool) or not isinstance(index, int):
                 return False, f"index must be integer, got {type(index).__name__}: {index}"
             if index < 0:
                 return False, f"index cannot be negative: {index}"
@@ -395,9 +395,10 @@ def validate_atomic_operation(operation, structure_size, operation_index=None):
         if action == "insert":
             if "coords" not in operation:
                 return False, "missing 'coords' field"
-            coords = operation["coords"]
-            if not isinstance(coords, list) or len(coords) != 3:
-                return False, "coords must be a list of 3 numbers"
+            try:
+                validate_frac_coords(operation["coords"], "coords")
+            except ValueError as e:
+                return False, str(e)
             
         # Validate substitution target element
         if action in ["substitute", "insert"]:
@@ -730,6 +731,26 @@ def build_content_disposition(display_name: str) -> str:
     ascii_fallback = re.sub(r'[\"\\\\]', '_', ascii_fallback).strip() or 'structure.cif'
     encoded_utf8 = quote(safe_display, safe='')
     return f'inline; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded_utf8}'
+
+def validate_frac_coords(coords, label: str = "coords") -> List[float]:
+    """
+    Validate a fractional-coordinate triple before it reaches
+    Structure.append()/pymatgen, which otherwise raises an unhandled
+    exception (500) for a malformed shape, a non-numeric entry, or a
+    non-finite value (e.g. float('inf') % 1.0 -> NaN, silently accepted
+    as a coordinate today).
+    """
+    if not isinstance(coords, (list, tuple)) or len(coords) != 3:
+        raise ValueError(f"{label} must be a list of 3 numbers")
+    result = []
+    for c in coords:
+        if isinstance(c, bool) or not isinstance(c, (int, float)):
+            raise ValueError(f"{label} values must be numbers, got {type(c).__name__}")
+        c = float(c)
+        if not np.isfinite(c):
+            raise ValueError(f"{label} values must be finite numbers")
+        result.append(c)
+    return result
 
 def validate_supercell_size(supercell_size: List[int]) -> List[int]:
     """Validate supercell size"""
@@ -1759,6 +1780,13 @@ async def create_supercell(data: dict):
         a_mult, b_mult, c_mult = supercell_size
         scaling_factor = a_mult * b_mult * c_mult
         
+        if not isinstance(crystal_data.get("volume"), (int, float)) or isinstance(crystal_data.get("volume"), bool):
+            raise HTTPException(status_code=400, detail="crystal_data.volume is required and must be a number")
+        if not isinstance(crystal_data.get("num_sites"), int) or isinstance(crystal_data.get("num_sites"), bool):
+            raise HTTPException(status_code=400, detail="crystal_data.num_sites is required and must be an integer")
+        if not isinstance(crystal_data.get("formula"), str) or not crystal_data.get("formula"):
+            raise HTTPException(status_code=400, detail="crystal_data.formula is required and must be a non-empty string")
+
         original_volume = crystal_data["volume"]
         supercell_volume = original_volume * scaling_factor
         supercell_sites = crystal_data["num_sites"] * scaling_factor
@@ -2579,6 +2607,13 @@ async def chgnet_relax_structure(request: dict):
                 detail="Another relaxation is already running. Please wait for it to finish.")
         await _relax_semaphore.acquire()
         try:
+            # Create the progress slot immediately (before the potentially slow model
+            # load / initial prediction below) so a client that connects to
+            # /api/relax-progress/{session_id} right away sees `session_id in
+            # _relax_progress` and waits for state, instead of falling through to an
+            # immediate "done" and needing the browser's ~3s SSE auto-reconnect.
+            _relax_progress[session_id] = {}
+
             # Load CHGNet model/calculator (using singleton pattern)
             try:
                 calculator = await chgnet_manager.get_calculator()
@@ -2816,6 +2851,7 @@ async def chgnet_relax_structure(request: dict):
                 }
             }
         finally:
+            _relax_progress.pop(session_id, None)
             _relax_semaphore.release()
 
     except ValueError as e:
@@ -3222,6 +3258,10 @@ async def evaluate_insertion_energy(data: dict):
             element_symbol = validate_element(element_symbol)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        try:
+            frac_coords = validate_frac_coords(frac_coords, "frac_coords")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
         structure = session_manager.get_current_structure(session_id)
         if not structure:
@@ -3290,10 +3330,16 @@ async def evaluate_insertion_energies(data: dict):
         cand_structures = []
         site_ids = []
         for site in sites:
+            if not isinstance(site, dict):
+                raise HTTPException(status_code=400, detail="Each site must be an object with 'id' and 'frac_coords'")
             site_id = site.get("id")
             frac_coords = site.get("frac_coords")
             if site_id is None or frac_coords is None:
                 raise HTTPException(status_code=400, detail="Each site requires 'id' and 'frac_coords'")
+            try:
+                frac_coords = validate_frac_coords(frac_coords, "frac_coords")
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"site {site_id}: {e}")
             cand_structure = structure.copy()
             cand_structure.append(element_symbol, frac_coords)
             cand_structures.append(cand_structure)
@@ -3366,6 +3412,8 @@ async def evaluate_candidate_energies(data: dict):
         cand_ids = []
         cand_num_atoms = []
         for candidate in candidates:
+            if not isinstance(candidate, dict):
+                raise HTTPException(status_code=400, detail="Each candidate must be an object")
             cand_id = candidate.get("id")
             action = candidate.get("action")
             index = candidate.get("index")
@@ -3373,7 +3421,7 @@ async def evaluate_candidate_energies(data: dict):
             if cand_id is None or action not in ("substitute", "delete"):
                 raise HTTPException(status_code=400,
                                    detail="Each candidate requires 'id' and action 'substitute' or 'delete'")
-            if not isinstance(index, int) or index < 0 or index >= len(structure):
+            if isinstance(index, bool) or not isinstance(index, int) or index < 0 or index >= len(structure):
                 raise HTTPException(status_code=400,
                                    detail=f"candidate {cand_id}: index {index} out of range (max: {len(structure) - 1})")
 

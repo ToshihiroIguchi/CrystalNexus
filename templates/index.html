@@ -1109,9 +1109,12 @@
 
         function displayCrystalInfo(data) {
             window.currentCrystalData = data;
+            if (data.lattice_parameters) {
+                window.currentLatticeAngles = { alpha: data.lattice_parameters.alpha, beta: data.lattice_parameters.beta, gamma: data.lattice_parameters.gamma };
+            }
 
             // For sample files, ensure we store the full path for API calls
-            if (data.filename && data.filename.includes('/')) {
+            if (data.filename) {
                 window.currentFullPath = data.filename; // Store full path from sample files
             }
 
@@ -1649,6 +1652,13 @@
         }
 
         function resetPhysicalProperties() {
+            // The previous relax result (if any) is being invalidated here -- don't
+            // let a coincidental hash round-trip (e.g. edit then Reset landing back
+            // on an identical structure) make the button falsely claim "(Calculated)"
+            // for a result that no longer exists.
+            isStructureAnalyzed = false;
+            currentStructureHash = null;
+
             // Reset using unified status display system
             updateStatusDisplay('energy', 'ready');
             updateStatusDisplay('magnetic', 'ready');
@@ -1750,6 +1760,14 @@
         // structure that no longer exists by the time it resolves discards
         // its result instead of silently corrupting the current view/state.
         let structureGeneration = 0;
+
+        // Tracks whether an insertion-preview ghost atom is currently shown
+        // in the 3D view, and sequences showGhostAtom/clearGhostAtom calls so
+        // a stale (superseded) request can't render after a newer one has
+        // already won -- see F17/F8.
+        window.ghostAtomVisible = false;
+        let ghostRequestToken = 0;
+        let supercellCreationInProgress = false;
 
         // Simplified: toggle both unit cell and axes together
         function toggleStructureElementsRobust() {
@@ -2772,6 +2790,9 @@ Crystal system: ${data.crystal_system}`;
         function updateStructureInformation(relaxedStructureInfo) {
             const infoElement = document.getElementById('main-crystal-info');
             if (!infoElement) return;
+            if (relaxedStructureInfo.lattice_parameters) {
+                window.currentLatticeAngles = { alpha: relaxedStructureInfo.lattice_parameters.alpha, beta: relaxedStructureInfo.lattice_parameters.beta, gamma: relaxedStructureInfo.lattice_parameters.gamma };
+            }
 
             infoElement.classList.remove('mock-text');
 
@@ -2942,6 +2963,9 @@ Crystal system: ${data.crystal_system}`;
         }
 
         async function createSupercell() {
+            if (supercellCreationInProgress) return;
+            supercellCreationInProgress = true;
+
             const aSize = document.getElementById('supercell-a').value;
             const bSize = document.getElementById('supercell-b').value;
             const cSize = document.getElementById('supercell-c').value;
@@ -2952,6 +2976,7 @@ Crystal system: ${data.crystal_system}`;
 
             // Validate against atom limit
             if (!validateAtomCount(expectedTotalAtoms)) {
+                supercellCreationInProgress = false;
                 return;
             }
 
@@ -2968,6 +2993,18 @@ Crystal system: ${data.crystal_system}`;
                         session_id: window.sessionId
                     })
                 });
+
+                if (!response.ok) {
+                    let errorMessage = 'Error creating supercell.';
+                    try {
+                        const errorData = await response.json();
+                        if (errorData.detail) errorMessage = errorData.detail;
+                    } catch (e) {
+                        // response body wasn't JSON; keep the generic message
+                    }
+                    alert(errorMessage);
+                    return;
+                }
 
                 const result = await response.json();
 
@@ -3044,6 +3081,8 @@ Crystal system: ${data.crystal_system}`;
             } catch (error) {
                 console.error('Error creating supercell:', error);
                 alert('Error creating supercell');
+            } finally {
+                supercellCreationInProgress = false;
             }
         }
 
@@ -3106,6 +3145,7 @@ Crystal system: ${data.crystal_system}`;
                 beta: original.lattice_parameters.beta,
                 gamma: original.lattice_parameters.gamma
             };
+            window.currentLatticeAngles = { alpha: supercellLattice.alpha, beta: supercellLattice.beta, gamma: supercellLattice.gamma };
 
             // Calculate supercell density - use current density if available, otherwise original
             const supercellDensity = supercell.density || original.density;
@@ -4121,7 +4161,7 @@ Crystal system: ${data.crystal_system}`;
             supercellData = window.currentStructureData; // For compatibility
             displaySupercellInfo();
             displayStructureOperations(window.currentLabels);
-            updateStructureVisualization();
+            await updateStructureVisualization();
 
             // Reset physical properties after structure modification
             resetPhysicalProperties();
@@ -4176,7 +4216,7 @@ Crystal system: ${data.crystal_system}`;
             supercellData = window.currentStructureData; // For compatibility
             displaySupercellInfo();
             displayStructureOperations(window.currentLabels);
-            updateStructureVisualization();
+            await updateStructureVisualization();
 
             // Reset physical properties after structure modification
             resetPhysicalProperties();
@@ -4291,7 +4331,7 @@ Crystal system: ${data.crystal_system}`;
             supercellData = window.currentStructureData;
             displaySupercellInfo();
             displayStructureOperations(window.currentLabels);
-            updateStructureVisualization();
+            await updateStructureVisualization();
             resetPhysicalProperties();
 
             dlog(`✓ Inserted ${elementToInsert}`);
@@ -5293,10 +5333,22 @@ Crystal system: ${data.crystal_system}`;
                 };
             }
 
+            const toRad = Math.PI / 180;
+            const angles = window.currentLatticeAngles || { alpha: 90, beta: 90, gamma: 90 };
+            const alpha = angles.alpha * toRad, beta = angles.beta * toRad, gamma = angles.gamma * toRad;
+            const cosA = Math.cos(alpha), cosB = Math.cos(beta), cosG = Math.cos(gamma);
+            const sinG = Math.sin(gamma);
+            const aDir = { x: 1, y: 0, z: 0 };
+            const bDir = { x: cosG, y: sinG, z: 0 };
+            let cx = cosB;
+            let cy = Math.abs(sinG) > 1e-6 ? (cosA - cosB * cosG) / sinG : 0;
+            let czSq = 1 - cx * cx - cy * cy;
+            const cDir = { x: cx, y: cy, z: czSq > 0 ? Math.sqrt(czSq) : 0 };
+
             const axes = [
-                { name: 'a', vec: rotateVec(1, 0, 0), color: '#e74c3c' }, // Red (VESTA standard)
-                { name: 'b', vec: rotateVec(0, 1, 0), color: '#27ae60' }, // Green (VESTA standard)
-                { name: 'c', vec: rotateVec(0, 0, 1), color: '#2980b9' }  // Blue (VESTA standard)
+                { name: 'a', vec: rotateVec(aDir.x, aDir.y, aDir.z), color: '#e74c3c' }, // Red (VESTA standard)
+                { name: 'b', vec: rotateVec(bDir.x, bDir.y, bDir.z), color: '#27ae60' }, // Green (VESTA standard)
+                { name: 'c', vec: rotateVec(cDir.x, cDir.y, cDir.z), color: '#2980b9' }  // Blue (VESTA standard)
             ];
 
             // Sort by depth (z) so distant axes are drawn behind near ones
@@ -5622,6 +5674,7 @@ Crystal system: ${data.crystal_system}`;
 
         async function showGhostAtom(frac_coords, elementToInsert) {
             if (!window.viewer3D || !window.currentFilename) return;
+            const myGhostToken = ++ghostRequestToken;
 
             showExecuteStatus(`Previewing ${elementToInsert} insertion...`, false);
             try {
@@ -5649,6 +5702,12 @@ Crystal system: ${data.crystal_system}`;
 
                 if (!response.ok) throw new Error("Preview generation failed");
                 const cifData = await response.text();
+
+                if (myGhostToken !== ghostRequestToken) {
+                    // A newer showGhostAtom/clearGhostAtom call has superseded this one;
+                    // don't render a candidate that's no longer the one being previewed.
+                    return;
+                }
 
                 const viewerElement = document.getElementById('3dmol-viewer');
                 if (viewerElement && viewerElement.offsetWidth > 0 && viewerElement.offsetHeight > 0) {
@@ -5683,6 +5742,7 @@ Crystal system: ${data.crystal_system}`;
 
                     window.viewer3D.zoomTo();
                     window.viewer3D.render();
+                    window.ghostAtomVisible = true;
                     hideExecuteStatus();
                 }
             } catch (error) {
@@ -5694,6 +5754,9 @@ Crystal system: ${data.crystal_system}`;
         let ghostClearTimeout = null;
         async function clearGhostAtom() {
             if (!window.viewer3D) return;
+            if (!window.ghostAtomVisible) return; // nothing to clear -- skip the rebuild entirely
+            window.ghostAtomVisible = false;
+            ++ghostRequestToken; // also invalidate any in-flight showGhostAtom so it can't render after this clear
             // Debounce the clear operation to avoid flashy re-renders if scrolling quickly
             if (ghostClearTimeout) clearTimeout(ghostClearTimeout);
             ghostClearTimeout = setTimeout(async () => {
@@ -6078,6 +6141,40 @@ Crystal system: ${data.crystal_system}`;
             updateAnalyzeButtonState();
             window.currentAnalysisData = null;
             window.currentStructureData = null;
+            window.currentStructureInfo = null;
+
+            // Reset calculation time display (same pattern as resetPhysicalProperties)
+            const calcTimeDiv = document.getElementById('calculation-time');
+            if (calcTimeDiv) {
+                calcTimeDiv.style.display = 'none';
+                calcTimeDiv.textContent = '';
+            }
+
+            // Clear energy/magnetic detail tables and summaries left over from
+            // the previous file's analysis
+            const energyDetailsTableReset = document.getElementById('energy-details-table');
+            if (energyDetailsTableReset) {
+                energyDetailsTableReset.innerHTML = '';
+            }
+            const magneticTableReset = document.getElementById('magnetic-table');
+            if (magneticTableReset) {
+                magneticTableReset.innerHTML = '';
+            }
+            const energySummaryReset = document.getElementById('energy-summary');
+            if (energySummaryReset) {
+                energySummaryReset.textContent = 'Energy: - eV';
+            }
+            const magneticSummaryReset = document.getElementById('magnetic-summary');
+            if (magneticSummaryReset) {
+                magneticSummaryReset.textContent = 'Magnetic: - µB total';
+            }
+
+            // Reset Manual-mode highlight state directly -- clearManualAtomHighlight()
+            // is not used here since window.viewer3D is about to be nulled out
+            // a few lines below anyway.
+            window.selectedManualAtomLabel = null;
+            window.manualHighlightShape = null;
+            window.manualHighlightLabel = null;
 
             // Clear 3D viewer safely
             if (window.viewer3D) {

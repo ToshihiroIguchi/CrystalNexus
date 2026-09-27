@@ -106,6 +106,26 @@ def test_relax_rejects_oversized_structure(client, monkeypatch):
     assert response.status_code == 413
 
 
+def test_relax_cleans_up_progress_slot_when_calculator_load_fails(client, monkeypatch):
+    """Regression (C5): _relax_progress[session_id] is created before the
+    (potentially slow) CHGNet calculator load. If that load fails, the
+    outer `finally` must still pop the slot -- otherwise it leaks forever
+    and /api/relax-progress/{session_id} would wait on a session that will
+    never produce a result."""
+    session_id = _create_session(_cu_structure())
+
+    async def _boom():
+        raise RuntimeError("forced failure")
+
+    monkeypatch.setattr(main.chgnet_manager, "get_calculator", _boom)
+
+    response = client.post("/api/chgnet-relax", json={
+        "session_id": session_id, "fmax": 0.1, "max_steps": 10,
+    })
+    assert response.status_code == 503
+    assert session_id not in main._relax_progress
+
+
 # ---------------------------------------------------------------------------
 # evaluate_convergence unit tests (no CHGNet needed)
 # ---------------------------------------------------------------------------

@@ -389,6 +389,42 @@ def test_insert_then_substitute_inserted_atom(client):
     assert data["num_sites"] == num_sites + 1
 
 
+def test_apply_atomic_operations_rejects_boolean_index(client):
+    """Regression (C1): bool is a subclass of int in Python, so a JSON
+    `true`/`false` index must not be silently treated as index 1/0."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    response = client.post("/api/apply-atomic-operations", json={
+        "session_id": session_id,
+        "operations": [{"action": "substitute", "index": True, "to": "Ni"}],
+    })
+    assert response.status_code == 400
+
+
+def test_apply_atomic_operations_rejects_non_finite_insert_coords(client):
+    """Regression (C2): NaN/Infinity/malformed coords must be rejected
+    (400) instead of reaching pymatgen's Structure.append() unvalidated."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    # Wrong length
+    response = client.post("/api/apply-atomic-operations", json={
+        "session_id": session_id,
+        "operations": [{"action": "insert", "to": "Li", "coords": [0.5, 0.5]}],
+    })
+    assert response.status_code == 400
+
+    # Non-numeric entry
+    response = client.post("/api/apply-atomic-operations", json={
+        "session_id": session_id,
+        "operations": [{"action": "insert", "to": "Li", "coords": [0.5, 0.5, "a"]}],
+    })
+    assert response.status_code == 400
+
+
 def test_update_structure_clears_relaxed_structure():
     """Regression (data-integrity bug): applying atomic operations must
     invalidate any previously relaxed structure, otherwise
@@ -565,6 +601,47 @@ def test_create_supercell_sample_file_fallback_keeps_conventional_cell(client):
     assert response.status_code == 200
     supercell_info = response.json()["supercell_info"]
     assert supercell_info["num_sites"] == 4
+
+
+def test_create_supercell_rejects_missing_volume(client):
+    """Regression (C4): crystal_data.volume must be validated before it is
+    multiplied by the scaling factor -- a missing/wrong-typed volume must
+    return 400, not blow up with a 500 (e.g. TypeError multiplying None)."""
+    crystal_data = _analyze_sample(client, "Metals/Cu.cif")
+    crystal_data.pop("volume", None)
+
+    response = client.post("/api/create-supercell", json={
+        "crystal_data": crystal_data,
+        "supercell_size": [1, 1, 1],
+        "session_id": str(uuid.uuid4()),
+    })
+    assert response.status_code == 400
+
+
+def test_create_supercell_rejects_wrong_typed_num_sites(client):
+    """Regression (C4): crystal_data.num_sites must be an int, not e.g. a string."""
+    crystal_data = _analyze_sample(client, "Metals/Cu.cif")
+    crystal_data["num_sites"] = "4"
+
+    response = client.post("/api/create-supercell", json={
+        "crystal_data": crystal_data,
+        "supercell_size": [1, 1, 1],
+        "session_id": str(uuid.uuid4()),
+    })
+    assert response.status_code == 400
+
+
+def test_create_supercell_rejects_empty_formula(client):
+    """Regression (C4): crystal_data.formula must be a non-empty string."""
+    crystal_data = _analyze_sample(client, "Metals/Cu.cif")
+    crystal_data["formula"] = ""
+
+    response = client.post("/api/create-supercell", json={
+        "crystal_data": crystal_data,
+        "supercell_size": [1, 1, 1],
+        "session_id": str(uuid.uuid4()),
+    })
+    assert response.status_code == 400
 
 
 def test_analyze_cif_file_sync_fallback_keeps_conventional_cell(monkeypatch, sample_cif_dir):
@@ -819,6 +896,45 @@ def test_evaluate_insertion_energies_exceeds_max_batch(client):
     assert response.status_code == 400
 
 
+def test_evaluate_insertion_energy_rejects_malformed_frac_coords(client):
+    """Regression (C2): a malformed frac_coords shape or non-numeric entry
+    must 400 instead of crashing pymatgen's Structure.append() with a 500."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    # Wrong length
+    response = client.post("/api/evaluate-insertion-energy", json={
+        "session_id": session_id,
+        "element": "Li",
+        "frac_coords": [0.5, 0.5],
+    })
+    assert response.status_code == 400
+
+    # Non-numeric entries
+    response = client.post("/api/evaluate-insertion-energy", json={
+        "session_id": session_id,
+        "element": "Li",
+        "frac_coords": ["a", "b", "c"],
+    })
+    assert response.status_code == 400
+
+
+def test_evaluate_insertion_energies_rejects_non_dict_site(client):
+    """Regression (C2): a non-object entry in `sites` must 400 instead of
+    crashing on `site.get(...)` with a 500."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    response = client.post("/api/evaluate-insertion-energies", json={
+        "session_id": session_id,
+        "element": "Li",
+        "sites": ["not-a-dict"],
+    })
+    assert response.status_code == 400
+
+
 @pytest.mark.slow
 def test_evaluate_insertion_energies_flow(client):
     """Full flow: analyze -> create supercell -> batch-evaluate insertion energies."""
@@ -889,6 +1005,35 @@ def test_evaluate_candidate_energies_rejects_out_of_range_index(client):
     response = client.post("/api/evaluate-candidate-energies", json={
         "session_id": session_id,
         "candidates": [{"id": 0, "action": "delete", "index": 9999}],
+    })
+    assert response.status_code == 400
+
+
+def test_evaluate_candidate_energies_rejects_non_dict_candidate(client):
+    """Regression (C3): a candidates list entry that isn't an object (e.g. a
+    bare int) must be rejected with 400, not raise an unhandled AttributeError
+    when the endpoint later calls .get() on it."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    response = client.post("/api/evaluate-candidate-energies", json={
+        "session_id": session_id,
+        "candidates": [123],
+    })
+    assert response.status_code == 400
+
+
+def test_evaluate_candidate_energies_rejects_boolean_index(client):
+    """Regression (C1/C3): bool is a subclass of int in Python, so an index
+    of True/False must be rejected rather than silently accepted as 1/0."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    response = client.post("/api/evaluate-candidate-energies", json={
+        "session_id": session_id,
+        "candidates": [{"id": "c1", "action": "delete", "index": True}],
     })
     assert response.status_code == 400
 
