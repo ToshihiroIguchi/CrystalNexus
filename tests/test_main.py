@@ -1,3 +1,4 @@
+import os
 import platform
 
 import pytest
@@ -145,6 +146,21 @@ def test_chgnet_predict_validates_supercell_size(client):
     assert response.status_code == 400
 
 
+def test_chgnet_predict_rejects_oversized_structure(client, monkeypatch):
+    """Regression (B2): the resolved structure's site count must be checked
+    against MAX_PREDICT_ATOMS before the (expensive, model-loading) CHGNet
+    path runs, so this stays fast even without CHGNet."""
+    import main
+    monkeypatch.setattr(main, "MAX_PREDICT_ATOMS", 1)
+
+    response = client.post("/api/chgnet-predict", json={
+        "filename": "Metals/Cu.cif",
+        "operations": [],
+        "supercell_size": [2, 2, 2],
+    })
+    assert response.status_code == 400
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(not CHGNET_AVAILABLE, reason="CHGNet not available")
 def test_chgnet_predict_with_substitution(client):
@@ -178,6 +194,18 @@ def test_chgnet_predict_reports_skipped_operations(client):
 
 
 def test_default_port():
-    """Verify default PORT is 8090."""
+    """Verify default PORT is 8090 when CRYSTALNEXUS_PORT is unset.
+
+    main.py reads CRYSTALNEXUS_PORT once, at import time (main is already
+    imported by conftest.py before this test runs). If the developer's
+    shell already had CRYSTALNEXUS_PORT set when the suite started,
+    main.PORT legitimately reflects that value instead of the default --
+    skip in that case rather than reloading the whole main module (which
+    would also reset chgnet_manager's cached model and session_manager's
+    session store for every test that runs afterward in this session).
+    """
     import main
+    if os.environ.get("CRYSTALNEXUS_PORT"):
+        pytest.skip("CRYSTALNEXUS_PORT is set in the environment; "
+                    "main.PORT reflects it, not the default")
     assert main.PORT == 8090

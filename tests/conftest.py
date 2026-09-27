@@ -13,12 +13,34 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import main  # noqa: E402
 from main import app  # noqa: E402
+from analytics_db import AnalyticsDatabase  # noqa: E402
 
 
 @pytest.fixture(scope="session")
 def client():
     """Shared TestClient for the FastAPI application."""
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_analytics_db(tmp_path):
+    """
+    Redirect every analytics write main.py makes during a test to a
+    throwaway sqlite file instead of the real analytics.db in the repo
+    root.
+
+    main.py does `from analytics_db import analytics_db` (a module-level
+    singleton instance), so every route handler looks up the name
+    `analytics_db` in main's own module namespace at call time -- patching
+    that attribute here (rather than the one on the analytics_db module)
+    is what actually redirects main.py's calls, since it already copied
+    the reference in at import time.
+    """
+    test_db = AnalyticsDatabase(db_path=str(tmp_path / "test_analytics.db"))
+    original = main.analytics_db
+    main.analytics_db = test_db
+    yield
+    main.analytics_db = original
 
 
 @pytest.fixture(scope="session")

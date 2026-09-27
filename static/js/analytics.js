@@ -106,7 +106,12 @@ async function loadRecentActivity() {
 
         data.recent_events.forEach(event => {
             const tr = document.createElement('tr');
-            const date = new Date(event.timestamp).toLocaleString();
+            // event.timestamp comes from SQLite's CURRENT_TIMESTAMP, formatted
+            // as "YYYY-MM-DD HH:MM:SS" with no timezone marker -- it's a UTC
+            // value. Without an explicit 'Z', `new Date(...)` would parse it
+            // as local time and shift the displayed time by the local UTC
+            // offset (e.g. +9h in Japan). See C3.
+            const date = new Date(event.timestamp.replace(' ', 'T') + 'Z').toLocaleString();
 
             let details = '';
             if (event.parameters) {

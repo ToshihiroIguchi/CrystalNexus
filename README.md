@@ -39,7 +39,6 @@ CrystalNexus/
 +--- templates/             # Jinja2 HTML templates (index.html, analytics.html)
 +--- static/               # Static assets (js/utils.js, js/analytics.js, js/auto_mode_chart.js)
 +--- tests/                # Pytest test suite (conftest.py, test_main.py, test_security.py, test_endpoints.py)
-+--- uploads/              # Temporary directory for user uploads (auto-cleaned)
 +--- pytest.ini             # Pytest configuration
 +--- requirements.txt        # Detailed Python dependencies list
 +--- CLAUDE.md               # Claude Code project instructions

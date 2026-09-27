@@ -850,6 +850,25 @@
             // against the old structure discards its result on completion.
             currentStructureCif = null;
             structureGeneration++;
+
+            // The structure just changed, invalidating any previous relaxed-
+            // structure info/analysis data -- otherwise copy buttons and CIF
+            // filenames would keep showing stale relaxed-structure details
+            // (see F3).
+            window.currentStructureInfo = null;
+            window.currentAnalysisData = null;
+
+            // Insertion candidates (and any ghost-atom preview) were computed
+            // against the pre-edit structure and no longer correspond to
+            // anything real -- drop them so a stale candidate can't be
+            // reselected/executed against the now-different structure (see F6).
+            window.insertionCandidates = [];
+            const insertCandidateDropdown = document.getElementById('insert-candidate');
+            if (insertCandidateDropdown) {
+                insertCandidateDropdown.innerHTML = '<option value="">Select candidate...</option>';
+                insertCandidateDropdown.value = '';
+            }
+            if (typeof clearGhostAtom === 'function') clearGhostAtom();
         }
 
         // Initialize the application
@@ -976,6 +995,14 @@
             if (analysisAbortController) analysisAbortController.abort();
             analysisAbortController = new AbortController();
             const signal = analysisAbortController.signal;
+
+            // A sample selection here may be superseding an in-flight upload
+            // (aborted above); that upload's catch block exits silently on
+            // abort and never clears its own "Reading CIF file..." status, so
+            // clear it here to avoid a stuck spinner (see F14).
+            const fileStatusArea = document.getElementById('fileStatusArea');
+            if (fileStatusArea) fileStatusArea.innerHTML = '';
+
             try {
                 const response = await fetch('/api/analyze-cif-sample', {
                     method: 'POST',
@@ -1016,6 +1043,10 @@
                 if (error.name === 'AbortError') return;
                 console.error('Error analyzing sample file:', error);
                 alert(`Error analyzing CIF file: ${error.message}`);
+                // Don't leave the previous file's info displayed with Confirm
+                // still enabled -- a failed load must not let Confirm proceed
+                // with stale data (see F9).
+                resetAnalysis();
             }
         }
 
@@ -1104,6 +1135,10 @@
 
                 // Show error status instead of alert
                 showFileLoadError(errorMessage);
+                // Don't leave the previous file's info displayed with Confirm
+                // still enabled -- a failed load must not let Confirm proceed
+                // with stale data (see F9).
+                resetAnalysis();
             }
         }
 
@@ -1359,9 +1394,13 @@
             });
         }
 
-        // === STRUCTURE CHANGE DETECTION === 
+        // === STRUCTURE CHANGE DETECTION ===
         let currentStructureHash = null;
         let isStructureAnalyzed = false;
+        // True while a CHGNet relax request is in flight (see F4): keeps the
+        // Analyze button disabled so a duplicate relax request can't be fired
+        // (and 429 / stomp the first run's progress UI) while one is running.
+        let relaxInProgress = false;
 
         function generateStructureHash() {
             try {
@@ -1400,6 +1439,11 @@
         function updateAnalyzeButtonState() {
             const analyzeBtn = document.getElementById('analyze-btn');
             if (!analyzeBtn) return;
+
+            // A relax is still in flight -- leave the button disabled/processing
+            // rather than letting a caller (e.g. markStructureAsChanged) re-enable
+            // it and allow a duplicate request (see F4).
+            if (relaxInProgress) return;
 
             if (isStructureAnalyzed && !isStructureChanged()) {
                 // Calculated + structure unchanged = grayed out but still clickable
@@ -1768,6 +1812,11 @@
         window.ghostAtomVisible = false;
         let ghostRequestToken = 0;
         let supercellCreationInProgress = false;
+        // Sequences performCompleteRebuild calls so a rebuild superseded by a
+        // newer one (e.g. a double-clicked unit-cell toggle) discards its
+        // result instead of racing the newer rebuild and adding a duplicate
+        // model (see F12).
+        let rebuildToken = 0;
 
         // Simplified: toggle both unit cell and axes together
         function toggleStructureElementsRobust() {
@@ -1997,12 +2046,22 @@
             dlog(`🔄 ROBUST: Starting complete rebuild due to: ${reason}`);
             dlog(`   Target state - UnitCell: ${displayUnitCell}, Axes: ${displayAxes}`);
 
+            // Discard this rebuild if a newer one supersedes it before the
+            // async structure fetch below resolves (see F12: double-clicking
+            // the unit-cell toggle used to fire two concurrent rebuilds and
+            // produce duplicate 3D models).
+            const myToken = ++rebuildToken;
+
             try {
                 // Step 1: Complete destruction with redundant operations
                 await performCompleteDestruction();
 
                 // Step 2: Rebuild structure from scratch
-                await rebuildStructureFromScratch();
+                const rebuilt = await rebuildStructureFromScratch(myToken);
+                if (!rebuilt) {
+                    dlog('🔄 ROBUST: Rebuild superseded by a newer request -- discarding');
+                    return;
+                }
 
                 // Step 3: Add conditional elements (simplified - axes included in unit cell)
                 if (displayUnitCell) {
@@ -2062,14 +2121,24 @@
             dlog('🧹 ROBUST: Complete destruction finished');
         }
 
-        // Rebuild structure from scratch
-        async function rebuildStructureFromScratch() {
+        // Rebuild structure from scratch. Returns false (without touching the
+        // viewer) if a newer performCompleteRebuild call superseded this one
+        // while the structure fetch below was in flight (see F12).
+        async function rebuildStructureFromScratch(myToken) {
             dlog('🔧 ROBUST: Rebuilding structure from scratch...');
 
             try {
                 // Get fresh structure data from server
                 if (!currentStructureCif) {
                     await fetchCurrentStructureData();
+                }
+
+                // A newer rebuild may have started (and even completed) while
+                // the fetch above was in flight; discard this stale one
+                // rather than adding a duplicate model on top of the newer
+                // render.
+                if (myToken !== undefined && myToken !== rebuildToken) {
+                    return false;
                 }
 
                 if (!currentStructureCif) {
@@ -2085,6 +2154,7 @@
                 window.viewer3D.zoomTo();
 
                 dlog('🏗️ ROBUST: Structure rebuilt successfully');
+                return true;
 
             } catch (error) {
                 console.error('❌ ROBUST: Structure rebuild failed:', error);
@@ -2168,12 +2238,15 @@
 
         // Copy energy value functions
         async function copyTotalEnergy() {
-            if (!window.energyAnalysisData?.final?.totalEnergy) {
+            // Use an explicit undefined/null check, not a truthy check --
+            // a legitimate energy value of exactly 0 must still be copyable
+            // (see F14).
+            const value = window.energyAnalysisData?.final?.totalEnergy;
+            if (value === undefined || value === null) {
                 console.warn('No total energy data available');
                 return;
             }
 
-            const value = window.energyAnalysisData.final.totalEnergy;
             dlog('Copying total energy (eV):', value);
             const result = await smartCopyToClipboard(value.toString());
 
@@ -2183,12 +2256,14 @@
 
 
         async function copySiteEnergy(siteIndex) {
-            if (!window.currentSiteEnergies || !window.currentSiteEnergies[siteIndex]) {
+            // Explicit undefined/null check -- a site energy of exactly 0 must
+            // still be copyable (see F14).
+            const value = window.currentSiteEnergies ? window.currentSiteEnergies[siteIndex] : undefined;
+            if (value === undefined || value === null) {
                 console.warn('No site energy data available for index:', siteIndex);
                 return;
             }
 
-            const value = window.currentSiteEnergies[siteIndex];
             const result = await smartCopyToClipboard(value.toString());
 
             const button = document.getElementById(`copy-site-energy-${siteIndex}`);
@@ -2197,12 +2272,14 @@
 
         // Copy magnetic value functions
         async function copyTotalMagnetic() {
-            if (!window.currentMagneticData?.totalMagnetic) {
+            // Explicit undefined/null check -- a total magnetic moment of
+            // exactly 0 must still be copyable (see F14).
+            const value = window.currentMagneticData?.totalMagnetic;
+            if (value === undefined || value === null) {
                 console.warn('No total magnetic data available');
                 return;
             }
 
-            const value = window.currentMagneticData.totalMagnetic;
             dlog('Copying total magnetic moment (µB):', value);
             const result = await smartCopyToClipboard(value.toFixed(3));
 
@@ -2211,12 +2288,14 @@
         }
 
         async function copySiteMagnetic(siteIndex) {
-            if (!window.currentMagneticData?.siteMagnetic || !window.currentMagneticData.siteMagnetic[siteIndex]) {
+            // Explicit undefined/null check -- a site magnetic moment of
+            // exactly 0 must still be copyable (see F14).
+            const value = window.currentMagneticData?.siteMagnetic ? window.currentMagneticData.siteMagnetic[siteIndex] : undefined;
+            if (value === undefined || value === null) {
                 console.warn('No site magnetic data available for index:', siteIndex);
                 return;
             }
 
-            const value = window.currentMagneticData.siteMagnetic[siteIndex];
             const result = await smartCopyToClipboard(value.toFixed(3));
 
             const button = document.getElementById(`copy-site-magnetic-${siteIndex}`);
@@ -2599,6 +2678,10 @@ Crystal system: ${data.crystal_system}`;
             // relax before it resolved. Reassigned once below, after this
             // run's own updateStructureInformation() call -- see there.
             let generationAtStart = structureGeneration;
+            // Guard against a duplicate relax request being fired (and 429ing,
+            // stomping this run's progress UI) while this one is still in
+            // flight -- see F4. Cleared in the finally block below.
+            relaxInProgress = true;
             try {
                 // Record start time for calculation duration
                 const startTime = performance.now();
@@ -2784,6 +2867,14 @@ Crystal system: ${data.crystal_system}`;
 
                 // Restore button on error
                 setCHGNetButtonState('complete');
+
+                // A failed relax must not leave the Energy/Magnetic summary
+                // panels stuck showing "Calculating..." (see F5).
+                updateStatusDisplay('energy', 'error');
+                updateStatusDisplay('magnetic', 'error');
+            } finally {
+                relaxInProgress = false;
+                updateAnalyzeButtonState();
             }
         }
 
@@ -2868,6 +2959,8 @@ Crystal system: ${data.crystal_system}`;
                     } catch (e) {
                         if (response.status === 400) {
                             errorMessage = 'Invalid structure data.';
+                        } else if (response.status === 404) {
+                            errorMessage = 'No relaxed structure available.';
                         } else if (response.status === 500) {
                             errorMessage = 'Server error occurred. Please try again later.';
                         }
@@ -2880,6 +2973,11 @@ Crystal system: ${data.crystal_system}`;
                 if (!cifData || cifData.length < 100) {
                     throw new Error(`Invalid CIF data: ${cifData?.length || 0} characters`);
                 }
+
+                // Cache the relaxed CIF so subsequent unit-cell (🧊) toggles
+                // reuse this relaxed structure instead of re-deriving the
+                // unrelaxed one from a stale cache (see F2).
+                currentStructureCif = cifData;
 
                 // Clear viewer safely
                 const viewerElement = document.getElementById('3dmol-viewer');
@@ -4061,6 +4159,17 @@ Crystal system: ${data.crystal_system}`;
         }
 
         function updateExecuteButton() {
+            // Don't touch the Execute button while an Auto sweep (or any other
+            // operation using the shared execute-btn/currentAbortController
+            // processing state) is still in flight -- switching dropdowns/tabs
+            // must not re-enable it and let the user abort/restart mid-flight
+            // (see F8).
+            const executeBtnCheck = document.getElementById('execute-btn');
+            if (executeBtnCheck && (executeBtnCheck.classList.contains('button-processing') ||
+                (typeof currentAbortController !== 'undefined' && currentAbortController !== null))) {
+                return;
+            }
+
             const atomDropdown = document.getElementById('element-dropdown');
             const elementTypeDropdown = document.getElementById('element-type-dropdown');
             const operationSelect = document.getElementById('substitute-element');
@@ -4123,7 +4232,7 @@ Crystal system: ${data.crystal_system}`;
         async function handleSubstitution(elementLabel, newElement, knownIndex = null) {
             if (!window.currentStructureData || window.currentLabels.length === 0) {
                 showNotification('No structure data available for modification', 'error');
-                return;
+                return false;
             }
 
             // Prefer an index the caller already knows (e.g. the Auto-mode
@@ -4132,7 +4241,7 @@ Crystal system: ${data.crystal_system}`;
             const atomIndex = knownIndex !== null ? knownIndex : window.currentLabels.indexOf(elementLabel);
             if (atomIndex === -1 || atomIndex === undefined) {
                 showNotification(`Atom ${elementLabel} not found`, 'error');
-                return;
+                return false;
             }
 
             // Record operation in history
@@ -4153,7 +4262,7 @@ Crystal system: ${data.crystal_system}`;
             // atomicOperations pop updateSessionWithOperations already did.
             const result = await updateSessionWithOperations();
             if (!result) {
-                return; // updateSessionWithOperations already rolled back and notified
+                return false; // updateSessionWithOperations already rolled back and notified
             }
             applyServerStructureState(result);
 
@@ -4174,12 +4283,13 @@ Crystal system: ${data.crystal_system}`;
             // visible across a later Manual edit; close it explicitly, as
             // handleInsertion already does.
             hideExecuteStatus();
+            return true;
         }
 
         async function handleDeletion(elementLabel, knownIndex = null) {
             if (!window.currentStructureData || window.currentLabels.length === 0) {
                 showNotification('No structure data available for modification', 'error');
-                return;
+                return false;
             }
 
             // Prefer an index the caller already knows (e.g. the Auto-mode
@@ -4188,7 +4298,7 @@ Crystal system: ${data.crystal_system}`;
             const atomIndex = knownIndex !== null ? knownIndex : window.currentLabels.indexOf(elementLabel);
             if (atomIndex === -1 || atomIndex === undefined) {
                 showNotification(`Atom ${elementLabel} not found`, 'error');
-                return;
+                return false;
             }
 
             // Record operation in history
@@ -4208,7 +4318,7 @@ Crystal system: ${data.crystal_system}`;
             // atomicOperations pop updateSessionWithOperations already did.
             const result = await updateSessionWithOperations();
             if (!result) {
-                return; // updateSessionWithOperations already rolled back and notified
+                return false; // updateSessionWithOperations already rolled back and notified
             }
             applyServerStructureState(result);
 
@@ -4225,6 +4335,7 @@ Crystal system: ${data.crystal_system}`;
             showNotification(`Successfully deleted ${elementLabel}`, 'success');
             // See the matching comment in handleSubstitution.
             hideExecuteStatus();
+            return true;
         }
 
         async function handleOptimalInsertion(element) {
@@ -4257,7 +4368,7 @@ Crystal system: ${data.crystal_system}`;
                     const evaluatedCandidates = window.insertionCandidates;
 
                     showExecuteStatus(`Optimal site found (ΔE: ${bestCand.rel_energy} eV). Executing insertion...`, false);
-                    await handleInsertion(bestCand, element);
+                    const applied = await handleInsertion(bestCand, element);
 
                     // Transform insertion candidates into the format expected by showExecutionComplete
                     const formattedResults = {
@@ -4275,7 +4386,13 @@ Crystal system: ${data.crystal_system}`;
                         }
                     };
 
-                    showExecutionComplete(`Insertion Completed. Best: Site ${bestIndex + 1} (${bestCand.energy.toFixed(4)} eV)`, formattedResults);
+                    if (applied) {
+                        showExecutionComplete(`Insertion Completed. Best: Site ${bestIndex + 1} (${bestCand.energy.toFixed(4)} eV)`, formattedResults);
+                    } else {
+                        // handleInsertion already showed the error notification --
+                        // avoid a duplicate here, just reflect the failure.
+                        showExecutionComplete(`Insertion failed: could not apply Site ${bestIndex + 1}`, formattedResults);
+                    }
 
                 } else {
                     if (result.message && !result.message.includes('cancelled')) {
@@ -4295,7 +4412,7 @@ Crystal system: ${data.crystal_system}`;
         async function handleInsertion(cand, elementToInsert) {
             if (!window.currentStructureData || window.currentLabels.length === 0) {
                 showNotification('No structure data available for modification', 'error');
-                return;
+                return false;
             }
 
             // Record operation in history. The inserted atom's actual label
@@ -4319,7 +4436,7 @@ Crystal system: ${data.crystal_system}`;
             // atomicOperations pop updateSessionWithOperations already did.
             const result = await updateSessionWithOperations();
             if (!result) {
-                return; // updateSessionWithOperations already rolled back and notified
+                return false; // updateSessionWithOperations already rolled back and notified
             }
             applyServerStructureState(result);
 
@@ -4353,6 +4470,7 @@ Crystal system: ${data.crystal_system}`;
             }
             window.insertionCandidates = [];
             updateExecuteButton();
+            return true;
         }
 
         async function evaluateSpecificCandidate(candId, element) {
@@ -4713,12 +4831,17 @@ Crystal system: ${data.crystal_system}`;
                 showNotification(`Only one ${elementType} atom found. Executing direct ${actionLabel}: ${targetDesc}`, 'info');
 
                 try {
+                    let applied;
                     if (action === 'substitute') {
-                        await handleSubstitution(singleAtom.label, newElement);
+                        applied = await handleSubstitution(singleAtom.label, newElement);
                     } else {
-                        await handleDeletion(singleAtom.label);
+                        applied = await handleDeletion(singleAtom.label);
                     }
-                    showNotification(`Direct ${actionLabel} completed: ${targetDesc}`, 'success');
+                    if (applied) {
+                        showNotification(`Direct ${actionLabel} completed: ${targetDesc}`, 'success');
+                    }
+                    // On failure, handleSubstitution/handleDeletion already showed
+                    // the error notification -- avoid a duplicate here.
                 } catch (error) {
                     console.error(`Direct ${actionLabel} failed:`, error);
                     showNotification(`Direct ${actionLabel} failed`, 'error');
@@ -4957,17 +5080,22 @@ Crystal system: ${data.crystal_system}`;
                     console.warn(`Failed calculations (${failed.length}):`, failed.map(f => `${f.atom}: ${f.finalError}`));
                 }
 
+                let applied = false;
                 try {
                     // Execute optimal substitution. Pass the index the sweep
                     // already resolved rather than re-deriving it from the
                     // label via indexOf.
-                    await handleSubstitution(bestResult.atom, newElement, bestResult.index);
+                    applied = await handleSubstitution(bestResult.atom, newElement, bestResult.index);
 
-                    // Show success notification with statistics
-                    showNotification(
-                        `Optimal substitution completed: ${bestResult.atom} → ${newElement} (Success rate: ${summary.successRate}%)`,
-                        'success'
-                    );
+                    if (applied) {
+                        // Show success notification with statistics
+                        showNotification(
+                            `Optimal substitution completed: ${bestResult.atom} → ${newElement} (Success rate: ${summary.successRate}%)`,
+                            'success'
+                        );
+                    }
+                    // On failure, handleSubstitution already showed the error
+                    // notification -- avoid a duplicate here.
                 } catch (error) {
                     console.error('Optimal substitution application failed:', error);
                     showNotification('Optimization succeeded but application failed', 'error');
@@ -4979,7 +5107,11 @@ Crystal system: ${data.crystal_system}`;
                 }
 
                 // Show completion state instead of hiding
-                showExecutionComplete(`Substitution Completed. Best: ${bestResult.atom} -> ${newElement} (${bestResult.energy.toFixed(4)} eV)`, results);
+                if (applied) {
+                    showExecutionComplete(`Substitution Completed. Best: ${bestResult.atom} -> ${newElement} (${bestResult.energy.toFixed(4)} eV)`, results);
+                } else {
+                    showExecutionComplete(`Substitution failed: could not apply ${bestResult.atom} -> ${newElement}`, results);
+                }
 
             } else {
                 // All calculations failed
@@ -5048,7 +5180,7 @@ Crystal system: ${data.crystal_system}`;
                     <div class="failed-calculations">
                         <h5>Error Details:</h5>
                         <ul>
-                            ${failed.map(f => `<li><strong>${f.atom}:</strong> ${f.finalError}</li>`).join('')}
+                            ${failed.map(f => `<li><strong>${escapeHtml(f.atom)}:</strong> ${escapeHtml(f.finalError)}</li>`).join('')}
                         </ul>
                     </div>
                     
@@ -5097,17 +5229,22 @@ Crystal system: ${data.crystal_system}`;
                     console.warn(`Failed calculations (${failed.length}):`, failed.map(f => `${f.atom}: ${f.finalError}`));
                 }
 
+                let applied = false;
                 try {
                     // Execute optimal deletion. Pass the index the sweep
                     // already resolved rather than re-deriving it from the
                     // label via indexOf.
-                    await handleDeletion(bestResult.atom, bestResult.index);
+                    applied = await handleDeletion(bestResult.atom, bestResult.index);
 
-                    // Show success notification with statistics
-                    showNotification(
-                        `Optimal deletion completed: ${bestResult.atom} removed (Success rate: ${summary.successRate}%)`,
-                        'success'
-                    );
+                    if (applied) {
+                        // Show success notification with statistics
+                        showNotification(
+                            `Optimal deletion completed: ${bestResult.atom} removed (Success rate: ${summary.successRate}%)`,
+                            'success'
+                        );
+                    }
+                    // On failure, handleDeletion already showed the error
+                    // notification -- avoid a duplicate here.
                 } catch (error) {
                     console.error('Optimal deletion application failed:', error);
                     showNotification('Optimization succeeded but application failed', 'error');
@@ -5119,7 +5256,11 @@ Crystal system: ${data.crystal_system}`;
                 }
 
                 // Show completion state instead of hiding
-                showExecutionComplete(`Deletion Completed. Best: ${bestResult.atom} (${bestResult.energy.toFixed(4)} eV)`, results);
+                if (applied) {
+                    showExecutionComplete(`Deletion Completed. Best: ${bestResult.atom} (${bestResult.energy.toFixed(4)} eV)`, results);
+                } else {
+                    showExecutionComplete(`Deletion failed: could not apply removal of ${bestResult.atom}`, results);
+                }
 
             } else {
                 // All calculations failed
@@ -5225,6 +5366,24 @@ Crystal system: ${data.crystal_system}`;
                 // against the pre-reset structure discards its result.
                 currentStructureCif = null;
                 structureGeneration++;
+
+                // The structure is being reset to its original state, so any
+                // previous relaxed-structure info/analysis data no longer
+                // applies -- otherwise copy buttons and CIF filenames would
+                // keep showing stale relaxed-structure details (see F3).
+                window.currentStructureInfo = null;
+                window.currentAnalysisData = null;
+
+                // Insertion candidates (and any ghost-atom preview) were
+                // computed against the pre-reset structure and no longer
+                // correspond to anything real (see F6).
+                window.insertionCandidates = [];
+                const insertCandidateDropdownReset = document.getElementById('insert-candidate');
+                if (insertCandidateDropdownReset) {
+                    insertCandidateDropdownReset.innerHTML = '<option value="">Select candidate...</option>';
+                    insertCandidateDropdownReset.value = '';
+                }
+                if (typeof clearGhostAtom === 'function') clearGhostAtom();
 
                 // Restore frontend working data from immutable original data
                 window.currentStructureData = JSON.parse(JSON.stringify(window.originalSupercellData));
@@ -5676,7 +5835,17 @@ Crystal system: ${data.crystal_system}`;
             if (!window.viewer3D || !window.currentFilename) return;
             const myGhostToken = ++ghostRequestToken;
 
-            showExecuteStatus(`Previewing ${elementToInsert} insertion...`, false);
+            // The "Previewing..." message reuses the shared execute-status
+            // box, which a Manual-mode candidate evaluation (see
+            // evaluateSpecificCandidate) also uses to show its own message
+            // and Cancel button while a request is in flight. Only take over
+            // that shared box (and later clear it) when nothing else
+            // currently owns it -- otherwise leave an in-progress
+            // evaluation's status/Cancel button alone (see F7).
+            const ownsStatus = !currentAbortController;
+            if (ownsStatus) {
+                showExecuteStatus(`Previewing ${elementToInsert} insertion...`, false);
+            }
             try {
                 // Create a temporary operation list
                 const previewOps = [...(window.atomicOperations || []), {
@@ -5743,20 +5912,24 @@ Crystal system: ${data.crystal_system}`;
                     window.viewer3D.zoomTo();
                     window.viewer3D.render();
                     window.ghostAtomVisible = true;
-                    hideExecuteStatus();
+                    if (ownsStatus) hideExecuteStatus();
                 }
             } catch (error) {
                 console.error("Preview error:", error);
-                hideExecuteStatus();
+                if (ownsStatus) hideExecuteStatus();
             }
         }
 
         let ghostClearTimeout = null;
         async function clearGhostAtom() {
+            // Invalidate any in-flight showGhostAtom preview request
+            // unconditionally, before either early-return below, so a
+            // slow-arriving preview can never render after this clear was
+            // requested (see F10).
+            ++ghostRequestToken;
             if (!window.viewer3D) return;
             if (!window.ghostAtomVisible) return; // nothing to clear -- skip the rebuild entirely
             window.ghostAtomVisible = false;
-            ++ghostRequestToken; // also invalidate any in-flight showGhostAtom so it can't render after this clear
             // Debounce the clear operation to avoid flashy re-renders if scrolling quickly
             if (ghostClearTimeout) clearTimeout(ghostClearTimeout);
             ghostClearTimeout = setTimeout(async () => {
@@ -6143,6 +6316,17 @@ Crystal system: ${data.crystal_system}`;
             window.currentStructureData = null;
             window.currentStructureInfo = null;
 
+            // Insertion candidates (and any ghost-atom preview) were computed
+            // against the structure that's being discarded and no longer
+            // correspond to anything real (see F6).
+            window.insertionCandidates = [];
+            const insertCandidateDropdownReset2 = document.getElementById('insert-candidate');
+            if (insertCandidateDropdownReset2) {
+                insertCandidateDropdownReset2.innerHTML = '<option value="">Select candidate...</option>';
+                insertCandidateDropdownReset2.value = '';
+            }
+            if (typeof clearGhostAtom === 'function') clearGhostAtom();
+
             // Reset calculation time display (same pattern as resetPhysicalProperties)
             const calcTimeDiv = document.getElementById('calculation-time');
             if (calcTimeDiv) {
@@ -6195,6 +6379,25 @@ Crystal system: ${data.crystal_system}`;
             // Reset viewer container to initial state and re-initialize viewer
             const viewerContainer = document.querySelector('.viewer-container');
             if (viewerContainer) {
+                // A new CIF is about to get its own fresh 3Dmol viewer/canvas;
+                // the old one is only detached below via innerHTML replacement,
+                // which leaks its WebGL context (3Dmol.js never releases one on
+                // its own). Release it explicitly before dropping the
+                // reference (see F11).
+                if (window.viewer3D) {
+                    try {
+                        if (typeof window.viewer3D.clear === 'function') {
+                            window.viewer3D.clear();
+                        }
+                    } catch (e) { /* best-effort cleanup */ }
+                    try {
+                        const canvas = window.viewer3D.getCanvas ? window.viewer3D.getCanvas() : null;
+                        const gl = canvas && (canvas.getContext('webgl') || canvas.getContext('experimental-webgl'));
+                        const ext = gl && gl.getExtension('WEBGL_lose_context');
+                        if (ext) ext.loseContext();
+                    } catch (e) { /* best-effort cleanup */ }
+                }
+
                 viewerContainer.innerHTML = 'Load a CIF file to view the crystal structure';
                 viewerContainer.style.color = '#666';
                 viewerContainer.style.fontSize = '18px';
@@ -7287,10 +7490,18 @@ Crystal system: ${data.crystal_system}`;
             const zip = new JSZip();
 
             try {
-                // 1. CIF file with P1 space group
+                // 1. CIF file with P1 space group. generateCIFFile() returns
+                // null when the backend fetch failed and there's no real
+                // atomic position data to fall back on -- skip the file
+                // rather than silently saving a placeholder CIF (see F13).
                 dlog('Generating CIF file...');
                 const cifContent = await generateCIFFile();
-                zip.file('structure_P1.cif', cifContent);
+                if (cifContent) {
+                    zip.file('structure_P1.cif', cifContent);
+                } else {
+                    console.warn('Skipping structure_P1.cif: no valid structure data available');
+                    showNotification('Could not retrieve structure data -- structure_P1.cif was skipped from the export.', 'warning');
+                }
 
                 // 2. Crystal Information CSV
                 dlog('Generating Crystal Information CSV...');
@@ -7483,8 +7694,12 @@ Crystal system: ${data.crystal_system}`;
                     cif += `${element}${i + 1} ${element} ${pos[0].toFixed(6)} ${pos[1].toFixed(6)} ${pos[2].toFixed(6)} 1.000\n`;
                 }
             } else {
-                console.warn('No atomic positions available, using placeholder');
-                cif += 'X1 X 0.000000 0.000000 0.000000 1.000\n';
+                // No real atomic position data to fall back on -- a CIF with a
+                // single fake "X1 X 0 0 0" atom would be silently wrong if
+                // saved as-is. Signal failure to the caller instead so it can
+                // skip this file from the export and warn the user (see F13).
+                console.error('No atomic positions available; cannot generate a valid structure CIF for export.');
+                return null;
             }
 
             dlog('Generated CIF content:', cif);
@@ -7674,14 +7889,19 @@ Crystal system: ${data.crystal_system}`;
             // Add calculation details
             text += 'Calculation Details:\n';
             text += '===================\n';
-            if (window.currentAnalysisData?.relaxation_converged !== undefined) {
-                text += `Relaxation converged: ${window.currentAnalysisData.relaxation_converged}\n`;
+            // The /api/chgnet-relax response nests this under relaxation_info
+            // (see main.py's chgnet_relax_structure), not at the top level of
+            // the analysis data -- read from there so these fields aren't
+            // silently omitted (see F13).
+            const relaxationInfo = window.currentAnalysisData?.relaxation_info;
+            if (relaxationInfo?.converged !== undefined) {
+                text += `Relaxation converged: ${relaxationInfo.converged}\n`;
             }
-            if (window.currentAnalysisData?.relaxation_steps !== undefined) {
-                text += `Relaxation steps: ${window.currentAnalysisData.relaxation_steps}\n`;
+            if (relaxationInfo?.optimizer_steps !== undefined) {
+                text += `Relaxation steps: ${relaxationInfo.optimizer_steps}\n`;
             }
-            if (window.currentAnalysisData?.fmax !== undefined) {
-                text += `Force tolerance (fmax): ${window.currentAnalysisData.fmax} eV/Å\n`;
+            if (relaxationInfo?.fmax !== undefined) {
+                text += `Force tolerance (fmax): ${relaxationInfo.fmax} eV/Å\n`;
             }
             text += 'Model: CHGNet\n';
 
@@ -7902,7 +8122,10 @@ Crystal system: ${data.crystal_system}`;
             dlog('=== GENERATING STEP-BY-STEP TRAJECTORY CSV ===');
             dlog('Using same logic as trajectory data display');
 
-            let csv = 'Step,Energy (eV),Max Force (eV/Å),RMS Force (eV/Å)\n';
+            // trajectory_data.energies is per-atom energy (main.py divides by
+            // num_atoms before sending it), so label the column accordingly
+            // instead of the misleading total-eV "Energy (eV)" (see F13).
+            let csv = 'Step,Energy (eV/atom),Max Force (eV/Å),RMS Force (eV/Å)\n';
 
             if (!window.currentAnalysisData?.trajectory_data?.energies?.length) {
                 console.warn('No trajectory data available');
