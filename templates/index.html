@@ -840,6 +840,16 @@
             info.num_sites = result.num_sites;
             info.volume = result.volume;
             info.density = result.density;
+
+            // Called by handleDeletion/handleSubstitution/handleInsertion right
+            // after the server accepts the edit -- the structure just changed,
+            // so: clear structure cache to force reload with the new structure
+            // data (otherwise a later 🧊 unit-cell toggle would redraw the
+            // pre-edit structure from the stale cache), and bump the
+            // generation counter so any relax/Auto-sweep still running
+            // against the old structure discards its result on completion.
+            currentStructureCif = null;
+            structureGeneration++;
         }
 
         // Initialize the application
@@ -1732,6 +1742,14 @@
         let displayAxes = true;
         let displayBonds = true;
         let currentStructureCif = null;
+        // Bumped every time the underlying structure changes (Manual edit,
+        // Reset, New CIF, relax completion, new supercell). Async work
+        // (relax polling, Auto substitution/deletion/insertion sweeps)
+        // captures this value before it starts and compares it again before
+        // writing results into the UI/state, so a run started against a
+        // structure that no longer exists by the time it resolves discards
+        // its result instead of silently corrupting the current view/state.
+        let structureGeneration = 0;
 
         // Simplified: toggle both unit cell and axes together
         function toggleStructureElementsRobust() {
@@ -2514,6 +2532,7 @@ Crystal system: ${data.crystal_system}`;
             displayAxes = true;      // Initial state ON
             displayBonds = true;     // Initial state ON
             currentStructureCif = null;
+            structureGeneration++;
             dlog(`   State reset - UnitCell: ${displayUnitCell}, Axes: ${displayAxes}, Bonds: ${displayBonds}`);
             syncButtonStates();
         }
@@ -2556,6 +2575,12 @@ Crystal system: ${data.crystal_system}`;
 
 
         async function runCHGNetAnalysis() {
+            // Capture the structure generation this run started against, so
+            // results can be discarded below if a Manual edit, Reset, or new
+            // CIF load changed the structure underneath this long-running
+            // relax before it resolved. Reassigned once below, after this
+            // run's own updateStructureInformation() call -- see there.
+            let generationAtStart = structureGeneration;
             try {
                 // Record start time for calculation duration
                 const startTime = performance.now();
@@ -2581,6 +2606,12 @@ Crystal system: ${data.crystal_system}`;
                 dlog('🔬 Starting CHGNet analysis:', requestData);
 
                 let maxProgressFraction = 0;
+                // First observed max_force_eV_per_A this run -- forceFraction
+                // below measures progress as how far the current force has
+                // come down from THIS starting force toward fmax (log scale),
+                // instead of assuming an absolute force scale. Reset to null
+                // here every run, alongside maxProgressFraction.
+                let initialMaxForce = null;
                 const progressSource = new EventSource('/api/relax-progress/' + window.sessionId);
                 progressSource.onmessage = (event) => {
                     try {
@@ -2594,13 +2625,15 @@ Crystal system: ${data.crystal_system}`;
                         );
 
                         const stepFraction = state.max_steps > 0 ? state.step / state.max_steps : 0;
+                        if (initialMaxForce === null) {
+                            initialMaxForce = state.max_force_eV_per_A;
+                        }
                         let forceFraction = 0;
-                        if (state.max_force_eV_per_A > state.fmax) {
-                            // log-scale: how far we've come from the (unknown) initial force
-                            // towards fmax. We don't know the true initial force here, so
-                            // approximate progress from the step fraction and force ratio
-                            // together and just take whichever is more optimistic that step.
-                            forceFraction = 1 - (Math.log(state.max_force_eV_per_A) / Math.log(state.fmax));
+                        if (state.max_force_eV_per_A > state.fmax && initialMaxForce > state.fmax) {
+                            // log-scale: how far the force has come down from the
+                            // initial force observed this run toward fmax. Both
+                            // ratios are >= 1 here, so both logs are >= 0.
+                            forceFraction = 1 - (Math.log(state.max_force_eV_per_A / state.fmax) / Math.log(initialMaxForce / state.fmax));
                         } else {
                             forceFraction = 1;
                         }
@@ -2654,6 +2687,16 @@ Crystal system: ${data.crystal_system}`;
                     data = await response.json();
                     dlog('✅ CHGNet analysis completed:', data);
 
+                    // The structure may have been edited, reset, or replaced
+                    // while this relax was running -- discard the result
+                    // instead of writing a stale structure's analysis into
+                    // the UI for whatever structure exists now.
+                    if (structureGeneration !== generationAtStart) {
+                        dlog('Discarding stale relax result — structure changed during analysis');
+                        setCHGNetButtonState('complete');
+                        return;
+                    }
+
                     // Properties calculation phase
                     setCHGNetButtonState('calculating_properties');
 
@@ -2675,10 +2718,28 @@ Crystal system: ${data.crystal_system}`;
                     updateStructureInformation(data.relaxed_structure_info);
                     // Store structure info globally for download function
                     window.currentStructureInfo = data.relaxed_structure_info;
+
+                    // updateStructureInformation() itself bumps
+                    // structureGeneration (it also clears currentStructureCif,
+                    // since this run just replaced the displayed structure
+                    // with its own relaxed result) -- that bump is this run's
+                    // own expected side effect, not evidence of external
+                    // interference, so resync the baseline to it. Otherwise
+                    // the check below would always see a "changed" structure
+                    // and discard every successful relax.
+                    generationAtStart = structureGeneration;
                 }
 
                 // Update 3D visualization with relaxed structure
                 await updateRelaxed3DVisualization();
+
+                // Re-check after the await above: the structure could have
+                // changed while updateRelaxed3DVisualization was in flight.
+                if (structureGeneration !== generationAtStart) {
+                    dlog('Discarding stale relax result — structure changed during analysis');
+                    setCHGNetButtonState('complete');
+                    return;
+                }
 
                 // Calculate and display execution time
                 const endTime = performance.now();
@@ -2752,6 +2813,7 @@ Crystal system: ${data.crystal_system}`;
             // Lattice data setup removed - using 3Dmol.js built-in functionality
             // Clear structure cache to force reload with new relaxed data
             currentStructureCif = null;
+            structureGeneration++;
 
             dlog('✅ Structure information updated with relaxed data');
         }
@@ -3485,6 +3547,12 @@ Crystal system: ${data.crystal_system}`;
             window.insertionCandidates = [];
             window.lastEvaluatedElement = element;
 
+            // Capture the structure generation this sweep started against, so
+            // a batch that resolves after a Manual edit/Reset/new CIF load
+            // changed the structure underneath it can be discarded instead of
+            // writing stale candidates/energies into window.insertionCandidates.
+            const generationAtStart = structureGeneration;
+
             // Create the controller for this run up front, before any await, so
             // Cancel works immediately during the geometric-search phase too
             // (previously it was only created before the energy-evaluation phase,
@@ -3525,9 +3593,16 @@ Crystal system: ${data.crystal_system}`;
                     });
                 } catch (err) {
                     if (controller.signal.aborted) {
+                        // This run may have been superseded by a newer one (e.g.
+                        // switching tabs mid-sweep starts a fresh candidate
+                        // search), which aborts this controller without itself
+                        // ever setting 'processing' -- make sure the Execute
+                        // button doesn't stay stuck in button-processing.
+                        setExecuteButtonState('complete');
                         return { success: false, message: "Search cancelled by user." };
                     }
                     if (err.name === 'AbortError') {
+                        setExecuteButtonState('complete');
                         return { success: false, message: "Geometric search timed out. Try a smaller supercell." };
                     }
                     throw err;
@@ -3578,7 +3653,7 @@ Crystal system: ${data.crystal_system}`;
 
                 let completed = 0;
                 for (let i = 0; i < voids.length; i += INSERTION_ENERGY_BATCH_SIZE) {
-                    if (controller.signal.aborted) break;
+                    if (controller.signal.aborted || structureGeneration !== generationAtStart) break;
 
                     const chunk = voids.slice(i, i + INSERTION_ENERGY_BATCH_SIZE);
                     const lastInChunk = Math.min(i + chunk.length, voids.length);
@@ -3595,6 +3670,14 @@ Crystal system: ${data.crystal_system}`;
                             }),
                             signal: controller.signal
                         });
+
+                        // The structure may have changed (Manual edit / Reset /
+                        // new CIF) while this batch's request was in flight --
+                        // don't apply results computed against the old one.
+                        if (structureGeneration !== generationAtStart) {
+                            dlog('Discarding stale insertion batch — structure changed during evaluation');
+                            break;
+                        }
 
                         if (!energyResponse.ok) {
                             console.warn(`Batch evaluation failed for sites ${i + 1}-${lastInChunk}: HTTP ${energyResponse.status}`);
@@ -3629,7 +3712,14 @@ Crystal system: ${data.crystal_system}`;
                 }
 
                 if (controller.signal.aborted) {
+                    setExecuteButtonState('complete');
                     return { success: false, message: "Evaluation cancelled by user." };
+                }
+
+                if (structureGeneration !== generationAtStart) {
+                    dlog('Discarding stale insertion sweep — structure changed during evaluation');
+                    setExecuteButtonState('complete');
+                    return { success: false, message: "Structure changed during evaluation." };
                 }
 
                 // Calculate relative energies based on the best candidate
@@ -4105,32 +4195,47 @@ Crystal system: ${data.crystal_system}`;
                 const result = await performIterativeInsertionEvaluation(element);
 
                 if (result.success && window.insertionCandidates.length > 0) {
+                    // Rank by energy (most stable first) rather than trusting
+                    // evaluation order -- bestCand is the sorted-first entry,
+                    // and bestIndex is where it actually sits in the
+                    // (unsorted) evaluation-order array, used below so the
+                    // reported "Site N" matches the candidate that was
+                    // actually picked instead of always saying "Site 1".
                     const bestCand = [...window.insertionCandidates].sort((a, b) => a.energy - b.energy)[0];
 
                     if (typeof bestCand.energy !== 'number') {
                         throw new Error("No stable insertion sites found.");
                     }
 
+                    const bestIndex = window.insertionCandidates.indexOf(bestCand);
+
+                    // Capture the evaluated candidates before handleInsertion
+                    // runs -- on success it resets window.insertionCandidates
+                    // (see F3: stops a stale candidate staying selected for a
+                    // duplicate insert), so this snapshot is what the summary
+                    // below must use instead.
+                    const evaluatedCandidates = window.insertionCandidates;
+
                     showExecuteStatus(`Optimal site found (ΔE: ${bestCand.rel_energy} eV). Executing insertion...`, false);
                     await handleInsertion(bestCand, element);
 
                     // Transform insertion candidates into the format expected by showExecutionComplete
                     const formattedResults = {
-                        successful: window.insertionCandidates.map((c, i) => ({
+                        successful: evaluatedCandidates.map((c, i) => ({
                             atom: `Site ${i + 1}`,
                             energy: c.energy,
                             index: i,
                             attempts: 1
                         })),
                         bestResult: {
-                            atom: `Site 1`,
+                            atom: `Site ${bestIndex + 1}`,
                             energy: bestCand.energy,
                             unit: 'eV',
-                            index: 0
+                            index: bestIndex
                         }
                     };
 
-                    showExecutionComplete(`Insertion Completed. Best: Site 1 (${bestCand.energy.toFixed(4)} eV)`, formattedResults);
+                    showExecutionComplete(`Insertion Completed. Best: Site ${bestIndex + 1} (${bestCand.energy.toFixed(4)} eV)`, formattedResults);
 
                 } else {
                     if (result.message && !result.message.includes('cancelled')) {
@@ -4194,6 +4299,20 @@ Crystal system: ${data.crystal_system}`;
             if (typeof clearGhostAtom === 'function') clearGhostAtom();
             hideCurrentBest();
             hideExecuteStatus();
+
+            // The just-inserted candidate's fractional coordinates are now
+            // occupied; nothing stops the same stale candidate being executed
+            // again (the backend does no proximity check), so drop the whole
+            // stale option list rather than just its value -- otherwise the
+            // old <option>s (with ids no longer present in
+            // window.insertionCandidates) could still be reselected.
+            const insertCandidateDropdown = document.getElementById('insert-candidate');
+            if (insertCandidateDropdown) {
+                insertCandidateDropdown.innerHTML = '<option value="">Select candidate...</option>';
+                insertCandidateDropdown.value = '';
+            }
+            window.insertionCandidates = [];
+            updateExecuteButton();
         }
 
         async function evaluateSpecificCandidate(candId, element) {
@@ -4261,7 +4380,12 @@ Crystal system: ${data.crystal_system}`;
                 }
             } catch (error) {
                 if (error.name === 'AbortError') {
-                    // Cancel button already hid the status and reset current-best.
+                    // Either the Cancel button (which already hid the status
+                    // and reset current-best) or a newer run superseding this
+                    // one aborted it. This function never sets 'processing'
+                    // itself, but a superseded run (e.g. an Auto sweep) might
+                    // have -- make sure it isn't left stuck.
+                    setExecuteButtonState('complete');
                     return;
                 }
                 console.error('❌ Error evaluating specific site:', error);
@@ -4580,6 +4704,13 @@ Crystal system: ${data.crystal_system}`;
                 startTime: Date.now()
             };
 
+            // Capture the structure generation this sweep started against, so
+            // a batch that resolves after a Manual edit/Reset/new CIF load
+            // changed the structure underneath it can be discarded instead of
+            // applying an operation indexed against a structure that no
+            // longer exists.
+            const generationAtStart = structureGeneration;
+
             // Reset Chart
             if (window.autoModeChart) {
                 window.autoModeChart.reset(targetAtoms.length);
@@ -4610,7 +4741,7 @@ Crystal system: ${data.crystal_system}`;
             try {
                 let completed = 0;
                 for (let i = 0; i < targetAtoms.length; i += CANDIDATE_ENERGY_BATCH_SIZE) {
-                    if (controller.signal.aborted) break;
+                    if (controller.signal.aborted || structureGeneration !== generationAtStart) break;
 
                     const chunk = targetAtoms.slice(i, i + CANDIDATE_ENERGY_BATCH_SIZE);
                     const lastInChunk = Math.min(i + chunk.length, targetAtoms.length);
@@ -4644,6 +4775,11 @@ Crystal system: ${data.crystal_system}`;
                             chunk.forEach(atom => {
                                 calculationResults.failed.push({ atom: atom.label, errors: [{ error: detail }], finalError: detail });
                             });
+                        } else if (structureGeneration !== generationAtStart) {
+                            // The structure changed while this batch's request
+                            // was in flight -- don't apply energies computed
+                            // against the old one.
+                            dlog('Discarding stale candidate-sweep batch — structure changed during evaluation');
                         } else {
                             const data = await response.json();
                             const resultById = new Map((data.results || []).map(r => [r.id, r]));
@@ -4704,7 +4840,22 @@ Crystal system: ${data.crystal_system}`;
                 if (controller.signal.aborted) {
                     // Cancelled by user: do NOT apply any operation, even if a
                     // partial "best result" was already found (this is the
-                    // bug the old per-atom loop had for substitution).
+                    // bug the old per-atom loop had for substitution). This
+                    // controller may have been aborted by a newer run
+                    // superseding it (e.g. switching to Insert and starting a
+                    // candidate search mid-sweep) rather than by the Cancel
+                    // button, and that newer run never sets 'processing'
+                    // itself here, so reset the Execute button ourselves --
+                    // otherwise button-processing (and isOperationProcessing)
+                    // stays stuck forever, blocking 3D click/hover.
+                    setExecuteButtonState('complete');
+                    return;
+                }
+
+                if (structureGeneration !== generationAtStart) {
+                    dlog('Discarding stale candidate sweep — structure changed during evaluation');
+                    hideExecuteStatus();
+                    setExecuteButtonState('complete');
                     return;
                 }
 
@@ -4981,6 +5132,13 @@ Crystal system: ${data.crystal_system}`;
                 return;
             }
 
+            // Reset discards whatever the structure currently is, so cancel any
+            // relax/Auto-sweep still in flight against it -- otherwise it could
+            // resolve after the reset and write stale results back in.
+            if (typeof currentAbortController !== 'undefined' && currentAbortController) {
+                currentAbortController.abort();
+            }
+
             try {
                 // Show reset in progress
                 showNotification('Resetting structure...', 'info');
@@ -5020,6 +5178,13 @@ Crystal system: ${data.crystal_system}`;
                 // Clear frontend operation history
                 window.atomicOperations = [];
                 dlog('📝 Cleared frontend operation history');
+
+                // Structure just changed (reset to original): clear structure
+                // cache to force reload with new structure data, and bump the
+                // generation counter so a relax/Auto-sweep still running
+                // against the pre-reset structure discards its result.
+                currentStructureCif = null;
+                structureGeneration++;
 
                 // Restore frontend working data from immutable original data
                 window.currentStructureData = JSON.parse(JSON.stringify(window.originalSupercellData));
@@ -5069,6 +5234,9 @@ Crystal system: ${data.crystal_system}`;
                 // Fallback: try frontend-only reset
                 try {
                     window.atomicOperations = [];
+                    // See the matching comment in the success path above.
+                    currentStructureCif = null;
+                    structureGeneration++;
                     window.currentStructureData = JSON.parse(JSON.stringify(window.originalSupercellData));
                     window.currentLabels = [...window.originalLabels];
                     displaySupercellInfo();
@@ -5534,10 +5702,19 @@ Crystal system: ${data.crystal_system}`;
         }
 
         async function updateStructureVisualization() {
-            if (typeof clearManualAtomHighlight === 'function') {
-                clearManualAtomHighlight();
-            }
-
+            // Do NOT unconditionally clear the Manual-mode highlight here:
+            // clearManualAtomHighlight() sets window.selectedManualAtomLabel
+            // to null as a side effect, and updateMoleculeStyleRobust() below
+            // (called after the new model is drawn) only re-applies the
+            // highlight if that variable is still set -- clearing it up
+            // front made the highlight disappear on every Manual op even
+            // though the Delete/Substitute/Insert dropdown kept its
+            // selection. Leave it as-is here; updateMoleculeStyleRobust()
+            // re-derives the highlight from it against the freshly-drawn
+            // model/currentLabels once those are refreshed (or leaves it
+            // cleared, via its own clearManualAtomHighlight() call, if the
+            // previously-selected atom no longer exists -- e.g. it was the
+            // one just deleted).
             if (!window.viewer3D || !window.currentFilename || !window.currentSupercellSize) {
                 dlog('3D viewer or structure parameters not available, skipping update');
                 return;
@@ -5875,6 +6052,19 @@ Crystal system: ${data.crystal_system}`;
         }
 
         function resetApplicationState() {
+            // A new CIF is being loaded, discarding the current structure
+            // entirely: cancel any relax/Auto-sweep still in flight against
+            // it (its result would otherwise land after this reset and
+            // corrupt the fresh state), clear the structure cache, and bump
+            // the generation counter so any stray async completion is
+            // recognized as stale and discarded.
+            if (typeof currentAbortController !== 'undefined' && currentAbortController) {
+                currentAbortController.abort();
+                currentAbortController = null;
+            }
+            currentStructureCif = null;
+            structureGeneration++;
+
             // Clear global variables
             window.currentFilename = null;
             window.currentFullPath = null;
@@ -6834,19 +7024,23 @@ Crystal system: ${data.crystal_system}`;
             // Add operation history as suffix
             const operations = [];
 
-            // Check for supercell operations
-            if (window.currentStructureData?.supercell_info) {
-                const nx = window.currentStructureData.supercell_info.nx || 1;
-                const ny = window.currentStructureData.supercell_info.ny || 1;
-                const nz = window.currentStructureData.supercell_info.nz || 1;
+            // Check for supercell operations. supercell_info has no nx/ny/nz
+            // fields -- the dimensions live in supercell_info.size, e.g. [2,2,2]
+            // (see displaySupercellInfo/updateStructureInformation elsewhere).
+            if (window.currentStructureData?.supercell_info?.size) {
+                const [nx = 1, ny = 1, nz = 1] = window.currentStructureData.supercell_info.size;
 
                 if (nx > 1 || ny > 1 || nz > 1) {
                     operations.push(`supercell_${nx}x${ny}x${nz}`);
                 }
             }
 
-            // Check for CHGNet optimization
-            if (window.currentAnalysisData && window.currentAnalysisData.energy) {
+            // Check for CHGNet optimization. window.currentAnalysisData is the
+            // raw /api/chgnet-relax response (see displayCHGNetResults) and has
+            // no top-level `energy` field; relaxed_structure_info is the
+            // field that's actually present once a relax has completed (same
+            // check used elsewhere, e.g. copyToSpreadsheet).
+            if (window.currentAnalysisData?.relaxed_structure_info) {
                 operations.push('chgnet_optimized');
             }
 
