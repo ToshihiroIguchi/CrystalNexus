@@ -168,6 +168,32 @@ def test_relax_response_contract(client):
 
 
 @pytest.mark.slow
+def test_relax_trajectory_energies_are_per_atom(client):
+    """Regression (B3): trajectory.energies (TrajectoryRecorder) is TOTAL
+    energy per step, but the response's trajectory_data.energies is
+    documented/consumed as eV/atom (matching final_prediction's
+    energy_eV_per_atom). The last trajectory energy must be close to
+    energy_eV_per_atom, not off by a factor of num_atoms (the total)."""
+    session_id = _create_session(_cu_structure(supercell=(2, 2, 2)))  # 32 atoms
+
+    response = client.post("/api/chgnet-relax", json={
+        "session_id": session_id, "fmax": 0.1, "max_steps": 20, "optimizer": "LBFGS",
+    })
+    assert response.status_code == 200
+    data = response.json()
+
+    energy_per_atom = data["final_prediction"]["energy_eV_per_atom"]
+    trajectory_energies = data["trajectory_data"]["energies"]
+    assert len(trajectory_energies) > 0
+
+    last_energy = trajectory_energies[-1]
+    assert last_energy == pytest.approx(energy_per_atom, abs=0.05)
+    # Sanity check that this isn't accidentally still the total energy
+    # (which would be ~32x larger in magnitude for this 32-atom structure).
+    assert abs(last_energy - energy_per_atom * 32) > 1.0
+
+
+@pytest.mark.slow
 def test_relax_second_concurrent_request_returns_429(client):
     """A second relax request while one is in flight must be rejected with 429."""
     session_id_1 = _create_session(_cu_structure(supercell=(2, 2, 2)))

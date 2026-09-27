@@ -449,6 +449,21 @@ def build_element_labels(structure: Structure) -> "tuple[List[str], List[str]]":
     return labels, list(element_counts.keys())
 
 
+def apply_element_labels_to_structure(structure: Structure) -> Structure:
+    """
+    Set each site's CIF label to match the same per-element sequential
+    numbering build_element_labels()/the client's currentLabels use (Ba0,
+    Ba1, Ti0, O0, O1, ...), so CifWriter emits unique, UI-consistent
+    _atom_site_label values instead of pymatgen's default (which repeats
+    the bare element symbol for every site of that element and produces
+    invalid duplicate labels in the CIF). Mutates and returns `structure`.
+    """
+    labels, _ = build_element_labels(structure)
+    for site, label in zip(structure.sites, labels):
+        site.label = label
+    return structure
+
+
 def substitute_site(structure: Structure, site_index: int, new_element: str) -> bool:
     """
     Replace `structure[site_index]` with a neutral `new_element` at the same
@@ -696,6 +711,26 @@ def sanitize_display_filename(filename: str) -> str:
         return str(filename)
     return "".join(ch for ch in filename if ch.isprintable())
 
+def build_content_disposition(display_name: str) -> str:
+    """
+    Build a Content-Disposition header value that is always safe to encode
+    (headers are Latin-1 in this stack) and safe to parse as a single
+    unquoted-or-quoted value, even when display_name contains non-ASCII
+    characters, spaces, quotes, or path separators.
+
+    Provides both a quoted ASCII-safe fallback filename and an RFC 5987
+    filename* for clients that support UTF-8 names.
+    """
+    import re
+    from urllib.parse import quote
+
+    # Never let a path separator escape into the filename.
+    safe_display = display_name.replace('\\', '_').replace('/', '_')
+    ascii_fallback = safe_display.encode('ascii', errors='ignore').decode('ascii')
+    ascii_fallback = re.sub(r'[\"\\\\]', '_', ascii_fallback).strip() or 'structure.cif'
+    encoded_utf8 = quote(safe_display, safe='')
+    return f'inline; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded_utf8}'
+
 def validate_supercell_size(supercell_size: List[int]) -> List[int]:
     """Validate supercell size"""
     if not isinstance(supercell_size, list) or len(supercell_size) != 3:
@@ -750,7 +785,7 @@ def validate_occupancy(structure) -> None:
     for i, site in enumerate(structure.sites):
         # Check if site has partial occupancy
         total_occupancy = sum(site.species.values())
-        if abs(total_occupancy - 1.0) > 1e-6:  # Allow small numerical errors
+        if not site.is_ordered or abs(total_occupancy - 1.0) > 1e-6:  # Allow small numerical errors
             # Get species with partial occupancy
             species_info = []
             for species, occupancy in site.species.items():
@@ -897,7 +932,7 @@ class SessionManager:
         
         old_sessions = [
             sid for sid, data in self.sessions.items()
-            if data.get('created_at', 0) < cutoff_time
+            if data.get('last_accessed', data.get('created_at', 0)) < cutoff_time
         ]
         
         memory_freed = 0
@@ -1500,7 +1535,7 @@ def analyze_cif_file_sync(file_path: Path) -> Dict:
             try:
                 from pymatgen.io.cif import CifParser
                 parser = CifParser(str(file_path))
-                structures = parser.get_structures()
+                structures = parser.get_structures(primitive=False)
                 if structures:
                     structure = structures[0]
                     logger.info("Successfully parsed with CifParser")
@@ -1663,7 +1698,7 @@ def _load_and_build_supercell(crystal_data: dict, filename: str, a_mult: int, b_
             logger.info(f"✅ SUPERCELL: Found sample file, parsing...")
             try:
                 parser = CifParser(str(cif_path))
-                original_structure = parser.get_structures()[0]
+                original_structure = parser.get_structures(primitive=False)[0]
                 logger.info(f"✅ SUPERCELL: Loaded structure from sample CIF - Formula: {original_structure.formula}, Sites: {len(original_structure.sites)}")
             except Exception as e:
                 logger.error(f"❌ SUPERCELL: Failed to parse sample file: {e}")
@@ -1908,6 +1943,7 @@ async def generate_modified_structure_cif(request: dict):
         logger.info(f"Final structure: {structure.formula} ({len(structure.sites)} sites)")
 
         # Generate CIF using pymatgen CifWriter
+        apply_element_labels_to_structure(structure)
         cif_writer = CifWriter(
             structure,
             write_magmoms=False,
@@ -1944,7 +1980,7 @@ async def generate_modified_structure_cif(request: dict):
             content=final_cif,
             media_type="chemical/x-cif",
             headers={
-                "Content-Disposition": f"inline; filename={filename.replace('.cif', '')}_modified.cif",
+                "Content-Disposition": build_content_disposition(f"{filename.replace('.cif', '')}_modified.cif"),
                 "Cache-Control": "no-cache",
                 # The CIF body only exposes skips as a "# WARNING:" comment
                 # line, which the client does not parse; this header lets it
@@ -2008,6 +2044,7 @@ def _resolve_and_expand_supercell_direct(session_structure: Optional[Structure],
     logger.info(f"Number of sites: {len(supercell_structure.sites)}")
 
     # Generate CIF using pymatgen CifWriter
+    apply_element_labels_to_structure(supercell_structure)
     cif_writer = CifWriter(
         supercell_structure,
         write_magmoms=False,
@@ -2073,7 +2110,7 @@ async def generate_supercell_cif_direct(request: dict):
             content=final_cif,
             media_type="chemical/x-cif",
             headers={
-                "Content-Disposition": f"inline; filename={filename.replace('.cif', '')}_supercell_{size_str}.cif",
+                "Content-Disposition": build_content_disposition(f"{filename.replace('.cif', '')}_supercell_{size_str}.cif"),
                 "Cache-Control": "no-cache"
             }
         )
@@ -2696,9 +2733,16 @@ async def chgnet_relax_structure(request: dict):
             # Use all steps as provided by CHGNet - no unnecessary optimization
             trajectory_data = None
             if trajectory:
+                # trajectory.energies (TrajectoryRecorder) stores TOTAL energy
+                # per step (mirrors chgnet's own TrajectoryObserver interface,
+                # so that class itself must not change), but the frontend
+                # charts/labels this array as eV/atom, matching
+                # energy_eV_per_atom reported elsewhere in this same response.
+                # Convert here, at the response boundary, instead.
+                num_atoms_for_energy = len(final_structure.sites)
                 trajectory_data = {
                     "steps": len(trajectory.forces) if hasattr(trajectory, 'forces') else 0,
-                    "energies": [float(e) for e in trajectory.energies] if hasattr(trajectory, 'energies') else [],
+                    "energies": [float(e) / num_atoms_for_energy for e in trajectory.energies] if hasattr(trajectory, 'energies') and num_atoms_for_energy > 0 else [],
                     "forces": [],
                     "force_magnitudes": []
                 }
@@ -2926,12 +2970,13 @@ async def generate_relaxed_structure_cif(request: dict):
         
         # Generate CIF using pymatgen CifWriter
         from pymatgen.io.cif import CifWriter
+        apply_element_labels_to_structure(final_structure)
         cif_writer = CifWriter(
             final_structure,
             write_magmoms=False,
             significant_figures=6
         )
-        
+
         cif_content = str(cif_writer)
         
         # Calculate structure properties once for metadata
@@ -2962,7 +3007,7 @@ async def generate_relaxed_structure_cif(request: dict):
             content=final_cif,
             media_type="chemical/x-cif",
             headers={
-                "Content-Disposition": f"inline; filename={filename.replace('.cif', '')}_relaxed.cif",
+                "Content-Disposition": build_content_disposition(f"{filename.replace('.cif', '')}_relaxed.cif"),
                 "Cache-Control": "no-cache"
             }
         )
@@ -3124,9 +3169,14 @@ async def get_insertion_voids(data: dict):
         structure = session_info["current_structure"]
 
         # Cache key reflects the structure state actually seen by voids search:
-        # number of applied operations + supercell size. Element is deliberately
-        # excluded since it does not affect the candidate geometry.
-        cache_key = (len(session_info.get("operations", [])),
+        # structure_version (bumped on every structural change, including a
+        # Reset, by SessionManager.update_structure) + supercell size. Using
+        # len(operations) here previously collided across a Reset: e.g.
+        # "delete atom 3" then, after a Reset, "delete atom 7" both produce a
+        # 1-length operations list and would return stale voids that may now
+        # overlap a real atom. Element is deliberately excluded since it does
+        # not affect the candidate geometry.
+        cache_key = (session_info.get("structure_version", 0),
                     tuple(session_info.get("supercell_size", [])))
         void_cache = session_info.setdefault("void_cache", {})
 

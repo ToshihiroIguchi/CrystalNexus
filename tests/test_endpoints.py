@@ -96,6 +96,61 @@ def test_analyze_cif_upload_rejects_non_cif_file(client):
     assert response.status_code == 400
 
 
+def test_analyze_cif_upload_rejects_disordered_site(client, tmp_path):
+    """Regression (B1): a disordered site (two species each occupancy 0.5,
+    e.g. a mixed (Ba,Sr) site) sums to 1.0 total occupancy and previously
+    slipped past validate_occupancy's sum-based check, only to crash later
+    with an AttributeError from site.specie (singular) on a non-ordered
+    site. Must be rejected here with 400, not a 500."""
+    from pymatgen.core import Lattice, Structure as PmgStructure
+    from pymatgen.io.cif import CifWriter
+
+    lattice = Lattice.cubic(4.0)
+    structure = PmgStructure(
+        lattice,
+        [{"Ba": 0.5, "Sr": 0.5}, "Ti", "O", "O", "O"],
+        [[0, 0, 0], [0.5, 0.5, 0.5], [0.5, 0.5, 0], [0.5, 0, 0.5], [0, 0.5, 0.5]],
+    )
+    cif_path = tmp_path / "disordered.cif"
+    CifWriter(structure).write_file(str(cif_path))
+
+    uploads_dir = Path("uploads")
+    before = set(uploads_dir.glob("*")) if uploads_dir.exists() else set()
+    try:
+        response = client.post(
+            "/api/analyze-cif-upload",
+            files={"file": ("disordered.cif", cif_path.read_bytes(), "chemical/x-cif")},
+        )
+        assert response.status_code == 400
+        assert "occupancy" in response.json()["detail"].lower()
+    finally:
+        if uploads_dir.exists():
+            for leftover in set(uploads_dir.glob("*")) - before:
+                leftover.unlink(missing_ok=True)
+
+
+def test_analyze_cif_upload_non_ascii_filename_content_disposition(client):
+    """Regression (B2): a non-ASCII display filename must not crash header
+    encoding downstream in the CIF-generation endpoints that echo it into
+    Content-Disposition (headers are Latin-1). Exercised end-to-end through
+    /api/generate-modified-structure-cif, which is session-based and so
+    never touches the filesystem by this name."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    response = client.post("/api/generate-modified-structure-cif", json={
+        "session_id": session_id,
+        "filename": "日本語ファイル名.cif",
+        "operations": [],
+        "supercell_size": [1, 1, 1],
+    })
+    assert response.status_code == 200
+    # Must not raise (would previously UnicodeEncodeError under Latin-1)
+    content_disposition = response.headers["content-disposition"]
+    assert "filename*=UTF-8''" in content_disposition
+
+
 def test_upload_cif_roundtrip_through_substitution(client, sample_cif_dir):
     """Regression: uploaded (non-sample) CIFs must support the full modify
     flow -- upload -> supercell -> substitute -> regenerate CIF -- without
@@ -356,6 +411,31 @@ def test_update_structure_clears_relaxed_structure():
     assert 'chgnet_result' not in session_info
 
 
+def test_cleanup_old_sessions_uses_last_accessed_not_created_at():
+    """Regression (B5): cleanup previously judged staleness by created_at,
+    so a session that was still actively being used 6+ hours after it was
+    first created got deleted mid-use. last_accessed (bumped on every
+    session read/write) must be used instead."""
+    from main import session_manager
+    import time as time_module
+
+    uuid_seed = str(uuid.uuid4())
+    structure = Structure.from_file(Path("sample_cif") / "Metals" / "Cu.cif")
+    session_id = session_manager.create_session(uuid_seed, "Cu.cif", structure)
+
+    now = time_module.time()
+    session_data = session_manager.sessions[session_id]
+    session_data['created_at'] = now - 10 * 3600  # created 10h ago
+    session_data['last_accessed'] = now  # but just used
+
+    session_manager.cleanup_old_sessions(max_age_hours=1)
+    assert session_id in session_manager.sessions  # must survive: recently active
+
+    session_data['last_accessed'] = now - 10 * 3600  # now also stale
+    session_manager.cleanup_old_sessions(max_age_hours=1)
+    assert session_id not in session_manager.sessions  # now cleaned up
+
+
 def test_reset_session_structure_formula_shape(client):
     """Regression: structure_info.formula must be in the same
     'Cu32'-shaped form the client compares against supercell_info.formula
@@ -423,6 +503,89 @@ def test_generate_modified_structure_cif_with_substitution(client):
     assert "Ni" in response.text
     assert "# Final formula:" in response.text
     assert response.headers["x-operations-skipped"] == "0"
+
+
+def _extract_atom_site_labels(cif_text: str) -> list:
+    """Pull the _atom_site_label column values out of a CIF text's atom-site
+    loop, regardless of the other columns CifWriter chose to include."""
+    lines = cif_text.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() != "loop_":
+            continue
+        header = []
+        j = i + 1
+        while j < len(lines) and lines[j].strip().startswith("_"):
+            header.append(lines[j].strip())
+            j += 1
+        if "_atom_site_label" not in header:
+            continue
+        label_idx = header.index("_atom_site_label")
+        labels = []
+        while j < len(lines) and lines[j].strip() and not lines[j].strip().startswith(("_", "loop_")):
+            labels.append(lines[j].split()[label_idx])
+            j += 1
+        return labels
+    return []
+
+
+def test_generate_modified_structure_cif_unique_atom_site_labels(client):
+    """Regression (B7): CifWriter's default _atom_site_label repeats the
+    bare element symbol for every site of that element (e.g. "Cu", "Cu",
+    ...), which is both invalid per the CIF spec (duplicate labels) and
+    inconsistent with the UI's per-element numbering (Cu0, Cu1, ...).
+    apply_element_labels_to_structure must be applied before CifWriter."""
+    response = client.post("/api/generate-modified-structure-cif", json={
+        "filename": "Metals/Cu.cif",
+        "operations": [],
+        "supercell_size": [2, 2, 2],
+    })
+    assert response.status_code == 200
+    labels = _extract_atom_site_labels(response.text)
+    assert len(labels) == 32
+    assert len(set(labels)) == 32  # no duplicates
+    assert set(labels) == {f"Cu{i}" for i in range(32)}
+
+
+def test_create_supercell_sample_file_fallback_keeps_conventional_cell(client):
+    """Regression (B6): when a client omits structure_data (Method 2's
+    CifParser fallback for sample files in _load_and_build_supercell), the
+    loaded structure must stay the conventional cell (primitive=False).
+    Cu.cif's primitive cell has only 1 site vs. 4 for the conventional
+    cell -- silently switching cells here would mismatch every other
+    endpoint's atom-index/site-count expectations."""
+    crystal_data = _analyze_sample(client, "Metals/Cu.cif")
+    crystal_data.pop("structure_data", None)
+    crystal_data["filename"] = "Metals/Cu.cif"
+
+    response = client.post("/api/create-supercell", json={
+        "crystal_data": crystal_data,
+        "supercell_size": [1, 1, 1],
+        "session_id": str(uuid.uuid4()),
+    })
+    assert response.status_code == 200
+    supercell_info = response.json()["supercell_info"]
+    assert supercell_info["num_sites"] == 4
+
+
+def test_analyze_cif_file_sync_fallback_keeps_conventional_cell(monkeypatch, sample_cif_dir):
+    """Regression (B6), second call site: analyze_cif_file_sync's Method 2
+    CifParser fallback (used only when Structure.from_file itself fails)
+    must also keep the conventional cell. Structure.from_file succeeds for
+    every normal sample CIF, so this path is forced here directly rather
+    than through the HTTP upload flow."""
+    import main
+    from pymatgen.io.cif import CifParser
+
+    def _boom(*args, **kwargs):
+        raise ValueError("forced failure to exercise the CifParser fallback")
+
+    monkeypatch.setattr(main.Structure, "from_file", staticmethod(_boom))
+
+    cif_path = sample_cif_dir / "Metals" / "Cu.cif"
+    result = main.analyze_cif_file_sync(cif_path)
+
+    reference = CifParser(str(cif_path)).get_structures(primitive=False)[0]
+    assert result["num_atoms"] == len(reference.sites) == 4
 
 
 def test_generate_modified_structure_cif_lenient_skips_and_warns(client):
@@ -527,6 +690,48 @@ def test_get_insertion_voids_unknown_session_id(client):
         "element": "Li",
     })
     assert response.status_code == 404
+
+
+@pytest.mark.slow
+def test_get_insertion_voids_cache_busts_after_reset(client):
+    """Regression (B4): the void cache key was only operation COUNT, not
+    identity, so "delete atom 3" then, after a Reset, "delete atom 7" both
+    produce a 1-length operations list and collided -- the second call
+    returned the first call's stale voids, which could now overlap a real
+    atom. structure_version (bumped on every structural change including
+    Reset) must distinguish these two states."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
+
+    delete_response = client.post("/api/apply-atomic-operations", json={
+        "session_id": session_id,
+        "operations": [{"action": "delete", "index": 3}],
+    })
+    assert delete_response.status_code == 200
+
+    voids_before = client.post("/api/get-insertion-voids", json={
+        "session_id": session_id,
+        "element": "Li",
+    }).json()["voids"]
+
+    reset_response = client.post("/api/reset-session-structure", json={"session_id": session_id})
+    assert reset_response.status_code == 200
+
+    delete_response_2 = client.post("/api/apply-atomic-operations", json={
+        "session_id": session_id,
+        "operations": [{"action": "delete", "index": 7}],
+    })
+    assert delete_response_2.status_code == 200
+
+    voids_after = client.post("/api/get-insertion-voids", json={
+        "session_id": session_id,
+        "element": "Li",
+    }).json()["voids"]
+
+    # Both operations lists have length 1 -- the old count-only cache key
+    # would have returned the exact same (stale) voids for both calls.
+    assert voids_before != voids_after
 
 
 @pytest.mark.slow
