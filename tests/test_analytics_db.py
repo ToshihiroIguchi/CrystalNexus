@@ -80,3 +80,39 @@ def test_purge_old_data_returns_zero_on_db_error(tmp_path):
         conn.commit()
 
     assert db.purge_old_data(retention_days=90) == 0
+
+
+# ---------------------------------------------------------------------------
+# UTC consistency -- regression test for C6 (purge_old_data and
+# get_daily_access_counts previously used datetime.now(), i.e. the server's
+# local time, while timestamps are inserted via SQLite's CURRENT_TIMESTAMP,
+# which is always UTC; on a machine ahead of UTC this made both methods
+# treat rows as older/newer than they really are). Both now use
+# datetime.utcnow(), so fixture timestamps here are built the same way --
+# the point is that the comparison is internally consistent in UTC
+# regardless of the local timezone offset the test machine happens to have.
+# ---------------------------------------------------------------------------
+
+def test_get_daily_access_counts_uses_utc_threshold(db):
+    """A row timestamped 1 hour ago in UTC must be counted by
+    get_daily_access_counts(days=1), which computes its threshold from
+    datetime.utcnow() (not datetime.now())."""
+    one_hour_ago_utc = (datetime.utcnow() - timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S')
+    _insert_access_log_at(db, one_hour_ago_utc)
+
+    counts = db.get_daily_access_counts(days=1)
+    total = sum(row["count"] for row in counts)
+    assert total == 1
+
+
+def test_purge_old_data_uses_utc_cutoff(db):
+    """A row timestamped 2 UTC-days ago must be purged with retention_days=1,
+    computed from datetime.utcnow() (not datetime.now())."""
+    two_days_ago_utc = (datetime.utcnow() - timedelta(days=2)).strftime('%Y-%m-%d %H:%M:%S')
+    _insert_access_log_at(db, two_days_ago_utc)
+
+    deleted = db.purge_old_data(retention_days=1)
+    assert deleted == 1
+
+    with db._get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM access_logs").fetchone()[0] == 0
