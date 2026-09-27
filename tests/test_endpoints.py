@@ -924,7 +924,7 @@ def test_analyze_cif_file_sync_fallback_keeps_conventional_cell(monkeypatch, sam
     cif_path = sample_cif_dir / "Metals" / "Cu.cif"
     result = main.analyze_cif_file_sync(cif_path)
 
-    reference = CifParser(str(cif_path)).get_structures(primitive=False)[0]
+    reference = CifParser(str(cif_path)).parse_structures(primitive=False)[0]
     assert result["num_atoms"] == len(reference.sites) == 4
 
 

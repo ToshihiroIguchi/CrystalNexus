@@ -1216,7 +1216,7 @@ def load_base_supercell(session_id: Optional[str], filename: Optional[str],
             raise HTTPException(status_code=400, detail=f"Invalid filename: {e}")
         if sample_path.exists():
             parser = CifParser(str(sample_path))
-            structure = parser.get_structures(primitive=False)[0]
+            structure = parser.parse_structures(primitive=False)[0]
             check_supercell_site_limit(len(structure.sites), supercell_size)
             structure.make_supercell(supercell_size)
             return structure
@@ -1230,6 +1230,75 @@ async def root(request: Request):
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "CrystalNexus"}
+
+def _get_session_lock(session_info: Dict) -> asyncio.Lock:
+    """
+    Return this session's asyncio.Lock, creating it on first use.
+
+    Stored inside the session's own dict (session_manager.sessions[session_id])
+    rather than in a separate global registry, so it is per-session, not
+    global, and requires no separate cleanup: when a session is evicted or
+    replaced, its lock goes with it.
+
+    Serializes the read-modify-write sequence used by
+    /api/apply-atomic-operations and /api/reset-session-structure, so two
+    concurrent requests against the same session cannot interleave their
+    (thread-pool-scheduled, possibly slow) pymatgen work and have the
+    slower one silently clobber the faster one's session update.
+
+    Note: a session can also be replaced wholesale (a brand new dict for
+    the same session_id, e.g. via /api/create-supercell) while this lock
+    is held on the OLD dict -- that does not block a request operating on
+    the new dict, since it acquires the new dict's own lock. Callers must
+    therefore still re-check `session_manager.sessions.get(session_id) is
+    session_info` after re-acquiring, before writing anything back.
+    """
+    return session_info.setdefault('lock', asyncio.Lock())
+
+
+def _apply_atomic_operations_sync(original_structure: Structure, supercell_size: List[int],
+                                   operations: List[dict]) -> "Tuple[Structure, int]":
+    """
+    CPU-bound: rebuild the supercell from `original_structure` and replay
+    `operations` against it in strict mode (fail-fast on the first invalid
+    operation). Call via asyncio.to_thread.
+
+    Raises ValueError if an operation is invalid, or HTTPException(400) if
+    the resulting structure exceeds MAX_TOTAL_SITES -- both propagate
+    through asyncio.to_thread into the caller unchanged.
+    """
+    structure = original_structure.copy()
+    logger.info(f" OPERATIONS: Applying supercell {supercell_size}")
+    structure.make_supercell(supercell_size)
+    logger.info(f"✅ OPERATIONS: Supercell applied - Formula: {structure.formula}, Sites: {len(structure.sites)}")
+
+    # Apply operations in the exact order the client recorded them (strict
+    # mode: fail-fast on the first invalid operation). Each operation's
+    # index refers to the structure state produced by the operations
+    # before it -- the same frame the client's own atomicOperations
+    # history uses -- so this must NOT reorder by index (see
+    # apply_operations_to_structure docstring).
+    logger.info(f" OPERATIONS: Applying {len(operations)} operations in recorded order")
+    operations_applied, _, property_warnings = apply_operations_to_structure(
+        structure, operations, strict_mode=True
+    )
+    if property_warnings:
+        logger.warning(f"Property loss during atomic operations: {property_warnings}")
+    logger.info(f"✅ OPERATIONS: Applied {operations_applied}/{len(operations)} operations - "
+               f"Formula: {structure.formula}, Sites: {len(structure.sites)}")
+
+    # Re-check the site cap after applying operations: supercell creation
+    # already enforces MAX_TOTAL_SITES on its own scaling factor, but a
+    # long enough run of 'insert' operations can independently push the
+    # structure past that same limit.
+    if len(structure.sites) > MAX_TOTAL_SITES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Resulting structure would have {len(structure.sites)} atoms, "
+                   f"exceeding the limit of {MAX_TOTAL_SITES}")
+
+    return structure, operations_applied
+
 
 @app.post("/api/apply-atomic-operations")
 async def apply_atomic_operations(request: dict):
@@ -1269,49 +1338,38 @@ async def apply_atomic_operations(request: dict):
 
         logger.info(f"✅ OPERATIONS: Session info retrieved, keys: {list(session_info.keys())}")
 
-        # Start with original structure and apply supercell + operations
-        original_structure = session_info['original_structure']
-        logger.info(f" OPERATIONS: Original structure - Formula: {original_structure.formula}, Sites: {len(original_structure.sites)}")
+        # Serialize concurrent requests against this same session (see
+        # _get_session_lock's docstring) before doing any of the heavy work.
+        session_lock = _get_session_lock(session_info)
+        async with session_lock:
+            # Start with original structure and apply supercell + operations
+            original_structure = session_info['original_structure']
+            logger.info(f" OPERATIONS: Original structure - Formula: {original_structure.formula}, Sites: {len(original_structure.sites)}")
 
-        structure = original_structure.copy()
-        supercell_size = session_info['supercell_size']
-        logger.info(f" OPERATIONS: Applying supercell {supercell_size}")
-        structure.make_supercell(supercell_size)
-        logger.info(f"✅ OPERATIONS: Supercell applied - Formula: {structure.formula}, Sites: {len(structure.sites)}")
+            supercell_size = session_info['supercell_size']
+            try:
+                structure, operations_applied = await asyncio.to_thread(
+                    _apply_atomic_operations_sync, original_structure, supercell_size, operations
+                )
+            except ValueError as e:
+                logger.error(f"❌ OPERATIONS: Validation failed - Rejecting {len(operations)} operations: {e}")
+                raise HTTPException(status_code=400, detail=str(e))
 
-        # Apply operations in the exact order the client recorded them (strict
-        # mode: fail-fast on the first invalid operation). Each operation's
-        # index refers to the structure state produced by the operations
-        # before it -- the same frame the client's own atomicOperations
-        # history uses -- so this must NOT reorder by index (see
-        # apply_operations_to_structure docstring).
-        logger.info(f" OPERATIONS: Applying {len(operations)} operations in recorded order")
-        try:
-            operations_applied, _, property_warnings = apply_operations_to_structure(
-                structure, operations, strict_mode=True
-            )
-            if property_warnings:
-                logger.warning(f"Property loss during atomic operations: {property_warnings}")
-            logger.info(f"✅ OPERATIONS: Applied {operations_applied}/{len(operations)} operations - "
-                       f"Formula: {structure.formula}, Sites: {len(structure.sites)}")
-        except ValueError as e:
-            logger.error(f"❌ OPERATIONS: Validation failed - Rejecting {len(operations)} operations: {e}")
-            raise HTTPException(status_code=400, detail=str(e))
+            # The session may have been replaced wholesale (a brand new dict
+            # for the same session_id -- e.g. via /api/create-supercell)
+            # while the above ran; that new dict has its own lock, which does
+            # not block this coroutine, so it must be detected explicitly
+            # instead of relying on the lock alone. Refuse to resurrect this
+            # now-stale result over whatever replaced it.
+            if session_manager.sessions.get(session_id) is not session_info:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Session was modified concurrently; please retry")
 
-        # Re-check the site cap after applying operations: supercell creation
-        # already enforces MAX_TOTAL_SITES on its own scaling factor, but a
-        # long enough run of 'insert' operations can independently push the
-        # structure past that same limit.
-        if len(structure.sites) > MAX_TOTAL_SITES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Resulting structure would have {len(structure.sites)} atoms, "
-                       f"exceeding the limit of {MAX_TOTAL_SITES}")
-
-        # Update session with modified structure and operations
-        logger.info(f" OPERATIONS: Updating session with final structure - Formula: {structure.formula}, Sites: {len(structure.sites)}")
-        session_manager.update_structure(session_id, structure, operations=operations)
-        logger.info(f"✅ OPERATIONS: Session updated successfully")
+            # Update session with modified structure and operations
+            logger.info(f" OPERATIONS: Updating session with final structure - Formula: {structure.formula}, Sites: {len(structure.sites)}")
+            session_manager.update_structure(session_id, structure, operations=operations)
+            logger.info(f"✅ OPERATIONS: Session updated successfully")
 
         logger.info(f"Applied {len(operations)} operations to session {session_id[:8]}...")
 
@@ -1609,7 +1667,7 @@ def analyze_cif_file_sync(file_path: Path) -> Dict:
             try:
                 from pymatgen.io.cif import CifParser
                 parser = CifParser(str(file_path))
-                structures = parser.get_structures(primitive=False)
+                structures = parser.parse_structures(primitive=False)
                 if structures:
                     structure = structures[0]
                     logger.info("Successfully parsed with CifParser")
@@ -1785,7 +1843,7 @@ def _load_and_build_supercell(crystal_data: dict, filename: str, a_mult: int, b_
             logger.info(f"✅ SUPERCELL: Found sample file, parsing...")
             try:
                 parser = CifParser(str(cif_path))
-                original_structure = parser.get_structures(primitive=False)[0]
+                original_structure = parser.parse_structures(primitive=False)[0]
                 logger.info(f"✅ SUPERCELL: Loaded structure from sample CIF - Formula: {original_structure.formula}, Sites: {len(original_structure.sites)}")
             except Exception as e:
                 logger.error(f"❌ SUPERCELL: Failed to parse sample file: {e}")
@@ -2005,6 +2063,46 @@ async def get_chgnet_elements():
         logger.error(f"Error getting CHGnet elements: {e}")
         raise HTTPException(status_code=500, detail="Failed to get supported elements")
 
+def _generate_modified_structure_cif_sync(session_id: Optional[str], filename: str,
+                                           supercell_size: List[int], operations: List[dict]
+                                           ) -> "Tuple[Structure, int, List[str], List[str], str]":
+    """
+    CPU-bound: resolve the base supercell, replay `operations` against it
+    (tolerant mode -- invalid operations are skipped, not fatal), apply CIF
+    element labels, and render CIF text. Call via asyncio.to_thread.
+    """
+    from pymatgen.io.cif import CifWriter
+
+    # Resolve the base supercell from the session when available (works
+    # for uploaded files too, since the parsed Structure already lives
+    # in memory), falling back to the sample directory by filename.
+    structure = load_base_supercell(session_id, filename, supercell_size)
+    logger.info(f"Base supercell: {structure.formula} ({len(structure.sites)} sites)")
+
+    # Apply atomic operations with partial success tolerance (for CIF
+    # generation), in the exact order the client recorded them.
+    operations_applied, skipped_operations, property_warnings = apply_operations_to_structure(
+        structure, operations, strict_mode=False
+    )
+
+    if skipped_operations:
+        logger.warning(f"Skipping {len(skipped_operations)} invalid operations during CIF generation: {skipped_operations}")
+
+    logger.info(f"Applied {operations_applied}/{len(operations)} operations successfully")
+    logger.info(f"Final structure: {structure.formula} ({len(structure.sites)} sites)")
+
+    # Generate CIF using pymatgen CifWriter
+    apply_element_labels_to_structure(structure)
+    cif_writer = CifWriter(
+        structure,
+        write_magmoms=False,
+        significant_figures=6
+    )
+
+    cif_content = str(cif_writer)
+    return structure, operations_applied, skipped_operations, property_warnings, cif_content
+
+
 @app.post("/api/generate-modified-structure-cif")
 async def generate_modified_structure_cif(request: dict):
     """
@@ -2026,35 +2124,9 @@ async def generate_modified_structure_cif(request: dict):
         logger.info(f"Supercell size: {supercell_size}")
         logger.info(f"Operations to apply: {len(operations)}")
 
-        from pymatgen.io.cif import CifWriter
-
-        # Resolve the base supercell from the session when available (works
-        # for uploaded files too, since the parsed Structure already lives
-        # in memory), falling back to the sample directory by filename.
-        structure = load_base_supercell(session_id, filename, supercell_size)
-        logger.info(f"Base supercell: {structure.formula} ({len(structure.sites)} sites)")
-
-        # Apply atomic operations with partial success tolerance (for CIF
-        # generation), in the exact order the client recorded them.
-        operations_applied, skipped_operations, property_warnings = apply_operations_to_structure(
-            structure, operations, strict_mode=False
+        structure, operations_applied, skipped_operations, property_warnings, cif_content = await asyncio.to_thread(
+            _generate_modified_structure_cif_sync, session_id, filename, supercell_size, operations
         )
-
-        if skipped_operations:
-            logger.warning(f"Skipping {len(skipped_operations)} invalid operations during CIF generation: {skipped_operations}")
-
-        logger.info(f"Applied {operations_applied}/{len(operations)} operations successfully")
-        logger.info(f"Final structure: {structure.formula} ({len(structure.sites)} sites)")
-
-        # Generate CIF using pymatgen CifWriter
-        apply_element_labels_to_structure(structure)
-        cif_writer = CifWriter(
-            structure,
-            write_magmoms=False,
-            significant_figures=6
-        )
-
-        cif_content = str(cif_writer)
 
         # Add metadata header
         operations_summary = f"{operations_applied}/{len(operations)} operations applied"
@@ -2129,7 +2201,7 @@ def _resolve_and_expand_supercell_direct(session_structure: Optional[Structure],
         if cif_path.exists():
             logger.debug(f"Reading CIF file: {cif_path}")
             parser = CifParser(str(cif_path))
-            structures = parser.get_structures(primitive=False)  # Keep original lattice - don't convert to primitive
+            structures = parser.parse_structures(primitive=False)  # Keep original lattice - don't convert to primitive
             if structures:
                 original_structure = structures[0]
                 logger.info(f"Loaded structure from sample CIF file: {filename}")
@@ -2564,6 +2636,40 @@ def safe_get_prediction(pred, num_atoms=None):
             continue
     return out
 
+def _load_structure_for_chgnet_predict(session_id: Optional[str], filename: str,
+                                        supercell_size: List[int], operations: List[dict]
+                                        ) -> "Tuple[Structure, int, List[str], List[str]]":
+    """
+    CPU-bound: resolve the base supercell (session or sample file), enforce
+    MAX_PREDICT_ATOMS, and replay `operations` against it (tolerant mode).
+    Call via asyncio.to_thread.
+
+    Raises HTTPException(400) if the base supercell exceeds
+    MAX_PREDICT_ATOMS -- propagates through asyncio.to_thread unchanged.
+    """
+    structure = load_base_supercell(session_id, filename, supercell_size)
+    logger.info(f"✅ CHGNET: Base supercell - Formula: {structure.formula}, Sites: {len(structure.sites)}")
+
+    if len(structure) > MAX_PREDICT_ATOMS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Structure has {len(structure)} atoms; the prediction limit is "
+                   f"{MAX_PREDICT_ATOMS}. Reduce the supercell size.")
+
+    # Apply operations for CHGNet prediction (skip invalid ones), in the
+    # exact order the client recorded them.
+    operations_applied, skipped_operations, property_warnings = apply_operations_to_structure(
+        structure, operations, strict_mode=False
+    )
+    if property_warnings:
+        logger.warning(f"Property loss during CHGNet prediction operations: {property_warnings}")
+
+    if skipped_operations:
+        logger.warning(f"Skipping {len(skipped_operations)} invalid operations for CHGNet prediction: {skipped_operations}")
+
+    return structure, operations_applied, skipped_operations, property_warnings
+
+
 @app.post("/api/chgnet-predict")
 async def chgnet_predict_structure(request: dict):
     """
@@ -2589,27 +2695,11 @@ async def chgnet_predict_structure(request: dict):
 
         logger.info(f"CHGNet prediction for {filename} with {len(operations)} operations")
 
-        # Resolve the base supercell from the session when available (works
-        # for uploaded files too), falling back to the sample directory.
-        structure = load_base_supercell(session_id, filename, supercell_size)
-        logger.info(f"✅ CHGNET: Base supercell - Formula: {structure.formula}, Sites: {len(structure.sites)}")
-
-        if len(structure) > MAX_PREDICT_ATOMS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Structure has {len(structure)} atoms; the prediction limit is "
-                       f"{MAX_PREDICT_ATOMS}. Reduce the supercell size.")
-
-        # Apply operations for CHGNet prediction (skip invalid ones), in the
-        # exact order the client recorded them.
-        operations_applied, skipped_operations, property_warnings = apply_operations_to_structure(
-            structure, operations, strict_mode=False
+        # Resolve the base supercell (session or sample file) and replay
+        # operations against it -- CPU-bound pymatgen work, offloaded.
+        structure, operations_applied, skipped_operations, property_warnings = await asyncio.to_thread(
+            _load_structure_for_chgnet_predict, session_id, filename, supercell_size, operations
         )
-        if property_warnings:
-            logger.warning(f"Property loss during CHGNet prediction operations: {property_warnings}")
-
-        if skipped_operations:
-            logger.warning(f"Skipping {len(skipped_operations)} invalid operations for CHGNet prediction: {skipped_operations}")
 
         # Load CHGNet model (using singleton pattern)
         try:
@@ -2998,6 +3088,16 @@ async def stream_relax_progress(session_id: str):
                              headers={"Cache-Control": "no-cache",
                                       "X-Accel-Buffering": "no"})
 
+def _reset_session_structure_sync(original_structure: Structure, supercell_size: List[int]) -> Structure:
+    """
+    CPU-bound: rebuild the supercell from `original_structure` at
+    `supercell_size`. Call via asyncio.to_thread.
+    """
+    reset_structure = original_structure.copy()
+    reset_structure.make_supercell(supercell_size)
+    return reset_structure
+
+
 @app.post("/api/reset-session-structure")
 async def reset_session_structure(request: dict):
     """
@@ -3017,21 +3117,34 @@ async def reset_session_structure(request: dict):
         original_structure = session_info['original_structure']
         supercell_size = session_info['supercell_size']
         filename = session_info.get('filename', 'unknown')
-        
+
         if original_structure is None:
             raise HTTPException(status_code=404, detail="No original structure found in session")
-        
+
         logger.info(f"Resetting session {session_id[:8]}... ({filename}) to original supercell state")
         logger.info(f"Supercell size: {supercell_size}")
-        
-        # Recreate supercell from original structure
-        reset_structure = original_structure.copy()
-        reset_structure.make_supercell(supercell_size)
-        
-        # Update session with reset structure and clear operations. This also
-        # discards any relaxed_structure/chgnet_result (update_structure
-        # always invalidates them), so no separate cleanup is needed here.
-        session_manager.update_structure(session_id, reset_structure, operations=[])
+
+        # Serialize concurrent requests against this same session (see
+        # _get_session_lock's docstring) before doing any of the heavy work.
+        session_lock = _get_session_lock(session_info)
+        async with session_lock:
+            # Recreate supercell from original structure
+            reset_structure = await asyncio.to_thread(
+                _reset_session_structure_sync, original_structure, supercell_size
+            )
+
+            # The session may have been replaced wholesale (a brand new dict
+            # for the same session_id) while the above ran; see the same
+            # check in apply_atomic_operations for why this is necessary.
+            if session_manager.sessions.get(session_id) is not session_info:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Session was modified concurrently; please retry")
+
+            # Update session with reset structure and clear operations. This also
+            # discards any relaxed_structure/chgnet_result (update_structure
+            # always invalidates them), so no separate cleanup is needed here.
+            session_manager.update_structure(session_id, reset_structure, operations=[])
 
         logger.info(f"Session {session_id[:8]}... reset successfully")
         logger.info(f"Reset structure: {reset_structure.composition} ({len(reset_structure)} sites)")
@@ -3067,6 +3180,22 @@ async def reset_session_structure(request: dict):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+def _label_and_write_relaxed_cif(structure: Structure) -> "Tuple[Structure, str]":
+    """
+    CPU-bound: apply CIF element labels to `structure` (mutates it in
+    place) and render CIF text. Call via asyncio.to_thread on a private
+    copy of the structure -- never on a session's shared Structure object.
+    """
+    from pymatgen.io.cif import CifWriter
+    apply_element_labels_to_structure(structure)
+    cif_writer = CifWriter(
+        structure,
+        write_magmoms=False,
+        significant_figures=6
+    )
+    return structure, str(cif_writer)
+
+
 @app.post("/api/generate-relaxed-structure-cif")
 async def generate_relaxed_structure_cif(request: dict):
     """
@@ -3097,13 +3226,18 @@ async def generate_relaxed_structure_cif(request: dict):
                 detail="No relaxed structure available for this session. Run CHGNet analysis first."
             )
         logger.info("Using relaxed structure from session")
-        
-        final_structure = relaxed_structure
-        
+
+        # Never label/write on the session's own stored Structure object:
+        # apply_element_labels_to_structure mutates in place, and running
+        # that mutation in a worker thread on the shared session object
+        # would race with any other request reading/writing it. Work on a
+        # private copy instead.
+        final_structure = relaxed_structure.copy()
+
         # Get operations and supercell info from session
         operations = session_info.get('operations', [])
         supercell_size = session_info.get('supercell_size', [1, 1, 1])
-        
+
         # Get CHGNet relaxation info from session
         chgnet_result = session_info.get('chgnet_result', {})
         fmax = chgnet_result.get('fmax', 'N/A')
@@ -3112,18 +3246,12 @@ async def generate_relaxed_structure_cif(request: dict):
         # Default to FIRE for CIFs from sessions relaxed before the
         # optimizer became selectable, so old sessions still read sensibly.
         optimizer_used = chgnet_result.get('optimizer', 'FIRE')
-        
-        # Generate CIF using pymatgen CifWriter
-        from pymatgen.io.cif import CifWriter
-        apply_element_labels_to_structure(final_structure)
-        cif_writer = CifWriter(
-            final_structure,
-            write_magmoms=False,
-            significant_figures=6
+
+        # Generate CIF using pymatgen CifWriter (CPU-bound -- offload)
+        final_structure, cif_content = await asyncio.to_thread(
+            _label_and_write_relaxed_cif, final_structure
         )
 
-        cif_content = str(cif_writer)
-        
         # Calculate structure properties once for metadata
         final_formula_str = str(final_structure.formula)
         final_num_atoms = len(final_structure.sites)
