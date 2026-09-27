@@ -1,7 +1,7 @@
 
 import sqlite3
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from contextlib import contextmanager
@@ -115,7 +115,7 @@ class AnalyticsDatabase:
         accumulated. Returns the total number of rows deleted.
         """
         try:
-            cutoff = (datetime.utcnow() - timedelta(days=retention_days)).strftime('%Y-%m-%d %H:%M:%S')
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).strftime('%Y-%m-%d %H:%M:%S')
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM access_logs WHERE timestamp < ?", (cutoff,))
@@ -139,7 +139,7 @@ class AnalyticsDatabase:
     def get_daily_access_counts(self, days=7):
         """Get daily access counts for the last N days."""
         try:
-            date_threshold = (datetime.utcnow() - timedelta(days=days)).strftime('%Y-%m-%d')
+            date_threshold = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%d')
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -212,7 +212,7 @@ class AnalyticsDatabase:
                     if row_dict["parameters"]:
                         try:
                             row_dict["parameters"] = json.loads(row_dict["parameters"])
-                        except:
+                        except Exception:
                             pass
                     results.append(row_dict)
                 return results

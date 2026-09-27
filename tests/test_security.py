@@ -117,6 +117,11 @@ def test_generate_relaxed_structure_cif_sanitizes_stored_filename(client):
     this path."""
     structure = Structure.from_file(Path("sample_cif") / "Metals" / "Cu.cif")
     session_id = main.session_manager.create_session(None, "evil\r\nX-Injected: 1.cif", structure)
+    # generate-relaxed-structure-cif now 404s without an actual
+    # relaxed_structure in the session (see B4 regression test in
+    # test_endpoints.py) -- set one directly rather than running a real
+    # CHGNet relaxation, since this test is only about filename sanitization.
+    main.session_manager.sessions[session_id]['relaxed_structure'] = structure
 
     response = client.post("/api/generate-relaxed-structure-cif", json={"session_id": session_id})
     assert response.status_code == 200
@@ -199,6 +204,14 @@ def test_validate_supercell_size_rejects_wrong_length():
 def test_validate_supercell_size_rejects_non_integer():
     with pytest.raises(ValueError):
         validate_supercell_size([1.5, 2, 2])
+
+
+def test_validate_supercell_size_rejects_bool_dimension():
+    """Regression (B10): bool is a subclass of int in Python, so
+    isinstance(True, int) is True -- without an explicit bool check, a
+    dimension of `True`/`False` silently passed through as 1/0."""
+    with pytest.raises(ValueError):
+        validate_supercell_size([True, 2, 2])
 
 
 # ---------------------------------------------------------------------------
@@ -527,6 +540,19 @@ def test_require_analytics_access_accepts_correct_query_token(monkeypatch):
     ))  # must not raise
 
 
+def test_require_analytics_access_rejects_non_ascii_token_without_crashing(monkeypatch):
+    """Regression (C1): secrets.compare_digest() raises TypeError if given
+    two `str` arguments where either contains non-ASCII characters. A
+    supplied token like this must be rejected with a plain 401, not an
+    unhandled 500."""
+    monkeypatch.setattr(main, "CRYSTALNEXUS_ANALYTICS_TOKEN", "s3cr3t")
+    with pytest.raises(HTTPException) as excinfo:
+        require_analytics_access(_fake_request(
+            client_host="203.0.113.5", headers={"x-analytics-token": "トークン"}
+        ))
+    assert excinfo.value.status_code == 401
+
+
 # End-to-end: the dependency actually wired onto the routes.
 # TestClient's synthetic client address ("testclient") is not loopback, so
 # hitting these with no token configured exercises the same rejection a
@@ -574,6 +600,41 @@ def test_analytics_api_accepts_header_token(client, monkeypatch):
     assert ok.status_code == 200
     denied = client.get("/api/analytics/summary")
     assert denied.status_code == 401
+
+
+def test_health_check_excluded_from_analytics_middleware(client):
+    """Regression (C2): /health polling must not inflate access-count
+    analytics (analytics_middleware previously logged every request except
+    /static, including health-check polling)."""
+    client.get("/health")
+    with main.analytics_db._get_connection() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM access_logs WHERE path = ?", ("/health",)
+        ).fetchone()[0]
+    assert count == 0
+
+
+def test_analytics_pages_excluded_from_analytics_middleware(client):
+    """Regression (C2): viewing the analytics dashboard/API must not
+    inflate the very access-count analytics that dashboard reports on."""
+    client.get("/analytics")
+    client.get("/api/analytics/summary")
+    with main.analytics_db._get_connection() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM access_logs WHERE path LIKE '/analytics%' "
+            "OR path LIKE '/api/analytics%'"
+        ).fetchone()[0]
+    assert count == 0
+
+
+def test_analytics_dashboard_page_renders_with_valid_token(client, monkeypatch):
+    """Regression (C7): templates.TemplateResponse(request, name) -- the
+    non-deprecated argument order -- must actually render the page (a
+    wrong argument order raises TypeError, surfacing as a 500)."""
+    monkeypatch.setattr(main, "CRYSTALNEXUS_ANALYTICS_TOKEN", "test-token-123")
+    response = client.get("/analytics?token=test-token-123")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
 
 
 def test_analytics_js_forwards_token():
@@ -726,7 +787,12 @@ def test_create_supercell_500_does_not_leak_internal_exception_details(client, m
     def _boom(*args, **kwargs):
         raise RuntimeError(r"leak: C:\Users\toshi\python\CrystalNexus\uploads\secret.cif")
 
-    monkeypatch.setattr(main, "calculate_supercell_formula", _boom)
+    # session_manager.create_session() runs after _load_and_build_supercell
+    # has already succeeded, so an unexpected failure here is a genuine
+    # server-side fault (unlike a bad/missing structure_data or unknown
+    # sample file, which are now client errors -- see B7) and must still
+    # hit the endpoint's generic 500 handler without leaking details.
+    monkeypatch.setattr(main.session_manager, "create_session", _boom)
 
     analyze_response = client.post("/api/analyze-cif-sample", json={"filename": "Metals/Cu.cif"})
     crystal_data = analyze_response.json()

@@ -28,8 +28,22 @@ def test_import_does_not_relaunch_or_hang():
     module loaded cleanly and exposes a sane default HOST."""
     assert sx.HOST  # some default value was computed at import time
     assert isinstance(sx.HOST, str)
-    assert sx.PORT == 8090
     assert isinstance(sx.PORT, int)
+
+
+def test_default_port_is_8090(monkeypatch):
+    """PORT defaults to 8090 when CRYSTALNEXUS_PORT is unset, independent
+    of whatever the developer's shell happens to have set (regression:
+    the module reads the env var once at import time, so a stray
+    CRYSTALNEXUS_PORT left over from a previous run silently changed what
+    this assertion saw)."""
+    import importlib
+    monkeypatch.delenv("CRYSTALNEXUS_PORT", raising=False)
+    importlib.reload(sx)
+    try:
+        assert sx.PORT == 8090
+    finally:
+        importlib.reload(sx)  # restore module state for tests that follow
 
 
 # ---------------------------------------------------------------------------

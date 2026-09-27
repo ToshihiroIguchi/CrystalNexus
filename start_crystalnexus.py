@@ -46,8 +46,18 @@ def _relaunch_in_venv():
         return
 
     print(f"Activating local virtual environment: {venv_python}")
+    script_path = str(Path(__file__).resolve())
     try:
-        os.execv(str(venv_python), [str(venv_python), str(Path(__file__).resolve()), *sys.argv[1:]])
+        if platform.system() == "Windows":
+            # os.execv doesn't replace the process on Windows the way it does
+            # on POSIX: the parent returns/exits immediately while the child
+            # (venv re-launch) keeps running in the background, and argument
+            # quoting is unreliable for args containing spaces. Run the venv
+            # interpreter as a child process instead and propagate its exit
+            # code; subprocess.call() takes care of proper argv quoting.
+            sys.exit(subprocess.call([str(venv_python), script_path, *sys.argv[1:]]))
+        else:
+            os.execv(str(venv_python), [str(venv_python), script_path, *sys.argv[1:]])
     except Exception as e:
         print(f"Warning: failed to relaunch inside venv ({e}); continuing with current interpreter.")
 
@@ -309,9 +319,13 @@ def stop_existing_server():
                     continue
                 print(f"Found existing server process (PID: {pid})")
                 print("Stopping existing server...")
-                # Use PowerShell to kill process (more reliable than taskkill)
+                # Use taskkill with /T (kill the whole process tree) instead of
+                # Stop-Process, which only kills the PID it's given: for a
+                # uvicorn --reload server, that PID is the reloader, and its
+                # actual worker process (still bound to the port) would
+                # otherwise survive.
                 kill_result = subprocess.run([
-                    'powershell', '-Command', f'Stop-Process -Id {pid} -Force'
+                    'taskkill', '/PID', pid, '/T', '/F'
                 ], capture_output=True, text=True)
 
                 if kill_result.returncode == 0:
@@ -415,19 +429,23 @@ def start_backend():
 
         for i in range(MAX_STARTUP_WAIT):
             time.sleep(1)
-            if check_backend_status():
-                print(f"OK Backend started successfully!")
-                print(f"OK CrystalNexus is now available at http://localhost:{PORT}")
-                return process
 
-            # Check if process is still running
+            # Check the process is still alive *before* the health-check probe:
+            # if it already exited, the port may still be occupied by a
+            # leftover old server, and check_backend_status() below would then
+            # spuriously report success for a process that's actually dead.
             if process.poll() is not None:
                 print("ERROR Backend failed to start!")
                 print("Process terminated unexpectedly during startup")
                 output_thread.join(timeout=2)
                 _print_captured_output(output_tail)
                 return None
-                
+
+            if check_backend_status():
+                print(f"OK Backend started successfully!")
+                print(f"OK CrystalNexus is now available at http://localhost:{PORT}")
+                return process
+
         print("ERROR Backend startup timeout!")
         process.terminate()
         output_thread.join(timeout=2)

@@ -196,6 +196,45 @@ def test_upload_cif_roundtrip_through_substitution(client, sample_cif_dir):
                 leftover.unlink(missing_ok=True)
 
 
+def test_analyze_cif_upload_never_persists_into_uploads_dir(client, sample_cif_dir):
+    """Regression (B1): the endpoint must not write the uploaded file into
+    uploads/ at all -- nothing reads it back later (the app works entirely
+    off structure_data/session state), so parsing happens against a private
+    temp file that is always removed afterward."""
+    cif_bytes = (sample_cif_dir / "Metals" / "Cu.cif").read_bytes()
+
+    uploads_dir = Path("uploads")
+    before = set(uploads_dir.glob("*")) if uploads_dir.exists() else set()
+
+    response = client.post(
+        "/api/analyze-cif-upload",
+        files={"file": ("Cu.cif", cif_bytes, "chemical/x-cif")},
+    )
+    assert response.status_code == 200
+
+    after = set(uploads_dir.glob("*")) if uploads_dir.exists() else set()
+    assert after == before  # no new file left behind in uploads/
+
+
+def test_analyze_cif_upload_rejects_oversized_content_length_header(client, monkeypatch, sample_cif_dir):
+    """Regression (B1): the request's real Content-Length must be checked
+    against MAX_FILE_SIZE and rejected (413) up front, before the body is
+    read in chunks. Lower MAX_FILE_SIZE below the actual (genuine)
+    multipart body size instead of spoofing the header -- TestClient/httpx
+    computes Content-Length itself from the real encoded body, so this
+    exercises the same early-rejection branch a real oversized upload
+    would hit."""
+    import main
+    monkeypatch.setattr(main, "MAX_FILE_SIZE", 10)
+
+    cif_bytes = (sample_cif_dir / "Metals" / "Cu.cif").read_bytes()
+    response = client.post(
+        "/api/analyze-cif-upload",
+        files={"file": ("Cu.cif", cif_bytes, "chemical/x-cif")},
+    )
+    assert response.status_code == 413
+
+
 # ---------------------------------------------------------------------------
 # apply_operations_to_structure (atomic operation replay order)
 # ---------------------------------------------------------------------------
@@ -425,6 +464,120 @@ def test_apply_atomic_operations_rejects_non_finite_insert_coords(client):
     assert response.status_code == 400
 
 
+def test_apply_atomic_operations_rejects_too_many_operations(client):
+    """Regression (B2): a request with more than MAX_OPERATIONS_PER_REQUEST
+    operations must be rejected (400) before any of them are applied."""
+    import main
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    operations = [{"action": "delete", "index": 0}] * (main.MAX_OPERATIONS_PER_REQUEST + 1)
+    response = client.post("/api/apply-atomic-operations", json={
+        "session_id": session_id,
+        "operations": operations,
+    })
+    assert response.status_code == 400
+
+
+def test_apply_atomic_operations_rechecks_max_total_sites_after_inserts(client, monkeypatch):
+    """Regression (B2): the resulting structure must be re-checked against
+    MAX_TOTAL_SITES after all operations are applied -- supercell creation
+    only enforces the cap against its own scaling factor, so a run of
+    'insert' operations can independently push the structure past it."""
+    import main
+    monkeypatch.setattr(main, "MAX_TOTAL_SITES", 5)
+
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    operations = [
+        {"action": "insert", "to": "Li", "coords": [0.05 * i, 0.05 * i, 0.05 * i]}
+        for i in range(10)
+    ]
+    response = client.post("/api/apply-atomic-operations", json={
+        "session_id": session_id,
+        "operations": operations,
+    })
+    assert response.status_code == 400
+
+
+def test_apply_atomic_operations_rejects_deleting_all_atoms(client):
+    """Regression (B5): deleting every atom in the structure must be
+    rejected (400) instead of leaving a 0-site structure, which crashes
+    downstream endpoints (CHGNet prediction, CIF generation, etc.)."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    num_sites = crystal_data["num_atoms"]
+    operations = [{"action": "delete", "index": 0} for _ in range(num_sites)]
+    response = client.post("/api/apply-atomic-operations", json={
+        "session_id": session_id,
+        "operations": operations,
+    })
+    assert response.status_code == 400
+    assert "at least one atom" in response.json()["detail"].lower()
+
+
+def test_apply_atomic_operations_strips_whitespace_from_element(client):
+    """Regression (B6): validate_element()'s stripped return value must
+    actually be used when the operation is applied, not discarded --
+    otherwise a padded symbol like " Fe " reaches pymatgen's Element()
+    unstripped and raises an unhandled ValueError (500)."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    response = client.post("/api/apply-atomic-operations", json={
+        "session_id": session_id,
+        "operations": [{"action": "substitute", "index": 0, "to": " Fe "}],
+    })
+    assert response.status_code == 200
+    assert "Fe" in response.json()["composition"]
+
+
+def test_apply_atomic_operations_rejects_non_list_operations(client):
+    """Regression (B10): operations must be validated as a list up front;
+    a non-list value there would otherwise reach len()/enumerate() deeper
+    in the call stack and raise a confusing, possibly 500-level error."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    response = client.post("/api/apply-atomic-operations", json={
+        "session_id": session_id,
+        "operations": "not-a-list",
+    })
+    assert response.status_code == 400
+
+
+def test_apply_atomic_operations_rejects_non_string_session_id(client):
+    """Regression (B10): a non-string session_id (e.g. a list) must be
+    rejected before it reaches a dict-key lookup or session_id[:8]
+    slicing -- either of which can raise for an unhashable/non-sliceable
+    type, surfacing as an unhandled 500."""
+    response = client.post("/api/apply-atomic-operations", json={
+        "session_id": ["not", "a", "string"],
+        "operations": [],
+    })
+    assert response.status_code == 400
+
+
+def test_chgnet_predict_rejects_unknown_session_id_instead_of_sample_fallback(client):
+    """Regression (B9): an explicit but expired/unknown session_id must not
+    silently fall back to loading a sample file by filename and applying
+    this request's operations to an unrelated structure -- it must 404."""
+    response = client.post("/api/chgnet-predict", json={
+        "session_id": str(uuid.uuid4()),
+        "filename": "Metals/Cu.cif",
+        "operations": [],
+        "supercell_size": [1, 1, 1],
+    })
+    assert response.status_code == 404
+
+
 def test_update_structure_clears_relaxed_structure():
     """Regression (data-integrity bug): applying atomic operations must
     invalidate any previously relaxed structure, otherwise
@@ -470,6 +623,23 @@ def test_cleanup_old_sessions_uses_last_accessed_not_created_at():
     session_data['last_accessed'] = now - 10 * 3600  # now also stale
     session_manager.cleanup_old_sessions(max_age_hours=1)
     assert session_id not in session_manager.sessions  # now cleaned up
+
+
+def test_generate_relaxed_structure_cif_404s_without_relaxation(client):
+    """Regression (B4): with no relaxed_structure in the session (CHGNet
+    analysis never ran), this must 404 with a clear message instead of
+    silently falling back to the unrelaxed current structure -- a client
+    downloading "the relaxed structure" must never receive one that was
+    never actually relaxed."""
+    from main import session_manager
+
+    session_id = str(uuid.uuid4())
+    structure = Structure.from_file(Path("sample_cif") / "Metals" / "Cu.cif")
+    session_id = session_manager.create_session(session_id, "Cu.cif", structure)
+
+    response = client.post("/api/generate-relaxed-structure-cif", json={"session_id": session_id})
+    assert response.status_code == 404
+    assert "relaxed structure" in response.json()["detail"].lower()
 
 
 def test_reset_session_structure_formula_shape(client):
@@ -644,6 +814,99 @@ def test_create_supercell_rejects_empty_formula(client):
     assert response.status_code == 400
 
 
+def test_create_supercell_rejects_non_dict_crystal_data(client):
+    """Regression (B7a): crystal_data must be validated as an object before
+    any .get() call is made on it -- a truthy non-dict value (e.g. a list)
+    would otherwise raise an unhandled AttributeError (500)."""
+    response = client.post("/api/create-supercell", json={
+        "crystal_data": ["not", "a", "dict"],
+        "supercell_size": [1, 1, 1],
+        "session_id": str(uuid.uuid4()),
+    })
+    assert response.status_code == 400
+
+
+def test_create_supercell_unknown_sample_filename_returns_404_not_500(client):
+    """Regression (B7b): an unknown sample filename (no structure_data, no
+    matching file in sample_cif/) must be a 404, not an unhandled 500."""
+    crystal_data = _analyze_sample(client, "Metals/Cu.cif")
+    crystal_data.pop("structure_data", None)
+    crystal_data["filename"] = "Metals/DoesNotExist.cif"
+
+    response = client.post("/api/create-supercell", json={
+        "crystal_data": crystal_data,
+        "supercell_size": [1, 1, 1],
+        "session_id": str(uuid.uuid4()),
+    })
+    assert response.status_code == 404
+
+
+def test_create_supercell_rejects_non_string_filename(client):
+    """Regression (B7c): crystal_data.filename must be a string -- a
+    non-string value (e.g. a number) must 400 instead of reaching
+    safe_path()/path-building helpers and raising TypeError (500)."""
+    crystal_data = _analyze_sample(client, "Metals/Cu.cif")
+    crystal_data.pop("structure_data", None)
+    crystal_data["filename"] = 12345
+
+    response = client.post("/api/create-supercell", json={
+        "crystal_data": crystal_data,
+        "supercell_size": [1, 1, 1],
+        "session_id": str(uuid.uuid4()),
+    })
+    assert response.status_code == 400
+
+
+def test_create_supercell_invalid_structure_data_returns_400_not_500(client):
+    """Regression (B7d): a structure_data payload that fails to parse must
+    be a 400 (bad client input), and the response must never report
+    "supercell_created" success with session_id: null. filename is set to
+    the special "unknown.cif" sentinel so the sample-file fallback (Method
+    2) is skipped and only the broken structure_data path is exercised."""
+    crystal_data = _analyze_sample(client, "Metals/Cu.cif")
+    crystal_data["filename"] = "unknown.cif"
+    crystal_data["structure_data"] = {"lattice": {"matrix": "not-a-matrix"}, "sites": []}
+
+    response = client.post("/api/create-supercell", json={
+        "crystal_data": crystal_data,
+        "supercell_size": [1, 1, 1],
+        "session_id": str(uuid.uuid4()),
+    })
+    assert response.status_code == 400
+    body = response.json()
+    assert body.get("status") != "supercell_created"
+
+
+def test_create_supercell_rejects_disordered_structure_data(client):
+    """Regression (B3): a structure_data payload with a disordered
+    (partial-occupancy) site must be rejected with 400 via
+    validate_occupancy(), not reach make_supercell()/CHGNet later and fail
+    there with an unhandled 500."""
+    from pymatgen.core import Lattice, Structure as PmgStructure
+
+    lattice = Lattice.cubic(4.0)
+    structure = PmgStructure(
+        lattice,
+        [{"Ba": 0.5, "Sr": 0.5}, "Ti", "O", "O", "O"],
+        [[0, 0, 0], [0.5, 0.5, 0.5], [0.5, 0.5, 0], [0.5, 0, 0.5], [0, 0.5, 0.5]],
+    )
+
+    crystal_data = {
+        "volume": float(structure.volume),
+        "num_sites": len(structure),
+        "formula": str(structure.formula),
+        "filename": "unknown.cif",
+        "structure_data": structure.as_dict(),
+    }
+
+    response = client.post("/api/create-supercell", json={
+        "crystal_data": crystal_data,
+        "supercell_size": [1, 1, 1],
+        "session_id": str(uuid.uuid4()),
+    })
+    assert response.status_code == 400
+
+
 def test_analyze_cif_file_sync_fallback_keeps_conventional_cell(monkeypatch, sample_cif_dir):
     """Regression (B6), second call site: analyze_cif_file_sync's Method 2
     CifParser fallback (used only when Structure.from_file itself fails)
@@ -769,6 +1032,23 @@ def test_get_insertion_voids_unknown_session_id(client):
     assert response.status_code == 404
 
 
+def test_get_insertion_voids_rejects_oversized_structure(client, monkeypatch):
+    """Regression (B2): the structure's site count must be checked against
+    MAX_PREDICT_ATOMS before the (expensive) Voronoi void search runs."""
+    import main
+    monkeypatch.setattr(main, "MAX_PREDICT_ATOMS", 1)
+
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
+
+    response = client.post("/api/get-insertion-voids", json={
+        "session_id": session_id,
+        "element": "Li",
+    })
+    assert response.status_code == 400
+
+
 @pytest.mark.slow
 def test_get_insertion_voids_cache_busts_after_reset(client):
     """Regression (B4): the void cache key was only operation COUNT, not
@@ -881,6 +1161,24 @@ def test_evaluate_insertion_energies_unknown_session_id(client):
     assert response.status_code == 404
 
 
+def test_evaluate_insertion_energies_rejects_oversized_structure(client, monkeypatch):
+    """Regression (B2): the current structure's site count must be checked
+    against MAX_PREDICT_ATOMS before the (expensive) batched CHGNet call."""
+    import main
+    monkeypatch.setattr(main, "MAX_PREDICT_ATOMS", 1)
+
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
+
+    response = client.post("/api/evaluate-insertion-energies", json={
+        "session_id": session_id,
+        "element": "Li",
+        "sites": [{"id": 0, "frac_coords": [0.5, 0.5, 0.5]}],
+    })
+    assert response.status_code == 400
+
+
 def test_evaluate_insertion_energies_exceeds_max_batch(client):
     session_id = str(uuid.uuid4())
     crystal_data = _analyze_sample(client)
@@ -892,6 +1190,24 @@ def test_evaluate_insertion_energies_exceeds_max_batch(client):
         "session_id": session_id,
         "element": "Li",
         "sites": too_many_sites,
+    })
+    assert response.status_code == 400
+
+
+def test_evaluate_insertion_energy_rejects_oversized_structure(client, monkeypatch):
+    """Regression (B2): the current structure's site count must be checked
+    against MAX_PREDICT_ATOMS before the (expensive) CHGNet call."""
+    import main
+    monkeypatch.setattr(main, "MAX_PREDICT_ATOMS", 1)
+
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
+
+    response = client.post("/api/evaluate-insertion-energy", json={
+        "session_id": session_id,
+        "element": "Li",
+        "frac_coords": [0.5, 0.5, 0.5],
     })
     assert response.status_code == 400
 
@@ -981,6 +1297,23 @@ def test_evaluate_candidate_energies_unknown_session_id(client):
         "candidates": [{"id": 0, "action": "delete", "index": 0}],
     })
     assert response.status_code == 404
+
+
+def test_evaluate_candidate_energies_rejects_oversized_structure(client, monkeypatch):
+    """Regression (B2): the current structure's site count must be checked
+    against MAX_PREDICT_ATOMS before the (expensive) batched CHGNet call."""
+    import main
+    monkeypatch.setattr(main, "MAX_PREDICT_ATOMS", 1)
+
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(2, 2, 2))
+
+    response = client.post("/api/evaluate-candidate-energies", json={
+        "session_id": session_id,
+        "candidates": [{"id": 0, "action": "delete", "index": 0}],
+    })
+    assert response.status_code == 400
 
 
 def test_evaluate_candidate_energies_exceeds_max_batch(client):

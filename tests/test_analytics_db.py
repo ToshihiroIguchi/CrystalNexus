@@ -3,6 +3,7 @@
 Each test uses its own throwaway sqlite file (not the shared production
 analytics.db) via AnalyticsDatabase(db_path=...).
 """
+import os
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -103,6 +104,30 @@ def test_get_daily_access_counts_uses_utc_threshold(db):
     counts = db.get_daily_access_counts(days=1)
     total = sum(row["count"] for row in counts)
     assert total == 1
+
+
+# ---------------------------------------------------------------------------
+# Test isolation -- regression test for C4 (running pytest must never write
+# into the real analytics.db in the repo root; conftest.py's autouse
+# _isolated_analytics_db fixture redirects main.analytics_db to a per-test
+# temp file for the duration of the test).
+# ---------------------------------------------------------------------------
+
+def test_main_analytics_db_is_redirected_away_from_the_real_file(client):
+    import main
+    from analytics_db import DB_FILE
+
+    assert main.analytics_db.db_path != DB_FILE
+
+    real_db_exists_before = os.path.exists(DB_FILE)
+    real_db_mtime_before = os.path.getmtime(DB_FILE) if real_db_exists_before else None
+
+    client.get("/api/sample-cif-files")  # any request that goes through analytics_middleware
+
+    real_db_exists_after = os.path.exists(DB_FILE)
+    real_db_mtime_after = os.path.getmtime(DB_FILE) if real_db_exists_after else None
+    assert real_db_exists_after == real_db_exists_before
+    assert real_db_mtime_after == real_db_mtime_before
 
 
 def test_purge_old_data_uses_utc_cutoff(db):

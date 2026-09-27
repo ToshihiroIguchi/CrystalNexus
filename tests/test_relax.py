@@ -147,6 +147,60 @@ def test_evaluate_convergence_no_trajectory():
 
 
 # ---------------------------------------------------------------------------
+# _sanitize_json_value -- regression test for B8 (a CHGNet numerical blow-up
+# can produce NaN/Infinity energies or forces, which json.dumps() emits as
+# bare, invalid-JSON literals, breaking the response and the SSE progress
+# stream's JSON.parse() on the client)
+# ---------------------------------------------------------------------------
+
+def test_sanitize_json_value_replaces_non_finite_floats():
+    from main import _sanitize_json_value
+
+    assert _sanitize_json_value(float("nan")) is None
+    assert _sanitize_json_value(float("inf")) is None
+    assert _sanitize_json_value(float("-inf")) is None
+    assert _sanitize_json_value(1.5) == 1.5
+
+
+def test_sanitize_json_value_recurses_through_nested_structures():
+    from main import _sanitize_json_value
+
+    payload = {
+        "energy_eV": float("nan"),
+        "nested": {"max_force_eV_per_A": float("inf")},
+        "list_of_values": [1.0, float("-inf"), {"a": float("nan")}],
+        "unaffected": "text",
+    }
+    sanitized = _sanitize_json_value(payload)
+
+    assert sanitized["energy_eV"] is None
+    assert sanitized["nested"]["max_force_eV_per_A"] is None
+    assert sanitized["list_of_values"] == [1.0, None, {"a": None}]
+    assert sanitized["unaffected"] == "text"
+
+
+def test_relaxation_watcher_sanitizes_progress_slot():
+    """RelaxationWatcher must sanitize the state dict it publishes -- a
+    diverging relaxation can produce a non-finite potential energy, which
+    would otherwise reach the SSE stream as a bare `NaN` literal."""
+    from main import RelaxationWatcher
+
+    class _FakeAtoms:
+        def get_forces(self):
+            return np.array([[0.01, 0.0, 0.0]])
+
+        def get_potential_energy(self):
+            return float("nan")
+
+    progress_slot = {}
+    watcher = RelaxationWatcher(_FakeAtoms(), fmax=0.1, max_steps=10,
+                                 deadline=time.monotonic() + 100, progress_slot=progress_slot)
+    watcher()
+
+    assert progress_slot["state"]["energy_eV"] is None
+
+
+# ---------------------------------------------------------------------------
 # Slow tests: real CHGNet load + relaxation
 # ---------------------------------------------------------------------------
 
