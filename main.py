@@ -851,7 +851,8 @@ class SessionManager:
     def __init__(self):
         self.sessions: Dict[str, Dict] = {}
         
-    def create_session(self, session_id: Optional[str], filename: str, original_structure: Structure) -> str:
+    def create_session(self, session_id: Optional[str], filename: str, original_structure: Structure,
+                        owner_ip: Optional[str] = None) -> str:
         """
         Create (or replace) a session and return the id it was stored
         under.
@@ -869,6 +870,7 @@ class SessionManager:
         is_new_session = not session_id or session_id not in self.sessions
         if is_new_session:
             session_id = secrets.token_urlsafe(32)
+            self._evict_lru_for_ip_if_at_capacity(owner_ip)
             self._evict_lru_if_at_capacity()
         self.sessions[session_id] = {
             'filename': filename,
@@ -878,10 +880,34 @@ class SessionManager:
             'operations': [],
             'supercell_size': [1, 1, 1],
             'created_at': time.time(),
-            'last_accessed': time.time()
+            'last_accessed': time.time(),
+            'owner_ip': owner_ip,
         }
         logger.info(f"Created session {session_id[:8]}... for {filename}")
         return session_id
+
+    def _evict_lru_for_ip_if_at_capacity(self, owner_ip: Optional[str]) -> None:
+        """
+        Evict this IP's own least-recently-accessed session if it already
+        holds MAX_SESSIONS_PER_IP sessions, before minting a new one.
+
+        Runs before the global _evict_lru_if_at_capacity check: caps how
+        much of the shared MAX_SESSIONS pool a single IP can claim, so a
+        caller minting sessions as fast as rate_limit_middleware allows can
+        only ever evict its own sessions, never another client's. An
+        unknown/missing owner_ip (e.g. request.client is None) is not
+        tracked against any cap.
+        """
+        if owner_ip is None:
+            return
+        own_ids = [sid for sid, s in self.sessions.items() if s.get('owner_ip') == owner_ip]
+        while len(own_ids) >= MAX_SESSIONS_PER_IP:
+            oldest_id = min(own_ids, key=lambda sid: self.sessions[sid].get('last_accessed', 0))
+            del self.sessions[oldest_id]
+            own_ids.remove(oldest_id)
+            logger.warning(
+                f"Per-IP session limit ({MAX_SESSIONS_PER_IP}) reached; evicted "
+                f"that client's least-recently-accessed session {oldest_id[:8]}...")
 
     def _evict_lru_if_at_capacity(self) -> None:
         """
@@ -1013,6 +1039,13 @@ MAX_TOTAL_SITES = int(os.getenv('MAX_TOTAL_SITES', '20000'))
 # calls could exhaust memory long before either ever runs. See
 # SessionManager.create_session's least-recently-accessed eviction.
 MAX_SESSIONS = int(os.getenv('MAX_SESSIONS', '100'))
+
+# Upper bound on concurrently-held sessions from a single client IP.
+# MAX_SESSIONS alone does not stop one IP from claiming most of that
+# shared pool by calling /api/create-supercell repeatedly (the existing
+# rate_limit_middleware only limits request *frequency*, not how many
+# sessions a caller can hold at once) -- see SessionManager.create_session.
+MAX_SESSIONS_PER_IP = int(os.getenv('MAX_SESSIONS_PER_IP', '10'))
 
 # Upper bound on the number of atomic operations accepted in a single
 # /api/apply-atomic-operations request, so a pathologically long
@@ -1882,8 +1915,9 @@ def _load_and_build_supercell(crystal_data: dict, filename: str, a_mult: int, b_
     return original_structure, supercell_structure
 
 @app.post("/api/create-supercell")
-async def create_supercell(data: dict):
+async def create_supercell(request: Request, data: dict):
     try:
+        client_host = request.client.host if request.client else None
         crystal_data = data.get("crystal_data")
 
         # Must be checked before any .get() call on crystal_data below: a
@@ -1961,7 +1995,8 @@ async def create_supercell(data: dict):
         # Create or update session with structures. server_session_id is
         # the id actually stored under (see create_session's docstring);
         # it may differ from the request's session_id.
-        server_session_id = session_manager.create_session(session_id, filename, original_structure)
+        server_session_id = session_manager.create_session(session_id, filename, original_structure,
+                                                             owner_ip=client_host)
         session_manager.update_structure(server_session_id, supercell_structure,
                                        operations=[], supercell_size=supercell_size)
 
