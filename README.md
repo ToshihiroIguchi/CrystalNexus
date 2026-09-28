@@ -142,7 +142,7 @@ This binds `0.0.0.0` and:
 **Security implications of LAN mode** — this is a genuinely unauthenticated app, so only expose it on a network you trust:
 *   There is no authentication on `/` or on any `/api/*` endpoint; anyone who can reach the machine on that port can use the full application.
 *   Any LAN device can upload CIF files and trigger CHGNet relaxations, consuming this machine's CPU and RAM. `POST /api/*` requests are rate-limited per client IP (60 requests/min, burst 20), but this only throttles abuse, it doesn't prevent it.
-*   Sessions are shared globally across all clients (`MAX_SESSIONS=100`, least-recently-used eviction), so concurrent LAN users can evict each other's in-progress work.
+*   Sessions are shared globally across all clients (`MAX_SESSIONS=100`, least-recently-used eviction). Each client IP is further capped at `MAX_SESSIONS_PER_IP=10` concurrent sessions of its own, so one device can no longer evict *other* LAN users' sessions just by opening enough tabs -- but multiple browser tabs/devices sharing the same IP (e.g. behind the same NAT) still compete for that one IP's 10-session budget.
 *   Every visitor's IP address and User-Agent is logged to `analytics.db`, retained for `ANALYTICS_RETENTION_DAYS` (default 90) days.
 
 **Windows Firewall**: the check the script performs is read-only — it never modifies firewall state itself. If no inbound allow rule is found for the port, it prints the exact command to add one, which you run yourself in an **elevated** PowerShell or Command Prompt:

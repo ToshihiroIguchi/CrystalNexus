@@ -480,6 +480,26 @@ def test_session_ids_are_high_entropy(client):
     assert len(session_id) >= 32
 
 
+def test_create_supercell_records_client_ip_as_session_owner(client):
+    """The per-IP session cap (MAX_SESSIONS_PER_IP) only works if
+    /api/create-supercell actually records the caller's address on the
+    session it mints -- see SessionManager.create_session's owner_ip
+    parameter. TestClient's synthetic client address is "testclient" (see
+    conftest.py's rate-limit fixture)."""
+    analyze_response = client.post("/api/analyze-cif-sample", json={"filename": "Metals/Cu.cif"})
+    crystal_data = analyze_response.json()
+
+    response = client.post("/api/create-supercell", json={
+        "crystal_data": crystal_data,
+        "supercell_size": [1, 1, 1],
+        "session_id": None,
+    })
+    assert response.status_code == 200
+    session_id = response.json()["session_id"]
+
+    assert main.session_manager.sessions[session_id]["owner_ip"] == "testclient"
+
+
 # ---------------------------------------------------------------------------
 # require_analytics_access -- regression test for S-3
 #
@@ -705,6 +725,87 @@ def test_session_manager_updating_existing_session_never_evicts(monkeypatch):
 
     # Re-using an existing id must not evict anything, even at capacity.
     returned = manager.create_session(id_a, "Ni.cif", structure)
+    assert returned == id_a
+    assert manager.get_session_count() == 2
+    assert id_b in manager.sessions
+
+
+def test_session_manager_evicts_least_recently_accessed_within_same_ip(monkeypatch):
+    """MAX_SESSIONS_PER_IP caps how much of the shared MAX_SESSIONS pool a
+    single IP can claim: filling that per-IP cap must evict only that IP's
+    own least-recently-accessed session, not run the global eviction."""
+    monkeypatch.setattr(main, "MAX_SESSIONS", 100)
+    monkeypatch.setattr(main, "MAX_SESSIONS_PER_IP", 3)
+    manager = SessionManager()
+    structure = Structure.from_file(Path("sample_cif") / "Metals" / "Cu.cif")
+
+    ids = [manager.create_session(None, "Cu.cif", structure, owner_ip="1.2.3.4") for _ in range(3)]
+
+    # Force a deterministic recency order instead of relying on wall-clock
+    # resolution between calls: ids[0] is least-recently-accessed.
+    for i, sid in enumerate(ids):
+        manager.sessions[sid]['last_accessed'] = i
+
+    new_id = manager.create_session(None, "Cu.cif", structure, owner_ip="1.2.3.4")
+
+    own_ids = [sid for sid, s in manager.sessions.items() if s['owner_ip'] == "1.2.3.4"]
+    assert len(own_ids) == 3
+    assert ids[0] not in manager.sessions  # evicted
+    assert ids[1] in manager.sessions
+    assert ids[2] in manager.sessions
+    assert new_id in manager.sessions
+
+
+def test_session_manager_per_ip_limit_does_not_affect_other_ips(monkeypatch):
+    """One IP filling its own per-IP cap must never evict another IP's
+    sessions -- the whole point of tracking owner_ip separately from the
+    existing global MAX_SESSIONS eviction."""
+    monkeypatch.setattr(main, "MAX_SESSIONS", 100)
+    monkeypatch.setattr(main, "MAX_SESSIONS_PER_IP", 2)
+    manager = SessionManager()
+    structure = Structure.from_file(Path("sample_cif") / "Metals" / "Cu.cif")
+
+    own_ids = [manager.create_session(None, "Cu.cif", structure, owner_ip="1.1.1.1") for _ in range(2)]
+    assert manager.get_session_count() == 2
+
+    other_id = manager.create_session(None, "Cu.cif", structure, owner_ip="2.2.2.2")
+
+    assert other_id in manager.sessions
+    assert manager.sessions[other_id]['owner_ip'] == "2.2.2.2"
+    # "1.1.1.1"'s sessions must be completely untouched.
+    assert set(own_ids) == {sid for sid, s in manager.sessions.items() if s['owner_ip'] == "1.1.1.1"}
+    assert manager.get_session_count() == 3
+
+
+def test_session_manager_owner_ip_none_is_not_capped(monkeypatch):
+    """An unknown owner_ip (e.g. request.client is None) must not be
+    tracked against MAX_SESSIONS_PER_IP at all."""
+    monkeypatch.setattr(main, "MAX_SESSIONS", 100)
+    monkeypatch.setattr(main, "MAX_SESSIONS_PER_IP", 2)
+    manager = SessionManager()
+    structure = Structure.from_file(Path("sample_cif") / "Metals" / "Cu.cif")
+
+    ids = [manager.create_session(None, "Cu.cif", structure) for _ in range(5)]
+
+    assert manager.get_session_count() == 5
+    assert all(sid in manager.sessions for sid in ids)
+
+
+def test_session_manager_reusing_existing_session_id_not_capped_by_ip(monkeypatch):
+    """Continuing an already-known session must not trigger the per-IP
+    eviction, even when that IP is already "at capacity" by count -- it's
+    not actually growing the dict, mirroring the existing global-eviction
+    guarantee for the same case."""
+    monkeypatch.setattr(main, "MAX_SESSIONS", 100)
+    monkeypatch.setattr(main, "MAX_SESSIONS_PER_IP", 2)
+    manager = SessionManager()
+    structure = Structure.from_file(Path("sample_cif") / "Metals" / "Cu.cif")
+
+    id_a = manager.create_session(None, "Cu.cif", structure, owner_ip="9.9.9.9")
+    id_b = manager.create_session(None, "Cu.cif", structure, owner_ip="9.9.9.9")
+    assert manager.get_session_count() == 2
+
+    returned = manager.create_session(id_a, "Ni.cif", structure, owner_ip="9.9.9.9")
     assert returned == id_a
     assert manager.get_session_count() == 2
     assert id_b in manager.sessions
