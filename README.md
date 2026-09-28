@@ -177,7 +177,7 @@ LAN IP detection is best-effort: it may list several candidate addresses if your
 *   **Structure Modifier**: Use the Tabs UI to manipulate the crystal:
     *   **Edit Existing**: Substitute or delete specific atoms.
     *   **Insert New**: Add new atoms into stable void sites (interstitial sites) within the crystal lattice.
-*   **Auto Mode**: Select "Auto Mode" (within Edit or Insert) to let AI iteratively improve your structure by testing the most energetically favorable atomic changes.
+*   **Auto Mode**: Select "Auto Mode" (within Edit or Insert) to let AI iteratively improve your structure by testing the most energetically favorable atomic changes. Note that candidates are ranked by unrelaxed (single-point) energy, which can differ from the ranking after relaxation -- run **Analyze Structure** afterward to confirm the result holds once the structure is relaxed.
 
 #### 5. Exporting Results
 *   After an analysis is complete, click the **"Detailed Analysis"** button.

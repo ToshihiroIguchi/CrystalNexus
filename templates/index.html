@@ -3524,6 +3524,11 @@ Crystal system: ${data.crystal_system}`;
             // Add event listeners
             setupOperationListeners();
 
+            // Nothing is selected yet at build time, so this is a no-op
+            // beyond making sure the options match what filterSubstituteOptions
+            // would produce later (single source of truth).
+            filterSubstituteOptions();
+
             // Initialize cancel button
             initializeCancelButton();
 
@@ -3598,6 +3603,9 @@ Crystal system: ${data.crystal_system}`;
                     ? !atomDropdown?.value
                     : !elementTypeDropdown?.value;
             }
+            // Also exclude the (possibly now-different) selected element
+            // from the "Substitute with:" options -- see filterSubstituteOptions.
+            filterSubstituteOptions();
 
             // Synchronize 3D highlight with current dropdown value
             if (typeof highlightManualAtom === 'function') {
@@ -3636,6 +3644,56 @@ Crystal system: ${data.crystal_system}`;
                 option.textContent = element;
                 elementTypeDropdown.appendChild(option);
             });
+        }
+
+        // Rebuilds the "Substitute with:" optgroup of #substitute-element to
+        // exclude the currently selected atom's (Manual mode) or element
+        // type's (Auto mode) own element, so a same-element substitution --
+        // rejected server-side in apply_operations_to_structure and
+        // /api/evaluate-candidate-energies -- can't even be selected here.
+        // Preserves the current selection (DELETE, or any element other
+        // than the excluded one) if it's still valid after filtering;
+        // otherwise resets it to the placeholder. Does not touch
+        // operationSelect.disabled -- callers already set that themselves
+        // based on whether a target is selected at all.
+        function filterSubstituteOptions() {
+            const operationSelect = document.getElementById('substitute-element');
+            if (!operationSelect) return;
+
+            const manualMode = document.getElementById('manual-mode');
+            const atomDropdown = document.getElementById('element-dropdown');
+            const elementTypeDropdown = document.getElementById('element-type-dropdown');
+
+            const isManual = manualMode && manualMode.checked;
+            const targetValue = isManual
+                ? (atomDropdown ? atomDropdown.value : '')
+                : (elementTypeDropdown ? elementTypeDropdown.value : '');
+            // Manual targets are per-atom labels (e.g. "Ti3"); strip the
+            // trailing index to get the element symbol, matching
+            // extractUniqueElements(). Auto targets are already bare
+            // element symbols.
+            const excludedElement = isManual
+                ? (targetValue ? targetValue.replace(/\d+$/, '') : '')
+                : targetValue;
+
+            const previousValue = operationSelect.value;
+            const filteredOptions = chgnetElements
+                .filter(element => element !== excludedElement)
+                .map(element => `<option value="${element}">${element}</option>`)
+                .join('');
+
+            operationSelect.innerHTML = `
+                <option value="">Select operation...</option>
+                <option value="DELETE">🗑️ Delete atom</option>
+                <optgroup label="Substitute with:">
+                    ${filteredOptions}
+                </optgroup>
+            `;
+
+            operationSelect.value = (previousValue === 'DELETE' ||
+                (previousValue && previousValue !== excludedElement && chgnetElements.includes(previousValue)))
+                ? previousValue
+                : '';
         }
 
         async function loadInsertableElements() {
@@ -3994,6 +4052,7 @@ Crystal system: ${data.crystal_system}`;
                     autoSelector.style.display = 'none';
                     elementTypeDropdown.value = '';
                     operationSelect.disabled = !atomDropdown.value;
+                    filterSubstituteOptions();
                     if (atomDropdown.value && typeof highlightManualAtom === 'function') {
                         highlightManualAtom(atomDropdown.value);
                     } else if (typeof clearManualAtomHighlight === 'function') {
@@ -4009,6 +4068,7 @@ Crystal system: ${data.crystal_system}`;
                     autoSelector.style.display = 'block';
                     atomDropdown.value = '';
                     operationSelect.disabled = !elementTypeDropdown.value;
+                    filterSubstituteOptions();
                     if (typeof clearManualAtomHighlight === 'function') clearManualAtomHighlight();
                     updateExecuteButton();
                 }
@@ -4017,6 +4077,7 @@ Crystal system: ${data.crystal_system}`;
             atomDropdown.addEventListener('change', function () {
                 if (manualMode.checked) {
                     operationSelect.disabled = !this.value;
+                    filterSubstituteOptions();
                     if (this.value && typeof highlightManualAtom === 'function') {
                         highlightManualAtom(this.value);
                     } else if (typeof clearManualAtomHighlight === 'function') {
@@ -4027,7 +4088,10 @@ Crystal system: ${data.crystal_system}`;
             });
 
             elementTypeDropdown.addEventListener('change', function () {
-                if (autoMode.checked) operationSelect.disabled = !this.value;
+                if (autoMode.checked) {
+                    operationSelect.disabled = !this.value;
+                    filterSubstituteOptions();
+                }
                 updateExecuteButton();
             });
 
@@ -4246,6 +4310,18 @@ Crystal system: ${data.crystal_system}`;
 
             // Record operation in history
             const oldElement = elementLabel.replace(/\d+$/, ''); // Remove numbers to get element symbol
+
+            // Defense in depth: the Action dropdown already excludes the
+            // target's own element from its "Substitute with:" options (see
+            // filterSubstituteOptions), but guard here too in case stale
+            // client state still allows it through -- same-element
+            // substitution is also rejected server-side
+            // (apply_operations_to_structure).
+            if (newElement === oldElement) {
+                showNotification(`Cannot substitute ${oldElement} with the same element`, 'error');
+                return false;
+            }
+
             window.atomicOperations.push({
                 action: "substitute",
                 index: atomIndex,
@@ -4790,6 +4866,30 @@ Crystal system: ${data.crystal_system}`;
             }
         }
 
+        // Auto-mode candidates are ranked by unrelaxed (single-point) CHGNet
+        // energy, not the energy after relaxation -- measurements (plan doc
+        // snug-churning-pike.md) found the top-ranked candidate can change
+        // after relaxing, especially for substitutions with a larger ionic
+        // radius mismatch. Appended to the completion summary so the choice
+        // isn't presented as more final than it is.
+        const UNRELAXED_RANKING_CAVEAT = ' Note: this ranking is based on unrelaxed (single-point) energies and ' +
+            'may differ from the relaxed-structure ranking -- run Analyze (relax) to confirm.';
+
+        // Formats an atom label with its symmetry-equivalent group size
+        // (e.g. "Ti0 (×8)") for display in sweep logs/notifications when
+        // the equivalent-sites reduction (see runOptimalCandidateSweep) let
+        // one representative stand in for several equivalent candidates.
+        // Falls back to the bare label when there's no multiplicity info, or
+        // it's 1 (the common case, and the only case before this reduction
+        // existed) -- never changes the label used for actually applying the
+        // operation (handleSubstitution/handleDeletion derive the element
+        // from it via a trailing-digit strip, which a "(×8)" suffix would
+        // break).
+        function withMultiplicity(label, index, multiplicity) {
+            const count = multiplicity instanceof Map ? multiplicity.get(index) : undefined;
+            return (count && count > 1) ? `${label} (×${count})` : label;
+        }
+
         // Optimal atom selection functions for Auto mode.
         //
         // Both substitution and deletion sweeps share this implementation:
@@ -4815,6 +4915,19 @@ Crystal system: ${data.crystal_system}`;
                 return;
             }
 
+            // Defense in depth: the Action dropdown already excludes
+            // elementType from its "Substitute with:" options (see
+            // filterSubstituteOptions), but guard here too in case stale
+            // client state still allows it through -- same-element
+            // substitution is also rejected server-side
+            // (apply_operations_to_structure), so without this check a
+            // whole sweep would run only to have every candidate rejected
+            // on Execute.
+            if (action === 'substitute' && newElement === elementType) {
+                showNotification(`Cannot substitute ${elementType} with the same element`, 'error');
+                return;
+            }
+
             const targetAtoms = findAtomsOfType(elementType);
 
             if (targetAtoms.length === 0) {
@@ -4822,13 +4935,71 @@ Crystal system: ${data.crystal_system}`;
                 return;
             }
 
-            // Single atom case: skip optimization and execute directly
-            if (targetAtoms.length === 1) {
-                const singleAtom = targetAtoms[0];
+            // Reduce targetAtoms to one representative per symmetry-equivalent
+            // group (via /api/equivalent-sites) so the sweep below doesn't
+            // waste CHGNet evaluations on candidates guaranteed to produce
+            // symmetrically identical structures (see plan doc
+            // snug-churning-pike.md). Purely an optimization: any failure
+            // here (network error, non-OK response, malformed body) falls
+            // back to the full, unreduced targetAtoms list rather than
+            // blocking the sweep.
+            let targetAtomsReduced = targetAtoms;
+            const multiplicity = new Map(); // representative site index -> group size
+
+            if (targetAtoms.length > 1) {
+                try {
+                    const eqResponse = await fetch('/api/equivalent-sites', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ session_id: window.sessionId, element: elementType })
+                    });
+
+                    if (eqResponse.ok) {
+                        const eqData = await eqResponse.json();
+                        if (eqData.status === 'success' && Array.isArray(eqData.groups)) {
+                            const byIndex = new Map(targetAtoms.map(atom => [atom.index, atom]));
+                            const representatives = [];
+                            for (const group of eqData.groups) {
+                                if (!Array.isArray(group) || group.length === 0) continue;
+                                const repIndex = Math.min(...group);
+                                const repAtom = byIndex.get(repIndex);
+                                if (!repAtom) continue; // shouldn't happen; don't let it crash the sweep
+                                representatives.push(repAtom);
+                                if (group.length > 1) multiplicity.set(repIndex, group.length);
+                            }
+                            if (representatives.length > 0) {
+                                targetAtomsReduced = representatives;
+                                dlog(`Symmetry reduction: ${targetAtoms.length} ${elementType} atoms -> ${targetAtomsReduced.length} representative(s)`);
+                            } else {
+                                console.warn('Equivalent-sites reduction returned no usable groups; using full atom list');
+                            }
+                        } else {
+                            console.warn('Equivalent-sites response malformed; using full atom list', eqData);
+                        }
+                    } else {
+                        console.warn(`Equivalent-sites lookup failed (HTTP ${eqResponse.status}); using full atom list`);
+                    }
+                } catch (err) {
+                    console.warn('Equivalent-sites lookup failed; using full atom list', err);
+                }
+            }
+
+            // Single representative case: skip optimization and execute
+            // directly. Covers both the literal single-atom case and "every
+            // atom of this type is symmetry-equivalent to every other".
+            if (targetAtomsReduced.length === 1) {
+                const singleAtom = targetAtomsReduced[0];
                 const targetDesc = action === 'substitute' ? `${singleAtom.label} → ${newElement}` : singleAtom.label;
 
                 setExecuteButtonState('processing', '⏳ Executing...');
-                showNotification(`Only one ${elementType} atom found. Executing direct ${actionLabel}: ${targetDesc}`, 'info');
+                if (targetAtoms.length > 1) {
+                    showNotification(
+                        `All ${targetAtoms.length} ${elementType} atoms are symmetry-equivalent; executing directly on ${singleAtom.label}`,
+                        'info'
+                    );
+                } else {
+                    showNotification(`Only one ${elementType} atom found. Executing direct ${actionLabel}: ${targetDesc}`, 'info');
+                }
 
                 try {
                     let applied;
@@ -4854,7 +5025,9 @@ Crystal system: ${data.crystal_system}`;
 
             // Multiple atoms case: proceed with optimization
             showNotification(
-                `Found ${targetAtoms.length} ${elementType} atoms. Starting optimization to find the best ${actionLabel}...`,
+                `Found ${targetAtomsReduced.length} ${elementType} atoms` +
+                (targetAtomsReduced.length !== targetAtoms.length ? ` (${targetAtoms.length} total, symmetry-reduced)` : '') +
+                `. Starting optimization to find the best ${actionLabel}...`,
                 'info'
             );
 
@@ -4864,7 +5037,8 @@ Crystal system: ${data.crystal_system}`;
                 failed: [],
                 bestResult: null,
                 totalProcessed: 0,
-                startTime: Date.now()
+                startTime: Date.now(),
+                multiplicity
             };
 
             // Capture the structure generation this sweep started against, so
@@ -4876,7 +5050,7 @@ Crystal system: ${data.crystal_system}`;
 
             // Reset Chart
             if (window.autoModeChart) {
-                window.autoModeChart.reset(targetAtoms.length);
+                window.autoModeChart.reset(targetAtomsReduced.length);
             }
 
             // Create the controller for this run up front, before any await,
@@ -4899,17 +5073,17 @@ Crystal system: ${data.crystal_system}`;
 
             setExecuteButtonState('processing', '⏳ Starting...');
             showExecuteStatus('Initializing energy calculations...', true, true);
-            updateExecuteProgress(0, targetAtoms.length);
+            updateExecuteProgress(0, targetAtomsReduced.length);
 
             try {
                 let completed = 0;
-                for (let i = 0; i < targetAtoms.length; i += CANDIDATE_ENERGY_BATCH_SIZE) {
+                for (let i = 0; i < targetAtomsReduced.length; i += CANDIDATE_ENERGY_BATCH_SIZE) {
                     if (controller.signal.aborted || structureGeneration !== generationAtStart) break;
 
-                    const chunk = targetAtoms.slice(i, i + CANDIDATE_ENERGY_BATCH_SIZE);
-                    const lastInChunk = Math.min(i + chunk.length, targetAtoms.length);
+                    const chunk = targetAtomsReduced.slice(i, i + CANDIDATE_ENERGY_BATCH_SIZE);
+                    const lastInChunk = Math.min(i + chunk.length, targetAtomsReduced.length);
 
-                    showExecuteStatus(`Testing atoms ${i + 1}-${lastInChunk}/${targetAtoms.length}...`, true, true);
+                    showExecuteStatus(`Testing atoms ${i + 1}-${lastInChunk}/${targetAtomsReduced.length}...`, true, true);
 
                     const candidates = chunk.map(atom => {
                         const c = { id: atom.index, action, index: atom.index };
@@ -4973,8 +5147,8 @@ Crystal system: ${data.crystal_system}`;
                                     }
 
                                     dlog(action === 'substitute'
-                                        ? `${atom.label} → ${newElement}: ${energy.toFixed(6)} eV`
-                                        : `Delete ${atom.label}: ${energy.toFixed(6)} eV`);
+                                        ? `${withMultiplicity(atom.label, atom.index, multiplicity)} → ${newElement}: ${energy.toFixed(6)} eV`
+                                        : `Delete ${withMultiplicity(atom.label, atom.index, multiplicity)}: ${energy.toFixed(6)} eV`);
                                 } else {
                                     const errorMsg = (result && result.error) || 'Unknown error';
                                     calculationResults.failed.push({ atom: atom.label, errors: [{ error: errorMsg }], finalError: errorMsg });
@@ -4997,7 +5171,7 @@ Crystal system: ${data.crystal_system}`;
                     }
 
                     completed = lastInChunk;
-                    updateExecuteProgress(completed, targetAtoms.length);
+                    updateExecuteProgress(completed, targetAtomsReduced.length);
                 }
 
                 if (controller.signal.aborted) {
@@ -5026,7 +5200,7 @@ Crystal system: ${data.crystal_system}`;
                     hideExecuteStatus();
                     setExecuteButtonState('complete');
                     showNotification(
-                        `Auto ${actionLabel} timed out after evaluating ${calculationResults.totalProcessed}/${targetAtoms.length} atoms. Try a smaller supercell.`,
+                        `Auto ${actionLabel} timed out after evaluating ${calculationResults.totalProcessed}/${targetAtomsReduced.length} atoms. Try a smaller supercell.`,
                         'error'
                     );
                     return;
@@ -5056,7 +5230,7 @@ Crystal system: ${data.crystal_system}`;
         }
 
         async function processSubstitutionResults(results, elementType, newElement) {
-            const { successful, failed, bestResult, totalProcessed } = results;
+            const { successful, failed, bestResult, totalProcessed, multiplicity } = results;
 
             const summary = {
                 totalAtoms: totalProcessed,
@@ -5071,7 +5245,7 @@ Crystal system: ${data.crystal_system}`;
                 // Display calculation summary
                 const resultSummary = [...successful]
                     .sort((a, b) => a.energy - b.energy)
-                    .map((r, i) => `${i + 1}. ${r.atom}: ${r.energy.toFixed(6)} eV (${r.attempts} attempts)`)
+                    .map((r, i) => `${i + 1}. ${withMultiplicity(r.atom, r.index, multiplicity)}: ${r.energy.toFixed(6)} eV (${r.attempts} attempts)`)
                     .join('\n');
 
                 dlog(`Energy comparison results (${successful.length}/${totalProcessed} successful):\n${resultSummary}`);
@@ -5079,6 +5253,8 @@ Crystal system: ${data.crystal_system}`;
                 if (failed.length > 0) {
                     console.warn(`Failed calculations (${failed.length}):`, failed.map(f => `${f.atom}: ${f.finalError}`));
                 }
+
+                const bestLabel = withMultiplicity(bestResult.atom, bestResult.index, multiplicity);
 
                 let applied = false;
                 try {
@@ -5090,7 +5266,7 @@ Crystal system: ${data.crystal_system}`;
                     if (applied) {
                         // Show success notification with statistics
                         showNotification(
-                            `Optimal substitution completed: ${bestResult.atom} → ${newElement} (Success rate: ${summary.successRate}%)`,
+                            `Optimal substitution completed: ${bestLabel} → ${newElement} (Success rate: ${summary.successRate}%)`,
                             'success'
                         );
                     }
@@ -5108,9 +5284,11 @@ Crystal system: ${data.crystal_system}`;
 
                 // Show completion state instead of hiding
                 if (applied) {
-                    showExecutionComplete(`Substitution Completed. Best: ${bestResult.atom} -> ${newElement} (${bestResult.energy.toFixed(4)} eV)`, results);
+                    showExecutionComplete(
+                        `Substitution Completed. Best: ${bestLabel} -> ${newElement} (${bestResult.energy.toFixed(4)} eV).${UNRELAXED_RANKING_CAVEAT}`,
+                        results);
                 } else {
-                    showExecutionComplete(`Substitution failed: could not apply ${bestResult.atom} -> ${newElement}`, results);
+                    showExecutionComplete(`Substitution failed: could not apply ${bestLabel} -> ${newElement}`, results);
                 }
 
             } else {
@@ -5205,7 +5383,7 @@ Crystal system: ${data.crystal_system}`;
         }
 
         async function processDeletionResults(results, elementType) {
-            const { successful, failed, bestResult, totalProcessed } = results;
+            const { successful, failed, bestResult, totalProcessed, multiplicity } = results;
 
             const summary = {
                 totalAtoms: totalProcessed,
@@ -5220,7 +5398,7 @@ Crystal system: ${data.crystal_system}`;
                 // Display calculation summary
                 const resultSummary = [...successful]
                     .sort((a, b) => a.energy - b.energy)
-                    .map((r, i) => `${i + 1}. Delete ${r.atom}: ${r.energy.toFixed(6)} eV (${r.attempts} attempts)`)
+                    .map((r, i) => `${i + 1}. Delete ${withMultiplicity(r.atom, r.index, multiplicity)}: ${r.energy.toFixed(6)} eV (${r.attempts} attempts)`)
                     .join('\n');
 
                 dlog(`Energy comparison results (${successful.length}/${totalProcessed} successful):\n${resultSummary}`);
@@ -5228,6 +5406,8 @@ Crystal system: ${data.crystal_system}`;
                 if (failed.length > 0) {
                     console.warn(`Failed calculations (${failed.length}):`, failed.map(f => `${f.atom}: ${f.finalError}`));
                 }
+
+                const bestLabel = withMultiplicity(bestResult.atom, bestResult.index, multiplicity);
 
                 let applied = false;
                 try {
@@ -5239,7 +5419,7 @@ Crystal system: ${data.crystal_system}`;
                     if (applied) {
                         // Show success notification with statistics
                         showNotification(
-                            `Optimal deletion completed: ${bestResult.atom} removed (Success rate: ${summary.successRate}%)`,
+                            `Optimal deletion completed: ${bestLabel} removed (Success rate: ${summary.successRate}%)`,
                             'success'
                         );
                     }
@@ -5257,9 +5437,11 @@ Crystal system: ${data.crystal_system}`;
 
                 // Show completion state instead of hiding
                 if (applied) {
-                    showExecutionComplete(`Deletion Completed. Best: ${bestResult.atom} (${bestResult.energy.toFixed(4)} eV)`, results);
+                    showExecutionComplete(
+                        `Deletion Completed. Best: ${bestLabel} (${bestResult.energy.toFixed(4)} eV).${UNRELAXED_RANKING_CAVEAT}`,
+                        results);
                 } else {
-                    showExecutionComplete(`Deletion failed: could not apply removal of ${bestResult.atom}`, results);
+                    showExecutionComplete(`Deletion failed: could not apply removal of ${bestLabel}`, results);
                 }
 
             } else {

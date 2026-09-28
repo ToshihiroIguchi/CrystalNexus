@@ -416,6 +416,24 @@ def validate_atomic_operation(operation, structure_size, operation_index=None):
     except Exception as e:
         return False, f"unexpected validation error: {str(e)}"
 
+def _site_element_symbol(specie) -> str:
+    """
+    Clean element symbol for a site's species using PyMatGen's unified
+    approach (e.g. Species Ba2+ -> "Ba", plain Element Nd -> "Nd"). Species
+    (an Element with an oxidation state, e.g. from a CIF with oxidation-state
+    labels) expose the underlying Element via `.element`; plain Element
+    instances don't.
+
+    Shared by build_element_labels, apply_operations_to_structure's
+    same-element substitution check, /api/evaluate-candidate-energies, and
+    /api/equivalent-sites, so all of them agree on what "the element at a
+    site" means.
+    """
+    if hasattr(specie, 'element'):
+        return str(specie.element)  # Species type (e.g., Ba2+ -> Ba)
+    return str(specie)              # Element type (e.g., Nd -> Nd)
+
+
 def build_element_labels(structure: Structure) -> "tuple[List[str], List[str]]":
     """
     Generate per-element sequential labels (Ba0, Ti0, O0, O1, O2, ...) directly
@@ -436,12 +454,7 @@ def build_element_labels(structure: Structure) -> "tuple[List[str], List[str]]":
     element_counts: Dict[str, int] = {}
 
     for site in structure.sites:
-        # Get clean element symbol using PyMatGen's unified approach.
-        # This handles both Element and Species types consistently.
-        if hasattr(site.specie, 'element'):
-            element = str(site.specie.element)  # Species type (e.g., Ba2+ -> Ba)
-        else:
-            element = str(site.specie)          # Element type (e.g., Nd -> Nd)
+        element = _site_element_symbol(site.specie)
 
         if element not in element_counts:
             element_counts[element] = 0
@@ -540,6 +553,17 @@ def apply_operations_to_structure(structure: Structure, operations: List[dict],
             # ValueError (500).
             new_element = validate_element(operation["to"])
             old_element = structure[site_index].specie
+            old_symbol = _site_element_symbol(old_element)
+            # validate_atomic_operation has no access to `structure`, so it
+            # can't know the *current* element at this index -- this check
+            # has to live here instead (see plan doc / commit message).
+            if new_element == old_symbol:
+                message = (f"Operation {i + 1}: cannot substitute site {site_index} "
+                           f"({old_symbol}) with the same element")
+                if strict_mode:
+                    raise ValueError(message)
+                skipped.append(message)
+                continue
             if substitute_site(structure, site_index, new_element):
                 property_warnings.append(
                     f"Operation {i + 1}: site {site_index} ({old_element}) had an "
@@ -563,6 +587,37 @@ def apply_operations_to_structure(structure: Structure, operations: List[dict],
         raise ValueError("Operation would delete all atoms; at least one atom must remain.")
 
     return operations_applied, skipped, property_warnings
+
+
+def _compute_equivalent_indices(structure: Structure) -> "Optional[List[List[int]]]":
+    """
+    Group site indices into symmetry-equivalent classes via SpacegroupAnalyzer.
+
+    Used by /api/equivalent-sites to let the Auto-mode substitution/deletion
+    sweep (runOptimalCandidateSweep in templates/index.html) skip redundant
+    CHGNet evaluation of candidate sites that are symmetry-equivalent:
+    substituting/deleting any one site in a class produces a structure that
+    is symmetrically identical to substituting/deleting any other site in
+    that same class, so scoring more than one representative per class is
+    wasted CHGNet work (see plan doc / commit message for measurements).
+
+    A per-call symprec of 0.01 is used -- this matches SpacegroupAnalyzer's
+    own default, and is a practical tolerance for as-loaded/supercell
+    structures (CIF-derived coordinates are rarely exact to machine
+    precision).
+
+    Returns None if symmetry analysis fails (e.g. an unusual structure
+    SpacegroupAnalyzer can't handle); callers should fall back to treating
+    every site as its own singleton equivalence class in that case, which
+    matches the old "evaluate everything" behavior.
+    """
+    try:
+        analyzer = SpacegroupAnalyzer(structure, symprec=0.01)
+        sym = analyzer.get_symmetrized_structure()
+        return list(sym.equivalent_indices)
+    except Exception:
+        return None
+
 
 # Global model manager instance
 chgnet_manager = CHGNetModelManager()
@@ -3704,10 +3759,17 @@ async def evaluate_candidate_energies(data: dict):
                 detail=f"Structure has {len(structure)} atoms; the prediction limit is "
                        f"{MAX_PREDICT_ATOMS}. Reduce the supercell size.")
 
+        # Built aligned to `candidates` order (one slot per candidate) so
+        # same-element substitutions can be filled in immediately below,
+        # without going through the batched CHGNet call, while everything
+        # else is filled in afterward at its own original slot.
+        results: List[Optional[dict]] = [None] * len(candidates)
+
         cand_structures = []
         cand_ids = []
         cand_num_atoms = []
-        for candidate in candidates:
+        cand_result_slots = []
+        for slot, candidate in enumerate(candidates):
             if not isinstance(candidate, dict):
                 raise HTTPException(status_code=400, detail="Each candidate must be an object")
             cand_id = candidate.get("id")
@@ -3731,6 +3793,15 @@ async def evaluate_candidate_energies(data: dict):
                     new_element = validate_element(new_element)
                 except ValueError as e:
                     raise HTTPException(status_code=400, detail=f"candidate {cand_id}: {e}")
+
+                old_symbol = _site_element_symbol(structure[index].specie)
+                if new_element == old_symbol:
+                    # Nothing to predict -- fill this slot directly instead of
+                    # sending a no-op substitution through the CHGNet batch.
+                    results[slot] = {"id": cand_id, "energy": None, "energy_eV_per_atom": None,
+                                     "error": "candidate element is unchanged"}
+                    continue
+
                 substitute_site(cand_structure, index, new_element)
             else:  # delete
                 cand_structure.remove_sites([index])
@@ -3738,29 +3809,30 @@ async def evaluate_candidate_energies(data: dict):
             cand_structures.append(cand_structure)
             cand_ids.append(cand_id)
             cand_num_atoms.append(len(cand_structure))
+            cand_result_slots.append(slot)
 
-        pred_results = await chgnet_manager.predict_structures_batch(cand_structures, task="e")
+        pred_results = await chgnet_manager.predict_structures_batch(cand_structures, task="e") \
+            if cand_structures else []
 
-        results = []
-        for cand_id, num_atoms, pred_result in zip(cand_ids, cand_num_atoms, pred_results):
+        for slot, cand_id, num_atoms, pred_result in zip(cand_result_slots, cand_ids, cand_num_atoms, pred_results):
             if pred_result is None:
-                results.append({"id": cand_id, "energy": None, "energy_eV_per_atom": None,
-                               "error": "Prediction failed"})
+                results[slot] = {"id": cand_id, "energy": None, "energy_eV_per_atom": None,
+                                 "error": "Prediction failed"}
                 continue
             try:
                 parsed = safe_get_prediction(pred_result, num_atoms=num_atoms)
                 per_atom_energy = parsed.get("energy_eV_per_atom")
                 if per_atom_energy is None:
                     raise ValueError("Prediction returned no energy value")
-                results.append({
+                results[slot] = {
                     "id": cand_id,
                     "energy": per_atom_energy * num_atoms,
                     "energy_eV_per_atom": per_atom_energy,
                     "error": None,
-                })
+                }
             except Exception as e:
                 logger.warning(f"Failed to parse prediction for candidate {cand_id}: {e}")
-                results.append({"id": cand_id, "energy": None, "energy_eV_per_atom": None, "error": str(e)})
+                results[slot] = {"id": cand_id, "energy": None, "energy_eV_per_atom": None, "error": str(e)}
 
         return {"status": "success", "results": results}
     except HTTPException:
@@ -3768,6 +3840,75 @@ async def evaluate_candidate_energies(data: dict):
         raise
     except Exception as e:
         logger.error(f"Error evaluating candidate energies: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.post("/api/equivalent-sites")
+async def equivalent_sites(data: dict):
+    """
+    Groups a structure's sites of one element into symmetry-equivalent
+    classes, so the Auto-mode substitution/deletion sweep
+    (runOptimalCandidateSweep in templates/index.html) can evaluate just one
+    representative per class with CHGNet instead of every site: candidates
+    within a class are guaranteed to produce symmetrically identical
+    structures, so scoring more than one per class is redundant work (see
+    plan doc / commit message for measurements). This is a pure
+    optimization -- the client falls back to the full, unreduced candidate
+    list on any failure of this endpoint.
+
+    Response `groups` is a partition of every site of `element`: each inner
+    list is one symmetry-equivalent class (its indices sorted ascending),
+    and the outer list is sorted by each class's smallest index ascending.
+    This endpoint intentionally returns the full partition rather than just
+    one representative index per class, so the client decides which index
+    within a class to use as its representative (currently: the smallest)
+    without a server round-trip if that choice ever changes.
+    """
+    try:
+        session_id = data.get("session_id")
+        element = data.get("element")
+
+        if not session_id or not isinstance(session_id, str):
+            raise HTTPException(status_code=400, detail="Session ID is required")
+
+        structure = session_manager.get_current_structure(session_id)
+        if not structure:
+            raise HTTPException(status_code=404, detail="Structure not found")
+
+        try:
+            element = validate_element(element)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        if len(structure) > MAX_PREDICT_ATOMS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Structure has {len(structure)} atoms; the prediction limit is "
+                       f"{MAX_PREDICT_ATOMS}. Reduce the supercell size.")
+
+        # CPU-bound pymatgen symmetry analysis, offloaded off the event loop.
+        equivalent_groups = await asyncio.to_thread(_compute_equivalent_indices, structure)
+        if equivalent_groups is None:
+            logger.warning(
+                f"Symmetry analysis failed for session {session_id[:8]}...; "
+                f"falling back to singleton equivalence groups for /api/equivalent-sites")
+            equivalent_groups = [[i] for i in range(len(structure))]
+
+        groups = []
+        for group in equivalent_groups:
+            sorted_group = sorted(group)
+            if not sorted_group:
+                continue
+            representative_element = _site_element_symbol(structure[sorted_group[0]].specie)
+            if representative_element == element:
+                groups.append(sorted_group)
+        groups.sort(key=lambda g: g[0])
+
+        return {"status": "success", "element": element, "groups": groups}
+    except HTTPException:
+        # Re-raise HTTPExceptions without modification
+        raise
+    except Exception as e:
+        logger.error(f"Error computing equivalent sites: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 # --- Analytics API Routes ---

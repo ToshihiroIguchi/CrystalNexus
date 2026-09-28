@@ -1431,3 +1431,184 @@ def test_evaluate_candidate_energies_delete_flow(client):
     for result in data["results"]:
         assert result["error"] is None
         assert isinstance(result["energy"], float)
+
+
+def test_evaluate_candidate_energies_same_element_short_circuits(client):
+    """Regression: a substitute candidate whose target element matches the
+    site's current element must not be sent through the CHGNet batch at
+    all -- it should come back with a non-null 'error' and null energies,
+    while the overall request still succeeds (HTTP 200)."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)  # Metals/Cu.cif -- site 0 is Cu
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    response = client.post("/api/evaluate-candidate-energies", json={
+        "session_id": session_id,
+        "candidates": [{"id": 0, "action": "substitute", "index": 0, "to": "Cu"}],
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert len(data["results"]) == 1
+    result = data["results"][0]
+    assert result["id"] == 0
+    assert result["energy"] is None
+    assert result["energy_eV_per_atom"] is None
+    assert result["error"] is not None
+
+
+# ---------------------------------------------------------------------------
+# /api/equivalent-sites
+# ---------------------------------------------------------------------------
+
+def _create_batio3_supercell_session(client, size=(2, 2, 2)):
+    """BaTiO3 (tetragonal) supercell session -- 8 Ba / 8 Ti / 24 O sites for
+    a 2x2x2 supercell, used by the /api/equivalent-sites tests below."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client, filename="Oxides/BaTiO3(tetragonal).cif")
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=size)
+    return session_id, crystal_data
+
+
+def test_equivalent_sites_partitions_ti_sites(client):
+    """On the pristine BaTiO3 2x2x2 supercell, the Ti groups returned must
+    partition every Ti site exactly once (every index appears, none twice)."""
+    session_id, _ = _create_batio3_supercell_session(client)
+
+    labels_response = client.post("/api/get-element-labels", json={"session_id": session_id})
+    assert labels_response.status_code == 200
+    labels = labels_response.json()["labels"]
+    ti_indices = {i for i, label in enumerate(labels) if label.rstrip("0123456789") == "Ti"}
+    assert len(ti_indices) == 8
+
+    response = client.post("/api/equivalent-sites", json={
+        "session_id": session_id,
+        "element": "Ti",
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["element"] == "Ti"
+
+    groups = data["groups"]
+    flattened = [i for group in groups for i in group]
+    assert sorted(flattened) == sorted(ti_indices)  # partition: every Ti site, exactly once
+    assert len(flattened) == len(set(flattened))    # no duplicates across groups
+
+    # Measured (plan doc snug-churning-pike.md): the pristine supercell's 8
+    # Ti sites are all symmetry-equivalent, i.e. exactly one group.
+    assert len(groups) == 1
+    assert sorted(groups[0]) == sorted(ti_indices)
+
+
+def test_equivalent_sites_group_count_increases_after_substitution(client):
+    """Breaking symmetry (one Ti -> Zr substitution) must split the
+    remaining Ti sites into more groups than the pristine structure had,
+    while still partitioning every remaining Ti site exactly once."""
+    session_id, _ = _create_batio3_supercell_session(client)
+
+    before = client.post("/api/equivalent-sites", json={
+        "session_id": session_id,
+        "element": "Ti",
+    }).json()
+    groups_before = before["groups"]
+
+    labels_response = client.post("/api/get-element-labels", json={"session_id": session_id})
+    labels = labels_response.json()["labels"]
+    first_ti_index = next(i for i, label in enumerate(labels) if label.rstrip("0123456789") == "Ti")
+
+    apply_response = client.post("/api/apply-atomic-operations", json={
+        "session_id": session_id,
+        "operations": [{"action": "substitute", "index": first_ti_index, "to": "Zr"}],
+    })
+    assert apply_response.status_code == 200
+
+    after = client.post("/api/equivalent-sites", json={
+        "session_id": session_id,
+        "element": "Ti",
+    })
+    assert after.status_code == 200
+    after_data = after.json()
+    assert after_data["status"] == "success"
+
+    groups_after = after_data["groups"]
+    flattened_after = [i for group in groups_after for i in group]
+    assert len(flattened_after) == 7  # one of the original 8 Ti sites is now Zr
+    assert len(flattened_after) == len(set(flattened_after))
+
+    assert len(groups_after) > 1
+    assert len(groups_after) > len(groups_before)
+
+
+def test_equivalent_sites_missing_session_id(client):
+    response = client.post("/api/equivalent-sites", json={"element": "Ti"})
+    assert response.status_code == 400
+
+
+def test_equivalent_sites_unknown_session_id(client):
+    response = client.post("/api/equivalent-sites", json={
+        "session_id": str(uuid.uuid4()),
+        "element": "Ti",
+    })
+    assert response.status_code == 404
+
+
+def test_equivalent_sites_rejects_unknown_element(client):
+    session_id, _ = _create_batio3_supercell_session(client)
+    response = client.post("/api/equivalent-sites", json={
+        "session_id": session_id,
+        "element": "Xx",
+    })
+    assert response.status_code == 400
+
+
+def test_equivalent_sites_rejects_oversized_structure(client, monkeypatch):
+    import main
+    monkeypatch.setattr(main, "MAX_PREDICT_ATOMS", 1)
+
+    session_id, _ = _create_batio3_supercell_session(client)
+    response = client.post("/api/equivalent-sites", json={
+        "session_id": session_id,
+        "element": "Ti",
+    })
+    assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Same-element substitution rejection (apply_operations_to_structure)
+# ---------------------------------------------------------------------------
+
+def test_apply_atomic_operations_rejects_same_element_substitution(client):
+    """Substituting a site with its own current element must not be
+    silently applied (and must not 500) -- /api/apply-atomic-operations
+    replays in strict mode, so this is rejected outright with 400."""
+    session_id = str(uuid.uuid4())
+    crystal_data = _analyze_sample(client)  # Metals/Cu.cif -- every site is Cu
+    session_id = _create_supercell_session(client, crystal_data, session_id, size=(1, 1, 1))
+
+    response = client.post("/api/apply-atomic-operations", json={
+        "session_id": session_id,
+        "operations": [{"action": "substitute", "index": 0, "to": "Cu"}],
+    })
+    assert response.status_code == 400
+    assert "same element" in response.json()["detail"].lower()
+
+
+def test_apply_operations_to_structure_skips_same_element_non_strict(sample_cif_dir):
+    """Non-strict mode (used by the CHGNet-prediction preview paths) must
+    skip a same-element substitution and report it, rather than applying a
+    no-op operation or crashing."""
+    structure = Structure.from_file(sample_cif_dir / "Metals" / "Cu.cif")
+    structure.make_supercell((1, 1, 1))
+    # Cu.cif loads its sites as an oxidation-state Species (Cu0+), not a
+    # plain Element -- capture it before the call so "untouched" can be
+    # checked without hardcoding a bare-Element repr that wouldn't match.
+    original_specie = structure[0].specie
+
+    operations = [{"action": "substitute", "index": 0, "to": "Cu"}]
+    applied, skipped, property_warnings = apply_operations_to_structure(structure, operations, strict_mode=False)
+
+    assert applied == 0
+    assert len(skipped) == 1
+    assert "same element" in skipped[0].lower()
+    assert structure[0].specie == original_specie  # untouched
