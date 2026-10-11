@@ -15,6 +15,7 @@
         crossorigin="anonymous"></script>
     <script src="/static/js/utils.js"></script>
     <script src="/static/js/auto_mode_chart.js"></script>
+    <script src="/static/js/relax_chart.js"></script>
     <style>
         .info-icon {
             font-size: 14px;
@@ -448,6 +449,14 @@
                         <div class="progress-bar" id="progress-bar" style="display: none;">
                             <div class="progress-fill"></div>
                         </div>
+                    </div>
+
+                    <!-- Live optimization charts; shown when a relax starts and kept after it ends -->
+                    <div id="relax-charts" style="display: none; margin: 8px 0;">
+                        <div style="font-size: 12px; font-weight: 600; margin-bottom: 2px;">Energy (eV)</div>
+                        <canvas id="relax-energy-chart" style="width: 100%; height: 150px; display: block;"></canvas>
+                        <div style="font-size: 12px; font-weight: 600; margin: 8px 0 2px;">Max force (eV/Å, dashed = fmax)</div>
+                        <canvas id="relax-force-chart" style="width: 100%; height: 150px; display: block;"></canvas>
                     </div>
 
                     <div class="chgnet-results" id="chgnet-results" style="display: none;">
@@ -2713,12 +2722,31 @@ Crystal system: ${data.crystal_system}`;
                 // instead of assuming an absolute force scale. Reset to null
                 // here every run, alongside maxProgressFraction.
                 let initialMaxForce = null;
+
+                // Live charts: created on first use, cleared every run, and left
+                // visible afterwards (hideCHGNetStatus() does not touch them).
+                const relaxChartsEl = document.getElementById('relax-charts');
+                relaxChartsEl.style.display = 'block';
+                if (!window.relaxEnergyChart) {
+                    window.relaxEnergyChart = new RelaxLineChart('relax-energy-chart', { yLabel: 'Energy (eV)' });
+                    window.relaxForceChart = new RelaxLineChart('relax-force-chart', { yLabel: 'Max force (eV/Å)', logY: true });
+                }
+                window.relaxEnergyChart.reset();
+                window.relaxForceChart.reset();
+                window.relaxForceChart.setRefLine(fmax);
+                window.relaxEnergyChart.resize();
+                window.relaxForceChart.resize();
+
                 const progressSource = new EventSource('/api/relax-progress/' + window.sessionId);
                 progressSource.onmessage = (event) => {
                     try {
                         const state = JSON.parse(event.data);
                         if (state.done) {
                             return;
+                        }
+                        if (Array.isArray(state.history) && state.history.length > 0) {
+                            window.relaxEnergyChart.addPoints(state.history.map(h => ({ x: h.step, y: h.energy_eV })));
+                            window.relaxForceChart.addPoints(state.history.map(h => ({ x: h.step, y: h.max_force_eV_per_A })));
                         }
                         showCHGNetStatus(
                             `Step ${state.step} / ${state.max_steps} — max force ${state.max_force_eV_per_A.toFixed(4)} eV/Å (target ${state.fmax})`,
@@ -2800,6 +2828,16 @@ Crystal system: ${data.crystal_system}`;
 
                     // Properties calculation phase
                     setCHGNetButtonState('calculating_properties');
+
+                    // The SSE stream may not have delivered the last steps; the
+                    // response carries the complete history, so redraw from it.
+                    const fullHistory = data.relaxation_info?.progress_history;
+                    if (Array.isArray(fullHistory) && fullHistory.length > 0) {
+                        window.relaxEnergyChart.reset();
+                        window.relaxForceChart.reset();
+                        window.relaxEnergyChart.addPoints(fullHistory.map(h => ({ x: h.step, y: h.energy_eV })));
+                        window.relaxForceChart.addPoints(fullHistory.map(h => ({ x: h.step, y: h.max_force_eV_per_A })));
+                    }
 
                     displayCHGNetResults(data, true);
 

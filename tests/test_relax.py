@@ -200,6 +200,41 @@ def test_relaxation_watcher_sanitizes_progress_slot():
     assert progress_slot["state"]["energy_eV"] is None
 
 
+def test_relaxation_watcher_records_history_and_uses_force_source():
+    """Each step appends to the slot's history, and max force comes from the
+    force_source (the cell filter when relax_cell=True), not raw atoms."""
+    from main import RelaxationWatcher, _new_history_points
+
+    class _FakeAtoms:
+        def get_forces(self):
+            return np.array([[0.01, 0.0, 0.0]])
+
+        def get_potential_energy(self):
+            return -1.5
+
+    class _FakeFilter:
+        def get_forces(self):
+            # extra cell-DOF row with a larger "force"
+            return np.array([[0.01, 0.0, 0.0], [0.0, 0.5, 0.0]])
+
+    slot = {}
+    watcher = RelaxationWatcher(_FakeAtoms(), fmax=0.1, max_steps=10,
+                                 deadline=time.monotonic() + 100, progress_slot=slot,
+                                 force_source=_FakeFilter())
+    watcher()
+    watcher()
+
+    assert [h["step"] for h in slot["history"]] == [0, 1]
+    assert slot["history"][0] == {"step": 0, "energy_eV": -1.5, "max_force_eV_per_A": 0.5}
+    assert slot["state"]["max_force_eV_per_A"] == 0.5
+
+    # Per-connection diffing: only entries beyond what was already sent
+    assert _new_history_points(slot, 0) == slot["history"]
+    assert _new_history_points(slot, 1) == slot["history"][1:]
+    assert _new_history_points(slot, 2) == []
+    assert _new_history_points({}, 0) == []
+
+
 # ---------------------------------------------------------------------------
 # Slow tests: real CHGNet load + relaxation
 # ---------------------------------------------------------------------------
