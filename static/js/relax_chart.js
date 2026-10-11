@@ -100,7 +100,7 @@ class RelaxLineChart {
         ctx.clearRect(0, 0, width, height);
 
         const c = this._colors();
-        const left = 68, right = 10, top = 8, bottom = 30;
+        const left = 50, right = 10, top = 5, bottom = 28;
         const pw = width - left - right;
         const ph = height - top - bottom;
         if (pw <= 10 || ph <= 10) return;
@@ -127,7 +127,7 @@ class RelaxLineChart {
             toY = v => top + ph - ((Math.log10(Math.max(v, 1e-300)) - eLo) / (eHi - eLo)) * ph;
             yFmt = v => (v >= 0.01 && v < 1e4) ? String(parseFloat(v.toPrecision(3))) : v.toExponential(0);
         } else {
-            const t = this._linearTicks(yMin, yMax, 4);
+            const t = this._linearTicks(yMin, yMax, 3);
             yTicks = t.ticks;
             toY = v => top + ph - ((v - t.lo) / (t.hi - t.lo)) * ph;
             yFmt = v => this._fmt(v, t.step);
@@ -171,12 +171,7 @@ class RelaxLineChart {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'bottom';
         ctx.fillText('Step', left + pw / 2, height - 1);
-        ctx.save();
-        ctx.translate(10, top + ph / 2);
-        ctx.rotate(-Math.PI / 2);
-        ctx.textBaseline = 'middle';
-        ctx.fillText(this.yLabel, 0, 0);
-        ctx.restore();
+        // Y label is shown in the HTML title above each chart (saves width).
 
         ctx.save();
         ctx.beginPath();
