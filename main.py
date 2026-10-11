@@ -2554,8 +2554,14 @@ class RelaxationWatcher:
     correct way to enforce a timeout.
     """
 
-    def __init__(self, atoms, fmax, max_steps, deadline, progress_slot=None):
-        self.atoms = atoms  # the UNFILTERED Atoms object (raw atomic forces)
+    def __init__(self, atoms, fmax, max_steps, deadline, progress_slot=None,
+                 force_source=None):
+        self.atoms = atoms  # the UNFILTERED Atoms object (energy, raw forces)
+        # Object whose get_forces() ASE's convergence test actually uses: the
+        # FrechetCellFilter when relax_cell=True (atomic forces + cell DOF
+        # rows), else the Atoms itself. Its get_forces() reuses the cached
+        # atoms.get_forces()/get_stress(), so no extra CHGNet evaluation.
+        self.force_source = force_source if force_source is not None else atoms
         self.fmax = fmax
         self.max_steps = max_steps
         self.deadline = deadline
@@ -2565,17 +2571,25 @@ class RelaxationWatcher:
 
     def __call__(self):
         self.step += 1
-        max_force = float(np.linalg.norm(self.atoms.get_forces(), axis=1).max())
+        max_force = float(np.linalg.norm(self.force_source.get_forces(), axis=1).max())
         if self.progress_slot is not None:
+            energy = float(self.atoms.get_potential_energy())
             # Plain dict assignment is atomic under the GIL, so the executor
             # thread (writer) and the event loop (reader, via the progress
-            # polling/SSE endpoint) need no lock between them.
+            # polling/SSE endpoint) need no lock between them. "history" is
+            # append-only, so a reader that remembers how many entries it
+            # has already sent can safely slice off the rest.
+            self.progress_slot.setdefault("history", []).append(_sanitize_json_value({
+                "step": self.step,
+                "energy_eV": energy,
+                "max_force_eV_per_A": max_force,
+            }))
             self.progress_slot["state"] = _sanitize_json_value({
                 "step": self.step,
                 "max_steps": self.max_steps,
                 "max_force_eV_per_A": max_force,
                 "fmax": self.fmax,
-                "energy_eV": float(self.atoms.get_potential_energy()),
+                "energy_eV": energy,
                 "elapsed_s": time.monotonic() - self.started_at,
             })
         if time.monotonic() > self.deadline:
@@ -2623,9 +2637,9 @@ def run_relaxation(calculator, structure, *, fmax, steps, optimizer_name,
     atoms.calc = calculator
 
     obs = TrajectoryRecorder(atoms)
-    watcher = RelaxationWatcher(atoms, fmax, steps, deadline, progress_slot)
-
     target = FrechetCellFilter(atoms) if relax_cell else atoms
+    watcher = RelaxationWatcher(atoms, fmax, steps, deadline, progress_slot,
+                                force_source=target)
     optimizer = optimizers[optimizer_name](target, logfile=None)
     optimizer.attach(obs, interval=1)
     optimizer.attach(watcher, interval=1)
@@ -3026,6 +3040,11 @@ async def chgnet_relax_structure(request: dict):
                 "optimizer": optimizer_name,
                 "aborted": aborted,
                 "abort_reason": "timeout" if aborted else None,
+                # Complete per-step history for the live charts: the SSE
+                # stream can end (slot removed) or be closed by the client
+                # before the last steps are delivered, so the response
+                # carries the authoritative list.
+                "progress_history": list(progress_slot.get("history", [])),
             }
 
             # Calculate structure properties once to avoid redundancy
@@ -3184,6 +3203,15 @@ async def chgnet_relax_structure(request: dict):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Internal server error")
 
+def _new_history_points(slot: dict, sent: int) -> list:
+    """Return the history entries of a progress slot beyond the first `sent`.
+
+    The watcher only ever appends, so slicing from a per-connection index
+    yields exactly the points this client has not seen yet (the 0.5 s SSE
+    poll would otherwise drop every intermediate optimizer step).
+    """
+    return list(slot.get("history", ())[sent:])
+
 @app.get("/api/relax-progress/{session_id}")
 async def stream_relax_progress(session_id: str):
     """Server-sent events for an in-flight relaxation.
@@ -3196,12 +3224,23 @@ async def stream_relax_progress(session_id: str):
     """
     async def events():
         last = None
+        sent = 0  # history entries already sent to THIS client
+        slot = None
         while session_id in _relax_progress:
-            state = _relax_progress[session_id].get("state")
-            if state is not None and state != last:
+            slot = _relax_progress[session_id]
+            state = slot.get("state")
+            new_points = _new_history_points(slot, sent)
+            if state is not None and (state != last or new_points):
                 last = state
-                yield f"data: {json.dumps(state)}\n\n"
+                sent += len(new_points)
+                yield f"data: {json.dumps({**state, 'history': new_points})}\n\n"
             await asyncio.sleep(0.5)
+        # The slot is removed as soon as the relaxation finishes; flush the
+        # steps published since the last poll before signalling completion.
+        if slot is not None and slot.get("state") is not None:
+            tail = _new_history_points(slot, sent)
+            if tail:
+                yield f"data: {json.dumps({**slot['state'], 'history': tail})}\n\n"
         yield 'data: {"done": true}\n\n'
 
     return StreamingResponse(events(), media_type="text/event-stream",
