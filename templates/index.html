@@ -842,7 +842,18 @@
         // functions this replaces). Does NOT replace supercell_info
         // wholesale: `size` and `scaling_factor` are set once at supercell
         // creation and are not echoed by this endpoint.
+        // Hide and clear the live relax charts. Called when the structure is
+        // replaced/loaded or an Auto run starts; NOT after a relax finishes
+        // (the final charts must stay visible).
+        function hideRelaxCharts() {
+            const el = document.getElementById('relax-charts');
+            if (el) el.style.display = 'none';
+            if (window.relaxEnergyChart) window.relaxEnergyChart.reset();
+            if (window.relaxForceChart) window.relaxForceChart.reset();
+        }
+
         function applyServerStructureState(result) {
+            hideRelaxCharts();
             window.currentLabels = result.labels;
             const info = window.currentStructureData.supercell_info;
             info.formula = result.formula;
@@ -2639,6 +2650,7 @@ Crystal system: ${data.crystal_system}`;
             displayBonds = true;     // Initial state ON
             currentStructureCif = null;
             structureGeneration++;
+            hideRelaxCharts();
             dlog(`   State reset - UnitCell: ${displayUnitCell}, Axes: ${displayAxes}, Bonds: ${displayBonds}`);
             syncButtonStates();
         }
@@ -3173,6 +3185,7 @@ Crystal system: ${data.crystal_system}`;
 
                 // Initialize current working data (will be modified by operations)
                 window.currentStructureData = JSON.parse(JSON.stringify(window.originalSupercellData));
+                hideRelaxCharts();
 
                 // Store filename and supercell size for 3D visualization
                 // Use currentFullPath to preserve complete path for API calls
@@ -3870,6 +3883,7 @@ Crystal system: ${data.crystal_system}`;
                     return { success: false, message: "No potential insertion sites found." };
                 }
 
+                hideRelaxCharts();
                 if (window.autoModeChart) {
                     window.autoModeChart.reset(voids.length);
                 }
@@ -5116,7 +5130,8 @@ Crystal system: ${data.crystal_system}`;
                 multiplicity
             };
 
-            // Reset Chart
+            // Reset Chart (Auto run start: hide the leftover relax charts)
+            hideRelaxCharts();
             if (window.autoModeChart) {
                 window.autoModeChart.reset(targetAtomsReduced.length);
             }
@@ -5608,6 +5623,7 @@ Crystal system: ${data.crystal_system}`;
                 // against the pre-reset structure discards its result.
                 currentStructureCif = null;
                 structureGeneration++;
+                hideRelaxCharts();
 
                 // The structure is being reset to its original state, so any
                 // previous relaxed-structure info/analysis data no longer
@@ -5678,6 +5694,7 @@ Crystal system: ${data.crystal_system}`;
                     // See the matching comment in the success path above.
                     currentStructureCif = null;
                     structureGeneration++;
+                    hideRelaxCharts();
                     window.currentStructureData = JSON.parse(JSON.stringify(window.originalSupercellData));
                     window.currentLabels = [...window.originalLabels];
                     displaySupercellInfo();
@@ -6542,6 +6559,7 @@ Crystal system: ${data.crystal_system}`;
             }
             currentStructureCif = null;
             structureGeneration++;
+            hideRelaxCharts();
 
             // Clear global variables
             window.currentFilename = null;

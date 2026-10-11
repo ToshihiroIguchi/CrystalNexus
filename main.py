@@ -2457,8 +2457,12 @@ def _get_device_info():
 
 def evaluate_convergence(trajectory, fmax):
     """
-    Evaluate convergence based on CHGNet trajectory final step only.
-    Simplified version for improved performance and reduced logging.
+    Evaluate convergence from the final trajectory step only.
+
+    Uses the recorder's max_forces (the force the optimizer/watcher use: with
+    relax_cell=True this includes FrechetCellFilter cell-stress terms). Falls
+    back to atomic forces for trajectories without max_forces (fixed-cell
+    behavior is identical either way).
     """
     import numpy as np
     
@@ -2467,8 +2471,12 @@ def evaluate_convergence(trajectory, fmax):
         return False
     
     # Check final step only - simplified approach
-    final_forces = np.array(trajectory.forces[-1])
-    max_force = np.linalg.norm(final_forces, axis=1).max()
+    recorded = getattr(trajectory, 'max_forces', None)
+    if recorded is not None and len(recorded) > 0:
+        max_force = float(recorded[-1])
+    else:
+        final_forces = np.array(trajectory.forces[-1])
+        max_force = np.linalg.norm(final_forces, axis=1).max()
     
     converged = max_force < fmax
     logger.info(f"Convergence check: max_force={max_force:.4f} eV/A, fmax={fmax}, converged={converged}")
@@ -2493,8 +2501,14 @@ class TrajectoryRecorder:
     (main.py) can consume it unchanged.
     """
 
-    def __init__(self, atoms):
+    def __init__(self, atoms, force_source=None):
         self.atoms = atoms
+        # Same object the optimizer/watcher judge convergence with: the
+        # FrechetCellFilter when relax_cell=True, else the Atoms itself.
+        self.force_source = force_source if force_source is not None else atoms
+        # Per-frame max force norm of force_source (includes cell stress
+        # rows when relax_cell=True); used by evaluate_convergence().
+        self.max_forces = []
         self.energies = []
         self.forces = []
         self.stresses = []
@@ -2505,6 +2519,7 @@ class TrajectoryRecorder:
     def __call__(self):
         self.energies.append(float(self.atoms.get_potential_energy()))
         self.forces.append(self.atoms.get_forces())
+        self.max_forces.append(float(np.linalg.norm(self.force_source.get_forces(), axis=1).max()))
         try:
             self.stresses.append(self.atoms.get_stress())
         except Exception:
@@ -2613,8 +2628,7 @@ def run_relaxation(calculator, structure, *, fmax, steps, optimizer_name,
         ase_converged: bool, ASE's own verdict from optimizer.run(). With
             relax_cell=True this is computed on the FrechetCellFilter's
             extended force array (atomic forces + cell stress terms), which
-            can disagree with evaluate_convergence()'s atomic-forces-only
-            check.
+            now agree with evaluate_convergence(), which uses the same force.
         optimizer_steps: int, optimizer.get_number_of_steps() -- exact,
             unlike the old len(trajectory) - 2 approximation.
         aborted: bool, True if the wall-clock deadline was hit first.
@@ -2636,8 +2650,8 @@ def run_relaxation(calculator, structure, *, fmax, steps, optimizer_name,
     atoms = AseAtomsAdaptor().get_atoms(structure)
     atoms.calc = calculator
 
-    obs = TrajectoryRecorder(atoms)
     target = FrechetCellFilter(atoms) if relax_cell else atoms
+    obs = TrajectoryRecorder(atoms, force_source=target)
     watcher = RelaxationWatcher(atoms, fmax, steps, deadline, progress_slot,
                                 force_source=target)
     optimizer = optimizers[optimizer_name](target, logfile=None)
@@ -3002,21 +3016,21 @@ async def chgnet_relax_structure(request: dict):
                 energy_diff = final_results["total_energy_eV"] - initial_results["total_energy_eV"]
                 energy_diff_per_atom = final_results["energy_eV_per_atom"] - initial_results["energy_eV_per_atom"]
 
-            # Extract relaxation information. "converged" keeps its original
-            # meaning (max atomic force < fmax) so the CIF header and the
-            # analytics history stay comparable across versions.
-            # "converged_optimizer" is ASE's own verdict from run_relaxation():
-            # with relax_cell=True it additionally requires the
-            # FrechetCellFilter's cell-stress terms to be below fmax, so it
-            # can disagree with "converged" (see run_relaxation docstring).
+            # Extract relaxation information. "converged" uses the same max
+            # force as the optimizer/watcher (FrechetCellFilter forces when
+            # relax_cell=True, atomic forces otherwise) from the final step.
+            # "converged_optimizer" is ASE's own verdict from run_relaxation().
             steps = len(trajectory) if trajectory else 0
 
             converged = evaluate_convergence(trajectory, fmax)
 
             # Log convergence evaluation details using consistent force calculation method
             if trajectory and hasattr(trajectory, 'forces') and len(trajectory.forces) > 0:
-                final_forces_array = np.array(trajectory.forces[-1])
-                max_final_force = np.linalg.norm(final_forces_array, axis=1).max()
+                recorded_mf = getattr(trajectory, 'max_forces', None)
+                if recorded_mf is not None and len(recorded_mf) > 0:
+                    max_final_force = float(recorded_mf[-1])
+                else:
+                    max_final_force = np.linalg.norm(np.array(trajectory.forces[-1]), axis=1).max()
                 logger.info(f"Convergence evaluation: max_force={max_final_force:.6f} eV/A, fmax={fmax}, converged={converged}")
             else:
                 logger.info(f"Convergence evaluation: no force data available, converged={converged}")

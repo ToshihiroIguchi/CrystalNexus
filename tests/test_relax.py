@@ -462,3 +462,26 @@ def test_run_relaxation_aborts_when_timeout_already_exhausted():
                                  timeout_s=-1.0, relax_cell=False)
     assert result["aborted"] is True
     assert result["final_structure"] is not None
+
+
+def test_evaluate_convergence_uses_recorded_max_force_with_cell_filter():
+    # Atomic forces are below fmax but the cell-filter force (recorded
+    # max_forces) is not: the reported flag must follow the latter.
+    trajectory = SimpleNamespace(forces=[np.array([[0.01, 0, 0]])], max_forces=[0.5])
+    assert evaluate_convergence(trajectory, fmax=0.1) is False
+    trajectory = SimpleNamespace(forces=[np.array([[1.0, 0, 0]])], max_forces=[0.01])
+    assert evaluate_convergence(trajectory, fmax=0.1) is True
+
+
+def test_trajectory_recorder_records_force_source_max_force():
+    from main import TrajectoryRecorder
+    from ase import Atoms
+    from ase.calculators.lj import LennardJones
+    from ase.filters import FrechetCellFilter
+    atoms = Atoms("Ar2", positions=[[0, 0, 0], [0, 0, 4.0]], cell=[10, 10, 10], pbc=True)
+    atoms.calc = LennardJones()
+    atoms.get_magnetic_moments = lambda: np.zeros(len(atoms))  # LJ has no magmoms
+    rec = TrajectoryRecorder(atoms, force_source=FrechetCellFilter(atoms))
+    rec()
+    expected = float(np.linalg.norm(FrechetCellFilter(atoms).get_forces(), axis=1).max())
+    assert rec.max_forces == [expected]
