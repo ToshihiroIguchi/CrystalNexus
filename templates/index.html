@@ -2805,9 +2805,16 @@ Crystal system: ${data.crystal_system}`;
 
                     if (data.relaxation_info?.aborted) {
                         showNotification('Relaxation hit the time limit; showing the best structure found so far.', 'warning');
-                    } else if (data.relaxation_info?.converged === false &&
+                    } else if (data.relaxation_info?.converged_optimizer === false &&
                                (data.relaxation_info?.optimizer_steps ?? data.relaxation_info?.steps) === data.relaxation_info?.max_steps) {
-                        showNotification('Reached the step limit without converging; try increasing Max steps in Advanced Settings.', 'warning');
+                        // "converged" only checks atomic forces; the optimizer
+                        // verdict also covers cell stress, so atoms can be
+                        // converged while the cell is not.
+                        if (data.relaxation_info?.converged) {
+                            showNotification('Reached the step limit: atomic forces converged but cell stress did not; try increasing Max steps in Advanced Settings.', 'warning');
+                        } else {
+                            showNotification('Reached the step limit without converging; try increasing Max steps in Advanced Settings.', 'warning');
+                        }
                     }
                 } finally {
                     progressSource.close();
@@ -4426,8 +4433,8 @@ Crystal system: ${data.crystal_system}`;
                     // evaluation order -- bestCand is the sorted-first entry,
                     // and bestIndex is where it actually sits in the
                     // (unsorted) evaluation-order array, used below so the
-                    // reported "Site N" matches the candidate that was
-                    // actually picked instead of always saying "Site 1".
+                    // reported label matches the candidate that was
+                    // actually picked instead of a renumbered position.
                     const bestCand = [...window.insertionCandidates].sort((a, b) => a.energy - b.energy)[0];
 
                     if (typeof bestCand.energy !== 'number') {
@@ -4449,13 +4456,13 @@ Crystal system: ${data.crystal_system}`;
                     // Transform insertion candidates into the format expected by showExecutionComplete
                     const formattedResults = {
                         successful: evaluatedCandidates.map((c, i) => ({
-                            atom: `Site ${i + 1}`,
+                            atom: c.label,
                             energy: c.energy,
                             index: i,
                             attempts: 1
                         })),
                         bestResult: {
-                            atom: `Site ${bestIndex + 1}`,
+                            atom: bestCand.label,
                             energy: bestCand.energy,
                             unit: 'eV',
                             index: bestIndex
@@ -4463,11 +4470,11 @@ Crystal system: ${data.crystal_system}`;
                     };
 
                     if (applied) {
-                        showExecutionComplete(`Insertion Completed. Best: Site ${bestIndex + 1} (${bestCand.energy.toFixed(4)} eV)`, formattedResults);
+                        showExecutionComplete(`Insertion Completed. Best: ${bestCand.label} (${bestCand.energy.toFixed(4)} eV)`, formattedResults);
                     } else {
                         // handleInsertion already showed the error notification --
                         // avoid a duplicate here, just reflect the failure.
-                        showExecutionComplete(`Insertion failed: could not apply Site ${bestIndex + 1}`, formattedResults);
+                        showExecutionComplete(`Insertion failed: could not apply ${bestCand.label}`, formattedResults);
                     }
 
                 } else {
@@ -4935,6 +4942,26 @@ Crystal system: ${data.crystal_system}`;
                 return;
             }
 
+            // Capture the structure generation this sweep started against, so
+            // a batch that resolves after a Manual edit/Reset/new CIF load
+            // changed the structure underneath it can be discarded instead of
+            // applying an operation indexed against a structure that no
+            // longer exists. Taken before the equivalent-sites await below so
+            // a change during that request is detected too.
+            const generationAtStart = structureGeneration;
+
+            // Create the controller for this run up front, before any await,
+            // so Reset/Cancel work immediately (including during the
+            // equivalent-sites request) and the Execute button is locked
+            // against a double start. Abort any still-running previous
+            // sweep first so its `finally` block can't null out *this* run's
+            // controller out from under it.
+            if (currentAbortController) currentAbortController.abort();
+            const controller = new AbortController();
+            currentAbortController = controller;
+
+            setExecuteButtonState('processing', '⏳ Preparing...');
+
             // Reduce targetAtoms to one representative per symmetry-equivalent
             // group (via /api/equivalent-sites) so the sweep below doesn't
             // waste CHGNet evaluations on candidates guaranteed to produce
@@ -4951,7 +4978,8 @@ Crystal system: ${data.crystal_system}`;
                     const eqResponse = await fetch('/api/equivalent-sites', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ session_id: window.sessionId, element: elementType })
+                        body: JSON.stringify({ session_id: window.sessionId, element: elementType }),
+                        signal: controller.signal
                     });
 
                     if (eqResponse.ok) {
@@ -4982,6 +5010,14 @@ Crystal system: ${data.crystal_system}`;
                 } catch (err) {
                     console.warn('Equivalent-sites lookup failed; using full atom list', err);
                 }
+            }
+
+            // Reset/Cancel or a structure edit during the request above:
+            // abandon the sweep instead of continuing against stale state.
+            if (controller.signal.aborted || structureGeneration !== generationAtStart) {
+                if (currentAbortController === controller) currentAbortController = null;
+                setExecuteButtonState('complete');
+                return;
             }
 
             // Single representative case: skip optimization and execute
@@ -5017,6 +5053,7 @@ Crystal system: ${data.crystal_system}`;
                     console.error(`Direct ${actionLabel} failed:`, error);
                     showNotification(`Direct ${actionLabel} failed`, 'error');
                 } finally {
+                    if (currentAbortController === controller) currentAbortController = null;
                     setExecuteButtonState('complete');
                 }
 
@@ -5041,25 +5078,10 @@ Crystal system: ${data.crystal_system}`;
                 multiplicity
             };
 
-            // Capture the structure generation this sweep started against, so
-            // a batch that resolves after a Manual edit/Reset/new CIF load
-            // changed the structure underneath it can be discarded instead of
-            // applying an operation indexed against a structure that no
-            // longer exists.
-            const generationAtStart = structureGeneration;
-
             // Reset Chart
             if (window.autoModeChart) {
                 window.autoModeChart.reset(targetAtomsReduced.length);
             }
-
-            // Create the controller for this run up front, before any await,
-            // so Cancel works immediately. Abort any still-running previous
-            // sweep first so its `finally` block can't null out *this* run's
-            // controller out from under it.
-            if (currentAbortController) currentAbortController.abort();
-            const controller = new AbortController();
-            currentAbortController = controller;
 
             // A separate controller for the sweep-wide timeout, chained to
             // the user's controller, so "user cancelled" can be told apart

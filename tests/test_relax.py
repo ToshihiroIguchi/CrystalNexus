@@ -364,3 +364,66 @@ def test_relax_timeout_returns_partial_result(client, monkeypatch):
 
     session_info = session_manager.get_session_info(session_id)
     assert "relaxed_structure" in session_info
+
+
+# ---------------------------------------------------------------------------
+# Symmetry-analysis failure after relaxation / deadline start
+# ---------------------------------------------------------------------------
+
+def test_relax_survives_spacegroup_analyzer_failure(client, monkeypatch):
+    """A spglib failure on the relaxed structure must not discard the
+    relaxation: the endpoint still returns 200 (symmetry fields None) and
+    the relaxed structure is saved to the session."""
+    structure = _cu_structure()
+    session_id = _create_session(structure)
+
+    async def _fake_calculator():
+        return object()
+
+    def _fake_run_relaxation(calculator, structure, **kwargs):
+        n = len(structure)
+
+        class _Trajectory(SimpleNamespace):
+            def __len__(self):
+                return len(self.energies)
+
+        trajectory = _Trajectory(forces=[np.zeros((n, 3))], energies=[0.0],
+                                 stresses=[], atom_positions=[], cells=[])
+        return {"final_structure": structure.copy(), "trajectory": trajectory,
+                "ase_converged": True, "optimizer_steps": 1, "aborted": False}
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("spglib failure")
+
+    monkeypatch.setattr(main.chgnet_manager, "get_calculator", _fake_calculator)
+    monkeypatch.setattr(main, "run_relaxation", _fake_run_relaxation)
+    monkeypatch.setattr("pymatgen.symmetry.analyzer.SpacegroupAnalyzer", _boom)
+
+    response = client.post("/api/chgnet-relax", json={
+        "session_id": session_id, "fmax": 0.1, "max_steps": 10,
+    })
+    assert response.status_code == 200
+    info = response.json()["relaxed_structure_info"]
+    for key in ("space_group", "space_group_number", "point_group", "crystal_system"):
+        assert info[key] is None
+    assert "relaxed_structure" in session_manager.get_session_info(session_id)
+
+
+def test_run_relaxation_aborts_when_timeout_already_exhausted():
+    """The deadline is computed inside run_relaxation from timeout_s, so a
+    non-positive timeout aborts at the first observer call."""
+    from ase.calculators.emt import EMT
+
+    class _EMTWithMagmoms(EMT):
+        # TrajectoryRecorder reads magnetic moments, which plain EMT lacks.
+        implemented_properties = EMT.implemented_properties + ["magmoms"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=None):
+            super().calculate(atoms, properties, system_changes or [])
+            self.results["magmoms"] = np.zeros(len(atoms))
+
+    result = main.run_relaxation(_EMTWithMagmoms(), _cu_structure(supercell=(2, 2, 2)),
+                                 fmax=0.001, steps=50, optimizer_name="FIRE",
+                                 timeout_s=-1.0, relax_cell=False)
+    assert result["aborted"] is True
+    assert result["final_structure"] is not None
