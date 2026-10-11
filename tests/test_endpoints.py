@@ -417,7 +417,7 @@ def test_insert_then_substitute_inserted_atom(client):
     response = client.post("/api/apply-atomic-operations", json={
         "session_id": session_id,
         "operations": [
-            {"action": "insert", "to": "Li", "coords": [0.5, 0.5, 0.5]},
+            {"action": "insert", "to": "Li", "coords": [0.125, 0.125, 0.125]},
             {"action": "substitute", "index": num_sites, "to": "Na"},
         ],
     })
@@ -1612,3 +1612,54 @@ def test_apply_operations_to_structure_skips_same_element_non_strict(sample_cif_
     assert len(skipped) == 1
     assert "same element" in skipped[0].lower()
     assert structure[0].specie == original_specie  # untouched
+
+
+# ---------------------------------------------------------------------------
+# Insert overlap rejection (apply_operations_to_structure)
+# ---------------------------------------------------------------------------
+
+def _cu_cell(sample_cif_dir):
+    structure = Structure.from_file(sample_cif_dir / "Metals" / "Cu.cif")
+    structure.make_supercell((1, 1, 1))
+    return structure
+
+
+def test_apply_operations_insert_on_top_of_atom_rejected_strict(sample_cif_dir):
+    structure = _cu_cell(sample_cif_dir)
+    n_before = len(structure)
+    coords = [float(c) for c in structure[0].frac_coords]
+
+    with pytest.raises(ValueError, match="closer than"):
+        apply_operations_to_structure(
+            structure, [{"action": "insert", "to": "H", "coords": coords}], strict_mode=True)
+    assert len(structure) == n_before
+
+
+def test_apply_operations_insert_overlap_via_periodic_image_skipped_non_strict(sample_cif_dir):
+    structure = _cu_cell(sample_cif_dir)
+    n_before = len(structure)
+    # Shift by a full lattice vector (wrapped), so only the periodic image
+    # of an existing atom is nearby.
+    coords = [float(c) + 1.0 for c in structure[0].frac_coords]
+
+    applied, skipped, _ = apply_operations_to_structure(
+        structure, [{"action": "insert", "to": "H", "coords": coords}], strict_mode=False)
+
+    assert applied == 0
+    assert len(skipped) == 1
+    assert len(structure) == n_before
+
+
+def test_apply_operations_insert_at_safe_distance_accepted():
+    # Place ~0.9 A from the only atom of an isolated cell: above
+    # MIN_INSERT_DISTANCE, and no other atom is nearer.
+    from pymatgen.core import Lattice
+    lone = Structure(Lattice.cubic(10.0), ["Cu"], [[0.0, 0.0, 0.0]])
+    coords = [0.09, 0.0, 0.0]  # 0.9 A
+
+    applied, skipped, _ = apply_operations_to_structure(
+        lone, [{"action": "insert", "to": "H", "coords": coords}], strict_mode=True)
+
+    assert applied == 1
+    assert skipped == []
+    assert len(lone) == 2

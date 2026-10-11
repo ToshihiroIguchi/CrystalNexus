@@ -202,6 +202,9 @@ MAX_RELAX_ATOMS = int(os.getenv('MAX_RELAX_ATOMS', '400'))
 # screening endpoints, and the insertion-void search) is comparably
 # expensive to relaxation per structure, so it shares the same cap.
 MAX_PREDICT_ATOMS = MAX_RELAX_ATOMS
+# Minimum distance (A, periodic) between an inserted atom and any existing
+# atom. Below the candidate generator's min_dist=0.9 so UI candidates pass.
+MIN_INSERT_DISTANCE = 0.5
 RELAX_TIMEOUT_SECONDS = float(os.getenv('RELAX_TIMEOUT_SECONDS', '600'))
 
 # Initialize once as global variable
@@ -578,6 +581,18 @@ def apply_operations_to_structure(structure: Structure, operations: List[dict],
         elif action == "insert":
             new_element = validate_element(operation["to"])
             frac_coords = [float(c) % 1.0 for c in operation["coords"]]
+            # Defense in depth: the UI only sends vetted candidates, but a
+            # direct API call could drop an atom on top of an existing one.
+            # get_sites_in_sphere accounts for periodic images.
+            cart_coords = structure.lattice.get_cartesian_coords(frac_coords)
+            if structure.get_sites_in_sphere(cart_coords, MIN_INSERT_DISTANCE):
+                message = (f"Operation {i + 1}: cannot insert {new_element} at "
+                           f"{frac_coords}; closer than {MIN_INSERT_DISTANCE} A "
+                           f"to an existing atom")
+                if strict_mode:
+                    raise ValueError(message)
+                skipped.append(message)
+                continue
             structure.append(Element(new_element), frac_coords)
             logger.info(f"Inserted {new_element} at {frac_coords}")
 
@@ -2568,7 +2583,7 @@ class RelaxationWatcher:
 
 
 def run_relaxation(calculator, structure, *, fmax, steps, optimizer_name,
-                    deadline, relax_cell=True, progress_slot=None):
+                    timeout_s, relax_cell=True, progress_slot=None):
     """Run an ASE relaxation with full control over observers and stopping.
 
     Reimplements chgnet.model.dynamics.StructOptimizer.relax (which this
@@ -2599,6 +2614,10 @@ def run_relaxation(calculator, structure, *, fmax, steps, optimizer_name,
     if optimizer_name not in optimizers:
         raise ValueError(f"Unknown optimizer {optimizer_name!r}; "
                          f"must be one of {sorted(optimizers)}")
+
+    # Start the clock here (on the executor thread) rather than at submit
+    # time, so time spent queued behind other inference jobs is not counted.
+    deadline = time.monotonic() + timeout_s
 
     atoms = AseAtomsAdaptor().get_atoms(structure)
     atoms.calc = calculator
@@ -2922,7 +2941,6 @@ async def chgnet_relax_structure(request: dict):
 
             # CHGNet structure relaxation
             logger.info(f"Starting CHGNet relaxation: fmax={fmax}, max_steps={max_steps}, optimizer={optimizer_name}")
-            deadline = time.monotonic() + RELAX_TIMEOUT_SECONDS
             progress_slot = _relax_progress.setdefault(session_id, {})
             progress_slot.clear()
             try:
@@ -2931,7 +2949,8 @@ async def chgnet_relax_structure(request: dict):
                     functools.partial(run_relaxation, calculator, structure,
                                       fmax=fmax, steps=max_steps,
                                       optimizer_name=optimizer_name,
-                                      deadline=deadline, relax_cell=True,
+                                      timeout_s=RELAX_TIMEOUT_SECONDS,
+                                      relax_cell=True,
                                       progress_slot=progress_slot))
             finally:
                 _relax_progress.pop(session_id, None)
@@ -3027,7 +3046,18 @@ async def chgnet_relax_structure(request: dict):
 
             # Generate relaxed structure info
             from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-            analyzer = await asyncio.to_thread(SpacegroupAnalyzer, final_structure)
+            # Symmetry analysis is informational only; a spglib failure must
+            # not discard a relaxation that may have taken minutes.
+            space_group = space_group_number = point_group = crystal_system = None
+            try:
+                analyzer = await asyncio.to_thread(SpacegroupAnalyzer, final_structure)
+                space_group = analyzer.get_space_group_symbol()
+                space_group_number = analyzer.get_space_group_number()
+                point_group = analyzer.get_point_group_symbol()
+                crystal_system = analyzer.get_crystal_system()
+            except Exception as e:
+                logger.warning(f"Symmetry analysis of relaxed structure failed: {e}")
+                space_group = space_group_number = point_group = crystal_system = None
 
             relaxed_structure_info = {
                 "formula": final_formula,
@@ -3042,10 +3072,10 @@ async def chgnet_relax_structure(request: dict):
                     "gamma": float(final_structure.lattice.gamma)
                 },
                 "volume": float(final_structure.lattice.volume),
-                "space_group": analyzer.get_space_group_symbol(),
-                "space_group_number": analyzer.get_space_group_number(),
-                "point_group": analyzer.get_point_group_symbol(),
-                "crystal_system": analyzer.get_crystal_system(),
+                "space_group": space_group,
+                "space_group_number": space_group_number,
+                "point_group": point_group,
+                "crystal_system": crystal_system,
                 "num_sites": len(final_structure.sites)
             }
 
