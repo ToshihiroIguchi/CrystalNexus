@@ -388,7 +388,7 @@ tifffile==2026.9.9
     # via
     #   -c requirements.txt
     #   scikit-image
-torch==2.8.0
+torch==2.14.1
     # via
     #   -c requirements.txt
     #   -r requirements.in
