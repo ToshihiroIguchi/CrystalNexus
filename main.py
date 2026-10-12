@@ -32,139 +32,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# CHGnet import with Windows compatibility
 import platform
 WINDOWS_PLATFORM = platform.system() == "Windows"
 
-try:
-    import torch
-    # Windows-specific NumPy/PyTorch compatibility settings
-    if WINDOWS_PLATFORM:
-        import numpy as np
-        # Set NumPy to use compatible dtypes for Windows
-        os.environ["NPY_NO_DEPRECATED_API"] = "NPY_1_7_API_VERSION"
-        # Ensure PyTorch uses CPU on Windows to avoid CUDA issues
-        torch.set_default_dtype(torch.float32)
-        logger.info("Windows platform detected - applied compatibility settings")
-    
-    from chgnet.model import CHGNet
-    CHGNET_AVAILABLE = True
-    logger.info(f"CHGNet successfully loaded (Platform: {platform.system()})")
-except ImportError:
-    CHGNET_AVAILABLE = False
-    logger.warning(f"CHGNet not available on {platform.system()}: Install with: pip install chgnet")
-except Exception as e:
-    CHGNET_AVAILABLE = False
-    if WINDOWS_PLATFORM and "Buffer dtype mismatch" in str(e):
-        logger.error(f"Windows CHGNet compatibility issue detected: {e}")
-        logger.error("Solution: Install Microsoft Visual C++ Redistributable")
-    else:
-        logger.error(f"CHGNet loading error: {e}")
-
-def get_chgnet_supported_elements() -> Set[str]:
-    """
-    Dynamically retrieve supported elements from CHGNet
-    With fallback mechanism
-    """
-    if not CHGNET_AVAILABLE:
-        logger.warning("CHGNet not available, using fallback element list")
-        return _get_fallback_elements()
-    
-    try:
-        # Method 1: Try direct retrieval from CHGNet model
-        supported_elements = _get_elements_from_chgnet()
-        if supported_elements:
-            logger.info(f"Retrieved {len(supported_elements)} elements from CHGNet")
-            return supported_elements
-            
-    except Exception as e:
-        logger.warning(f"Failed to get elements from CHGNet: {e}")
-    
-    try:
-        # Method 2: Get safe range from pymatgen periodic table
-        supported_elements = _get_elements_from_periodic_table()
-        if supported_elements:
-            logger.info(f"Using periodic table range: {len(supported_elements)} elements")
-            return supported_elements
-            
-    except Exception as e:
-        logger.error(f"Failed to get elements from periodic table: {e}")
-    
-    # Method 3: Final fallback
-    logger.warning("Using hardcoded fallback element list")
-    return _get_fallback_elements()
-
-def _get_elements_from_chgnet() -> Optional[Set[str]]:
-    """Get element list supported by CHGNet (atomic-number range with exclusions)"""
-    try:
-        # Note: no model load needed here; the supported set is derived from the
-        # known CHGNet atomic-number range, avoiding a redundant CHGNet.load().
-        supported_elements = set()
-        for z in range(1, MAX_ATOMIC_NUMBER + 1):
-            try:
-                element = Element.from_Z(z)
-                # Exclude noble gases and actinoids (based on CHGNet characteristics)
-                if z not in [2, 10, 18, 36, 54, 86] and z <= 92:  # He, Ne, Ar, Kr, Xe, Rn, exclude U and beyond
-                    supported_elements.add(element.symbol)
-            except (ValueError, AttributeError):
-                continue
-
-        return supported_elements if supported_elements else None
-
-    except Exception as e:
-        logger.debug(f"Direct CHGNet element extraction failed: {e}")
-        return None
-
-def _get_elements_from_periodic_table() -> Optional[Set[str]]:
-    """Get valid element range from pymatgen periodic table"""
-    try:
-        supported_elements = set()
-        
-        # Range generally supported by Materials Project/CHGNet
-        # Atomic numbers 1-92 (up to U, excluding some noble gases and radioactive elements)
-        excluded_elements = {
-            # Noble gases
-            'He', 'Ne', 'Ar', 'Kr', 'Xe', 'Rn',
-            # Some actinoids (low stability)
-            'Np', 'Pu', 'Am', 'Cm', 'Bk', 'Cf', 'Es', 'Fm', 'Md', 'No', 'Lr'
-        }
-        
-        for z in range(1, 93):  # 1-92 (H to U)
-            try:
-                element = Element.from_Z(z)
-                if element.symbol not in excluded_elements:
-                    supported_elements.add(element.symbol)
-            except (ValueError, AttributeError):
-                continue
-                
-        return supported_elements if len(supported_elements) > MIN_SUPPORTED_ELEMENTS else None
-        
-    except Exception:
-        return None
-
-def _get_fallback_elements() -> Set[str]:
-    """
-    Final fallback: only reliably supported elements
-    Safe element list frequently used in Materials Project
-    """
-    return {
-        # Periods 1-2
-        'H', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F',
-        # Period 3
-        'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl',
-        # Period 4
-        'K', 'Ca', 'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn',
-        'Ga', 'Ge', 'As', 'Se', 'Br',
-        # Period 5
-        'Rb', 'Sr', 'Y', 'Zr', 'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd',
-        'In', 'Sn', 'Sb', 'Te', 'I',
-        # Period 6 (main)
-        'Cs', 'Ba', 'La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy',
-        'Ho', 'Er', 'Tm', 'Yb', 'Lu', 'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt',
-        'Au', 'Hg', 'Tl', 'Pb', 'Bi',
-        # Period 7 (stable)
-        'Th', 'U'
-    }
+# MLIP backends (CHGNet today). Importing the registry also performs the
+# CHGNet import and the Windows torch compatibility setup.
+from mlip import (MODEL_REGISTRY, MLIPError, ModelUnavailableError,
+                  UnknownModelError, get_backend)
+from mlip.chgnet_backend import CHGNET_AVAILABLE, CHGNetBackend
+from mlip.executor import inference_executor as _inference_executor
 
 # Configuration constants - must be defined before use
 # Memory management settings
@@ -173,7 +49,6 @@ PERIODIC_CLEANUP_INTERVAL = int(os.getenv('PERIODIC_CLEANUP_INTERVAL', '1800')) 
 # How long to keep analytics_db rows (visitor IP/User-Agent history,
 # uploaded filenames/formulas). Nothing previously bounded this at all.
 ANALYTICS_RETENTION_DAYS = int(os.getenv('ANALYTICS_RETENTION_DAYS', '90'))
-CHGNET_BATCH_SIZE = int(os.getenv('CHGNET_BATCH_SIZE', '4'))
 
 # Atom insertion settings
 MAX_VOID_CANDIDATES = int(os.getenv('MAX_VOID_CANDIDATES', '50'))
@@ -181,10 +56,6 @@ MAX_INSERTION_BATCH = int(os.getenv('MAX_INSERTION_BATCH', '8'))
 
 # Atom substitution/deletion Auto-mode settings
 MAX_CANDIDATE_BATCH = int(os.getenv('MAX_CANDIDATE_BATCH', '8'))
-
-# CHGNet model settings
-MAX_ATOMIC_NUMBER = int(os.getenv('MAX_ATOMIC_NUMBER', '94'))
-MIN_SUPPORTED_ELEMENTS = int(os.getenv('MIN_SUPPORTED_ELEMENTS', '50'))
 
 # CHGNet relaxation settings
 # LBFGS reaches the same or a lower energy minimum than FIRE on every
@@ -207,11 +78,21 @@ MAX_PREDICT_ATOMS = MAX_RELAX_ATOMS
 MIN_INSERT_DISTANCE = 0.5
 RELAX_TIMEOUT_SECONDS = float(os.getenv('RELAX_TIMEOUT_SECONDS', '600'))
 # Initialize once as global variable
-ALLOWED_ELEMENTS: Set[str] = get_chgnet_supported_elements()
+def _initial_allowed_elements() -> Set[str]:
+    """Element whitelist from the default backend (falls back to CHGNet's
+    own list, which has its own fallback, if the default is unavailable)."""
+    try:
+        backend = get_backend()
+    except MLIPError:
+        backend = CHGNetBackend()
+    return set(backend.supported_elements())
 
-# Single worker: serializes CHGNet access (model is not thread-safe) while
-# keeping inference off the event loop.
-_inference_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="chgnet")
+
+ALLOWED_ELEMENTS: Set[str] = _initial_allowed_elements()
+
+# The single-worker inference executor lives in mlip.executor (imported above
+# as _inference_executor) so every backend shares ONE executor.
+
 
 # Relaxation can run for minutes; block a second concurrent relaxation
 # immediately with a clear error instead of silently queuing behind the
@@ -221,154 +102,6 @@ _relax_semaphore = asyncio.Semaphore(1)
 # session_id -> {"state": {...}} published by RelaxationWatcher from the
 # executor thread and polled/streamed by GET /api/relax-progress/{id}.
 _relax_progress: Dict[str, dict] = {}
-
-# CHGNet Model Manager (Singleton Pattern)
-class CHGNetModelManager:
-    """
-    Singleton pattern for CHGNet model management with batch processing support
-    Ensures only one model instance is loaded in memory
-    Thread-safe with asyncio.Lock
-    """
-    _instance: Optional['CHGNetModelManager'] = None
-    _model = None
-    _calculator = None
-    _device = "cpu"
-    _lock = asyncio.Lock()
-    batch_size = CHGNET_BATCH_SIZE  # Configurable batch size for CPU processing
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    @property
-    def device(self) -> str:
-        """The device CHGNet is actually running on (always 'cpu' today)."""
-        return self._device
-
-    async def get_model(self):
-        """Get CHGNet model instance (lazy loading)"""
-        if self._model is None:
-            async with self._lock:
-                if self._model is None:  # Double-check locking
-                    await self._load_model()
-        return self._model
-
-    async def get_calculator(self):
-        """Get the shared CHGNetCalculator instance (lazy loading).
-
-        A single calculator is reused across every optimizer choice --
-        switching optimizers (main.py run_relaxation()) is just a different
-        ASE Optimizer wrapped around the same calculator, so there is no
-        need to keep one StructOptimizer per optimizer name.
-        """
-        # Resolved (and, on a cold start, loaded) BEFORE this method takes
-        # its own lock below: get_model() acquires the same self._lock
-        # internally, and asyncio.Lock is not reentrant, so calling it from
-        # inside an already-held `async with self._lock` block here would
-        # deadlock the very first request in a fresh process.
-        model = await self.get_model()
-        if self._calculator is None:
-            async with self._lock:
-                if self._calculator is None:  # Double-check locking
-                    from chgnet.model.dynamics import CHGNetCalculator
-                    self._calculator = CHGNetCalculator(model=model, use_device=self._device)
-                    logger.info("CHGNet calculator created and cached")
-        return self._calculator
-
-    async def _load_model(self):
-        """Internal method to load CHGNet model"""
-        if not CHGNET_AVAILABLE:
-            raise RuntimeError("CHGNet not available")
-
-        try:
-            from chgnet.model.model import CHGNet
-
-            self._model = CHGNet.load(use_device=self._device, verbose=False)
-            logger.info(f"CHGNet model loaded and cached (device={self._device})")
-
-        except Exception as load_error:
-            if WINDOWS_PLATFORM and "Buffer dtype mismatch" in str(load_error):
-                raise RuntimeError("Windows CHGNet compatibility issue. Solution: Install Microsoft Visual C++ Redistributable")
-            else:
-                raise RuntimeError(f"Failed to load CHGNet model: {load_error}")
-                
-    async def predict_structures_batch(self, structures, **kwargs):
-        """
-        Batch prediction of multiple structures for improved performance.
-
-        CHGNet's predict_structure natively accepts a list of structures plus a
-        batch_size argument, so we submit each chunk as a single executor call
-        instead of one call per structure. This matters a lot for the atom
-        insertion energy screening, where many candidate structures differ by
-        only one site.
-
-        Args:
-            structures: List of pymatgen Structure objects
-            **kwargs: Additional arguments for predict_structure
-
-        Returns:
-            List of prediction results (None for entries that failed)
-        """
-        if not structures:
-            return []
-
-        model = await self.get_model()
-        results = []
-
-        # Chunk to bound peak memory; each chunk is one native batched call.
-        for i in range(0, len(structures), self.batch_size):
-            batch = structures[i:i + self.batch_size]
-            try:
-                batch_pred = await asyncio.get_running_loop().run_in_executor(
-                    _inference_executor,
-                    functools.partial(model.predict_structure, batch,
-                                      batch_size=len(batch), **kwargs))
-                # A single-element list can come back as a bare dict rather than
-                # a list of dicts; normalize so downstream code always sees a list.
-                if isinstance(batch_pred, dict):
-                    batch_pred = [batch_pred]
-                if len(batch_pred) != len(batch):
-                    raise ValueError(
-                        f"Batch prediction returned {len(batch_pred)} results "
-                        f"for {len(batch)} structures")
-                results.extend(batch_pred)
-            except Exception as e:
-                logger.warning(f"Native batch prediction failed for chunk starting at {i}, "
-                               f"falling back to per-structure calls: {e}")
-                for structure in batch:
-                    try:
-                        pred = await asyncio.get_running_loop().run_in_executor(
-                            _inference_executor,
-                            functools.partial(model.predict_structure, structure, **kwargs))
-                        results.append(pred)
-                    except Exception as inner_e:
-                        logger.warning(f"Prediction failed for structure {len(results)}: {inner_e}")
-                        results.append(None)
-
-        return results
-    
-    async def predict_single_optimized(self, structure, **kwargs):
-        """
-        Optimized single structure prediction with memory management
-        """
-        model = await self.get_model()
-        
-        # Memory optimization for large structures
-        if len(structure) > 100:
-            # Force garbage collection before large structure prediction
-            import gc
-            gc.collect()
-            logger.debug(f"Garbage collection performed for large structure ({len(structure)} atoms)")
-            
-        try:
-            pred = await asyncio.get_running_loop().run_in_executor(
-                _inference_executor,
-                functools.partial(model.predict_structure, structure, **kwargs))
-            return pred
-        except Exception as e:
-            logger.error(f"Optimized prediction failed: {e}")
-            raise
 
 def validate_atomic_operation(operation, structure_size, operation_index=None):
     """
@@ -633,8 +366,9 @@ def _compute_equivalent_indices(structure: Structure) -> "Optional[List[List[int
         return None
 
 
-# Global model manager instance
-chgnet_manager = CHGNetModelManager()
+# Temporary shim (removed in the rename phase): the CHGNet backend singleton,
+# kept so existing tests can monkeypatch main.chgnet_manager.get_calculator.
+chgnet_manager = CHGNetBackend()
 
 # Background task for periodic cleanup
 async def periodic_cleanup_task():
@@ -2469,28 +2203,41 @@ def calculate_supercell_formula(original_formula: str, scaling_factor: int) -> s
     
     return " ".join(supercell_parts)
 
-def _get_chgnet_version():
-    """Get CHGNet version dynamically"""
-    try:
-        import chgnet
-        return chgnet.__version__
-    except (ImportError, AttributeError):
-        try:
-            # Alternative version detection
-            import pkg_resources
-            return pkg_resources.get_distribution('chgnet').version
-        except Exception:
-            return "unknown"
-
-def _get_device_info():
-    """Report the device CHGNet is actually running on.
+def _get_device_info(backend=None):
+    """Report the device the model is actually running on.
 
     This used to return "cuda:N" whenever torch.cuda.is_available(), while
     the model was unconditionally loaded with use_device="cpu" -- so the
     reported device (shown in the analysis modal) could disagree with
     reality on any CUDA-capable machine. Report what was actually loaded.
     """
-    return chgnet_manager.device or "cpu"
+    return (backend or chgnet_manager).device or "cpu"
+
+
+def _resolve_backend(model_id=None):
+    """Registry lookup mapped to HTTP errors (unknown -> 400, unavailable -> 503)."""
+    try:
+        return get_backend(model_id)
+    except UnknownModelError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ModelUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+# Property sets requested from backends (see mlip.base PROP_* names).
+_PROPS_ENERGY = ("energy",)
+_PROPS_PREDICT = ("energy", "forces", "stress", "magmom", "site_energies")
+_PROPS_RELAX = _PROPS_PREDICT + ("atom_features", "crystal_features")
+
+
+def _prediction_payload(pred: dict) -> dict:
+    """Normalized backend prediction -> response dict.
+
+    Keys the backend did not provide (None) are omitted, which keeps the
+    response structure identical to the pre-abstraction safe_get_prediction().
+    """
+    return {k: v for k, v in pred.items() if v is not None}
+
 
 def evaluate_convergence(trajectory, fmax):
     """
@@ -2531,6 +2278,23 @@ class RelaxationAborted(Exception):
     """
 
 
+def _get_magmoms_or_none(atoms):
+    """Per-atom magnetic moments, or None if the calculator cannot provide them.
+
+    A calculator may *list* "magmoms" in implemented_properties without
+    computing it (ASE's EMT does), so a missing result is tolerated too.
+    """
+    from ase.calculators.calculator import PropertyNotImplementedError
+
+    calculator = atoms.calc
+    if "magmoms" not in (getattr(calculator, "implemented_properties", None) or ()):
+        return None
+    try:
+        return atoms.get_magnetic_moments()
+    except PropertyNotImplementedError:
+        return None
+
+
 class TrajectoryRecorder:
     """Records the same fields as chgnet.model.dynamics.TrajectoryObserver
     (energies, forces, stresses, magmoms, atom_positions, cells) so the
@@ -2561,7 +2325,7 @@ class TrajectoryRecorder:
             self.stresses.append(self.atoms.get_stress())
         except Exception:
             self.stresses.append(None)
-        self.magmoms.append(self.atoms.get_magnetic_moments())
+        self.magmoms.append(_get_magmoms_or_none(self.atoms))
         self.atom_positions.append(self.atoms.get_positions())
         self.cells.append(self.atoms.get_cell()[:])
 
@@ -2707,8 +2471,9 @@ def run_relaxation(calculator, structure, *, fmax, steps, optimizer_name,
         ase_converged = False
 
     final_structure = AseAtomsAdaptor.get_structure(atoms)
-    final_structure.add_site_property(
-        "magmom", [float(m) for m in atoms.get_magnetic_moments()])
+    magmoms = _get_magmoms_or_none(atoms)
+    if magmoms is not None:
+        final_structure.add_site_property("magmom", [float(m) for m in magmoms])
 
     return {
         "final_structure": final_structure,
@@ -2751,64 +2516,6 @@ def _validate_relax_params(request: dict) -> Tuple[float, int, str]:
 
     return fmax, max_steps, optimizer_name
 
-
-def safe_get_prediction(pred, num_atoms=None):
-    """Extract prediction results safely from CHGNet output"""
-    out = {}
-    for k in ("energy", "e", "energy_per_atom", "e_per_atom"):
-        if k in pred:
-            energy_per_atom = float(getattr(pred[k], "item", lambda: pred[k])())
-            out["energy_eV_per_atom"] = energy_per_atom
-            # Convert to total energy if number of atoms is provided
-            if num_atoms is not None:
-                out["total_energy_eV"] = energy_per_atom * num_atoms
-            break
-    for k in ("forces", "f", "force"):
-        if k in pred:
-            arr = pred[k]
-            out["forces_eV_per_A"] = [list(a) for a in arr.tolist()]
-            break
-    for k in ("stress", "s", "virial"):
-        if k in pred:
-            arr = pred[k]
-            out["stress_GPa"] = [list(a) for a in arr.tolist()]
-            break
-    for k in ("magmom", "m", "magmoms"):
-        if k in pred:
-            arr = pred[k]
-            out["magmoms_muB"] = [float(x) for x in arr.tolist()]
-            break
-    # Site energies
-    for k in ("site_energies", "site_energy"):
-        if k in pred:
-            arr = pred[k]
-            out["site_energies_eV"] = [float(x) for x in arr.tolist()]
-            break
-    
-    # Crystal features
-    for k in ("crystal_fea", "crystal_features"):
-        if k in pred:
-            arr = pred[k]
-            out["crystal_features"] = [float(x) for x in arr.tolist()]
-            break
-    
-    # Atom features
-    for k in ("atom_fea", "atom_features"):
-        if k in pred:
-            arr = pred[k]
-            out["atom_features"] = [[float(x) for x in atom] for atom in arr.tolist()]
-            break
-    
-    # Other fields
-    for k, v in pred.items():
-        if k in ("energy", "e", "forces", "f", "stress", "s", "magmom", "m", 
-                 "site_energies", "crystal_fea", "atom_fea"):
-            continue
-        try:
-            out[k] = v.tolist() if hasattr(v, "tolist") else v
-        except (AttributeError, TypeError, ValueError):
-            continue
-    return out
 
 def _load_structure_for_chgnet_predict(session_id: Optional[str], filename: str,
                                         supercell_size: List[int], operations: List[dict]
@@ -2875,23 +2582,16 @@ async def chgnet_predict_structure(request: dict):
             _load_structure_for_chgnet_predict, session_id, filename, supercell_size, operations
         )
 
-        # Load CHGNet model (using singleton pattern)
+        # Load the model (singleton per backend)
+        backend = _resolve_backend()
         try:
-            chgnet = await chgnet_manager.get_model()
+            await backend.load()
         except RuntimeError as e:
             raise HTTPException(status_code=503, detail=str(e))
-        
-        # Predict structure properties using optimized prediction
-        try:
-            pred = await chgnet_manager.predict_single_optimized(structure,
-                                                               return_site_energies=True,
-                                                               return_atom_feas=False,
-                                                               return_crystal_feas=False)
-        except TypeError:
-            pred = await chgnet_manager.predict_single_optimized(structure)
-        
-        # Extract results with number of atoms for energy conversion
-        results = safe_get_prediction(pred, num_atoms=len(structure.sites))
+
+        # Predict structure properties (normalized by the backend)
+        pred = await backend.predict_one(structure, _PROPS_PREDICT)
+        results = _prediction_payload(pred)
         
         # Add structure information
         results.update({
@@ -2910,9 +2610,9 @@ async def chgnet_predict_structure(request: dict):
             "status": "success",
             "prediction": results,
             "model_info": {
-                "version": _get_chgnet_version(),
-                "device": _get_device_info(),
-                "parameters": chgnet.n_params if hasattr(chgnet, 'n_params') else None
+                "version": backend.version(),
+                "device": _get_device_info(backend),
+                "parameters": backend.parameters()
             }
         }
         
@@ -2984,22 +2684,16 @@ async def chgnet_relax_structure(request: dict):
             _relax_progress[session_id] = {}
 
             # Load CHGNet model/calculator (using singleton pattern)
+            backend = _resolve_backend()
             try:
-                calculator = await chgnet_manager.get_calculator()
+                calculator = await backend.get_calculator()
             except RuntimeError as e:
                 raise HTTPException(status_code=503, detail=str(e))
 
             # Predict initial structure using optimized prediction
             try:
-                pred_initial = await chgnet_manager.predict_single_optimized(structure,
-                                                                           return_site_energies=True,
-                                                                           return_atom_feas=True,
-                                                                           return_crystal_feas=True)
-                initial_results = safe_get_prediction(pred_initial, num_atoms=len(structure.sites))
-            except TypeError:
-                # Fallback if detailed prediction fails
-                pred_initial = await chgnet_manager.predict_single_optimized(structure)
-                initial_results = safe_get_prediction(pred_initial, num_atoms=len(structure.sites))
+                initial_results = _prediction_payload(
+                    await backend.predict_one(structure, _PROPS_RELAX))
             except Exception as e:
                 logger.warning(f"Initial prediction failed: {e}")
                 initial_results = {"energy_eV_per_atom": None}
@@ -3032,15 +2726,8 @@ async def chgnet_relax_structure(request: dict):
 
             # Predict relaxed structure using optimized prediction
             try:
-                pred_final = await chgnet_manager.predict_single_optimized(final_structure,
-                                                                         return_site_energies=True,
-                                                                         return_atom_feas=True,
-                                                                         return_crystal_feas=True)
-                final_results = safe_get_prediction(pred_final, num_atoms=len(final_structure.sites))
-            except TypeError:
-                # Fallback if detailed prediction fails
-                pred_final = await chgnet_manager.predict_single_optimized(final_structure)
-                final_results = safe_get_prediction(pred_final, num_atoms=len(final_structure.sites))
+                final_results = _prediction_payload(
+                    await backend.predict_one(final_structure, _PROPS_RELAX))
             except Exception as e:
                 logger.warning(f"Final prediction failed: {e}")
                 final_results = {"energy_eV_per_atom": None}
@@ -3234,8 +2921,8 @@ async def chgnet_relax_structure(request: dict):
                 "relaxed_structure_info": relaxed_structure_info,
                 "trajectory_data": trajectory_data,
                 "model_info": {
-                    "version": _get_chgnet_version(),
-                    "device": _get_device_info()
+                    "version": backend.version(),
+                    "device": _get_device_info(backend)
                 }
             })
         finally:
@@ -3733,9 +3420,10 @@ async def evaluate_insertion_energy(data: dict):
         # Predict energy. task="e" skips force/stress/magmom autograd, which are
         # unused for site screening and account for most of the per-site cost
         # (~5x speedup measured: 2.0s -> 0.4s per site on a 109-atom structure).
+        backend = _resolve_backend()
         try:
-            pred_result = await chgnet_manager.predict_single_optimized(cand_structure, task="e")
-            results = safe_get_prediction(pred_result, num_atoms=len(cand_structure))
+            results = _prediction_payload(
+                await backend.predict_one(cand_structure, _PROPS_ENERGY))
             per_atom_energy = results.get("energy_eV_per_atom")
             if per_atom_energy is None:
                 raise ValueError("Prediction returned no energy value")
@@ -3811,7 +3499,7 @@ async def evaluate_insertion_energies(data: dict):
             site_ids.append(site_id)
 
         num_atoms = len(structure) + 1
-        pred_results = await chgnet_manager.predict_structures_batch(cand_structures, task="e")
+        pred_results = await _resolve_backend().predict(cand_structures, _PROPS_ENERGY)
 
         results = []
         for site_id, pred_result in zip(site_ids, pred_results):
@@ -3820,7 +3508,7 @@ async def evaluate_insertion_energies(data: dict):
                                "error": "Prediction failed"})
                 continue
             try:
-                parsed = safe_get_prediction(pred_result, num_atoms=num_atoms)
+                parsed = _prediction_payload(pred_result)
                 per_atom_energy = parsed.get("energy_eV_per_atom")
                 if per_atom_energy is None:
                     raise ValueError("Prediction returned no energy value")
@@ -3931,7 +3619,7 @@ async def evaluate_candidate_energies(data: dict):
             cand_num_atoms.append(len(cand_structure))
             cand_result_slots.append(slot)
 
-        pred_results = await chgnet_manager.predict_structures_batch(cand_structures, task="e") \
+        pred_results = await _resolve_backend().predict(cand_structures, _PROPS_ENERGY) \
             if cand_structures else []
 
         for slot, cand_id, num_atoms, pred_result in zip(cand_result_slots, cand_ids, cand_num_atoms, pred_results):
@@ -3940,7 +3628,7 @@ async def evaluate_candidate_energies(data: dict):
                                  "error": "Prediction failed"}
                 continue
             try:
-                parsed = safe_get_prediction(pred_result, num_atoms=num_atoms)
+                parsed = _prediction_payload(pred_result)
                 per_atom_energy = parsed.get("energy_eV_per_atom")
                 if per_atom_energy is None:
                     raise ValueError("Prediction returned no energy value")
