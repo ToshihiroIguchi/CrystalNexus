@@ -166,14 +166,14 @@ def test_generate_modified_structure_cif_helper_runs_off_event_loop_thread(clien
     assert helper_thread["thread"] != loop_thread["thread"]
 
 
-def test_chgnet_predict_helper_runs_off_event_loop_thread(client, monkeypatch):
+def test_chgnet_predict_helper_runs_off_event_loop_thread(client, monkeypatch, fake_backends):
     loop_thread = _capture_thread(monkeypatch, main, "validate_supercell_size")
     helper_thread = _capture_thread(monkeypatch, main, "_load_structure_for_chgnet_predict")
 
-    # Structure resolution (the offloaded part) always runs first regardless
-    # of whether CHGNet itself is available, so don't assert on the final
-    # status code (200, or 503 if the model can't load) -- only that the
-    # helper ran, and ran off the event-loop thread.
+    # A fake EMT backend (fake_backends fixture) is the default model here,
+    # so this fast test never loads a real CHGNet model. Structure resolution
+    # (the offloaded part) runs first either way; only that the helper ran,
+    # and ran off the event-loop thread, is asserted.
     client.post("/api/chgnet-predict", json={
         "filename": "Metals/Cu.cif", "operations": [], "supercell_size": [1, 1, 1],
     })
