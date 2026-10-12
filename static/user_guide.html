@@ -275,6 +275,18 @@
         <li><strong>Computational Metrics:</strong> Calculation time and convergence statistics</li>
     </ul>
 
+    <h3>4.2 Model Selection</h3>
+
+    <p>The ML potential is chosen per request with the <strong>Model</strong> dropdown in the ML Potential panel.
+        Two models are available: CHGNet<sup><a href="#ref3" class="citation">[3]</a></sup> (default; provides magnetic
+        moments and site energies) and MACE-MP-0 (medium)<sup><a href="#ref9" class="citation">[9]</a></sup> (MIT license;
+        energy, forces and stress only, so magnetic-moment and site-energy fields are hidden). The element list is
+        updated for the selected model, and a structure containing elements the model does not support is rejected
+        before any calculation. The first MACE calculation downloads the model weights once (internet access is
+        required). Both models are trained on the MPtrj dataset, but their absolute energies are <strong>not
+            interchangeable</strong>: do not mix models within one analysis. Results and exports name the model that
+        produced them.</p>
+
     <h2>5. Advanced Structure Modification Algorithms</h2>
 
     <p>CrystalNexus provides sophisticated routines for modifying crystal structures, leveraging both geometric analysis
@@ -428,6 +440,12 @@
             <em>npj Comput. Mater.</em> <strong>10</strong>, 252 (2024). <a
                 href="https://doi.org/10.1038/s41524-024-01500-6"
                 target="_blank" rel="noopener noreferrer">https://doi.org/10.1038/s41524-024-01500-6</a>
+        </div>
+
+        <div class="ref-item" id="ref9">
+            [9] Batatia, I. <em>et al.</em> A foundation model for atomistic materials chemistry. <em>arXiv</em>
+            2401.00096 (2023). <a href="https://arxiv.org/abs/2401.00096"
+                target="_blank" rel="noopener noreferrer">https://arxiv.org/abs/2401.00096</a>
         </div>
     </div>
 

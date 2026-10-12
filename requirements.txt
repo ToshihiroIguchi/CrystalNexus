@@ -8,6 +8,10 @@ jinja2==3.1.6
 # Updated to support latest features and improvements
 pymatgen==2025.6.14
 chgnet==0.4.0
+# MACE-MP-0 (medium) foundation model, selectable in the UI next to CHGNet.
+# MIT licensed; weights are downloaded to ~/.cache/mace on first use.
+# Installing it did not change the pinned torch/numpy versions.
+mace-torch==0.3.16
 
 # PyTorch/NumPy - LATEST VERSIONS
 # CHGNet 0.4.0 requires torch>=2.4.0 and numpy>=1.26
