@@ -209,9 +209,46 @@ def test_get_insertable_elements_per_model(client, fake_backends):
     assert "Cu" in allv and len(allv) > 3
 
 
+def test_get_insertable_elements_echoes_model(client, fake_backends):
+    r = client.post("/api/get-insertable-elements", json={"model": "fake-narrow"}).json()
+    assert r["model"] == "fake-narrow"
+    assert client.post("/api/get-insertable-elements", json={}).json()["model"] is None
+    bad = client.post("/api/get-insertable-elements", json={"model": "nope"})
+    assert bad.status_code == 400
+
+
 def test_relaxed_cif_header_names_model(client, fake_backends):
     sid = _session()
     assert _relax(client, sid, model="fake-narrow").status_code == 200
     cif = client.post("/api/generate-relaxed-structure-cif", json={"session_id": sid})
     assert cif.status_code == 200
     assert "# Fake Narrow relaxation: model=fake-narrow," in cif.text
+
+
+def test_relaxed_cif_model_mismatch_409(client, fake_backends):
+    sid = _session()
+    assert _relax(client, sid, model="fake-narrow").status_code == 200
+    r = client.post("/api/generate-relaxed-structure-cif",
+                    json={"session_id": sid, "model": "fake-emt"})
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert "Fake Narrow" in detail and "Fake EMT" in detail
+
+
+def test_relaxed_cif_matching_or_omitted_model_ok(client, fake_backends):
+    sid = _session()
+    assert _relax(client, sid, model="fake-narrow").status_code == 200
+    url = "/api/generate-relaxed-structure-cif"
+    omitted = client.post(url, json={"session_id": sid})
+    matching = client.post(url, json={"session_id": sid, "model": "fake-narrow"})
+    assert omitted.status_code == 200 and matching.status_code == 200
+    header = "# Fake Narrow relaxation: model=fake-narrow,"
+    assert header in omitted.text and header in matching.text
+
+
+def test_relaxed_cif_unknown_or_bad_model_400(client, fake_backends):
+    sid = _session()
+    assert _relax(client, sid, model="fake-narrow").status_code == 200
+    url = "/api/generate-relaxed-structure-cif"
+    assert client.post(url, json={"session_id": sid, "model": "nope"}).status_code == 400
+    assert client.post(url, json={"session_id": sid, "model": 123}).status_code == 400

@@ -2615,7 +2615,7 @@ c = ${relaxedInfo.lattice_parameters.c.toFixed(5)} Å
 γ = ${relaxedInfo.lattice_parameters.gamma.toFixed(5)}°
 Volume = ${relaxedInfo.volume.toFixed(5)} Å³
 
-⚡ Structure relaxed with ${getMlipModelName()}${getMlipLatticeNote() ? '\n' + 'Note: ' + getMlipLatticeNote() : ''}`;
+⚡ Structure relaxed with ${getMlipModelLabel()}${getMlipLatticeNote() ? '\n' + 'Note: ' + getMlipLatticeNote() : ''}`;
 
                 dlog('Copying relaxed crystal information');
                 const result = await smartCopyToClipboard(crystalInfoText);
@@ -3105,7 +3105,7 @@ Crystal system: ${data.crystal_system}`;
                 
                 
                 <div style="font-size: 12px; color: #e74c3c; font-style: italic;">
-                    ⚡ Structure relaxed with ${escapeHtml(getMlipModelName())}<br>
+                    ⚡ Structure relaxed with ${escapeHtml(getMlipModelLabel())}<br>
                     ${getMlipLatticeNote() ? `<span style="font-size: 11px; margin-top: 3px; display: block;">Note: ${escapeHtml(getMlipLatticeNote())}</span>` : ''}
                 </div>
             `;
@@ -7982,9 +7982,9 @@ Crystal system: ${data.crystal_system}`;
                         headers: {
                             'Content-Type': 'application/json',
                         },
-                        body: JSON.stringify({
+                        body: JSON.stringify(withModel({
                             session_id: window.sessionId
-                        })
+                        }))
                     });
                     dlog('Response status:', response.status);
 
@@ -8020,6 +8020,17 @@ Crystal system: ${data.crystal_system}`;
                         dlog('CIF modified to P1 space group');
                         dlog('Modified CIF first 500 chars:', cifContent.substring(0, 500));
                         return cifContent;
+                    } else if (response.status === 409) {
+                        // Selected model differs from the one that produced the
+                        // stored relaxation: surface the server message and do
+                        // not fall back to a client-built CIF of unknown origin.
+                        let msg = 'Relaxed structure was produced by a different model; re-run the relaxation first.';
+                        try {
+                            const err = await response.json();
+                            if (err && typeof err.detail === 'string') msg = err.detail;
+                        } catch (_) { /* keep default message */ }
+                        showNotification(msg, 'warning');
+                        return null;
                     } else {
                         console.warn('Failed to fetch CIF, status:', response.status);
                     }
@@ -8806,6 +8817,13 @@ Crystal system: ${data.crystal_system}`;
             return window.currentAnalysisData?.model_info?.display_name || getSelectedMlipModelName();
         }
 
+        // Model name plus version ("CHGNet v0.4.0") when the result reports one.
+        function getMlipModelLabel() {
+            const name = getMlipModelName();
+            const version = window.currentAnalysisData?.model_info?.version;
+            return version ? `${name} v${version}` : name;
+        }
+
         // CHGNet-specific caveat; empty for every other model.
         function getMlipLatticeNote() {
             return window.currentAnalysisData?.model_info?.id === 'chgnet'
@@ -8818,19 +8836,27 @@ Crystal system: ${data.crystal_system}`;
             document.getElementById('mlip-info-chgnet').style.display = isMace ? 'none' : 'block';
             document.getElementById('mlip-info-mace').style.display = isMace ? 'block' : 'none';
             document.getElementById('mlipInfoModal').style.display = 'block';
+            document.addEventListener('keydown', handleMlipInfoKeydown);
         }
 
         function closeMlipInfo() {
             document.getElementById('mlipInfoModal').style.display = 'none';
+            document.removeEventListener('keydown', handleMlipInfoKeydown);
+        }
+
+        function handleMlipInfoKeydown(event) {
+            if (event.key === 'Escape') {
+                closeMlipInfo();
+            }
         }
 
         // Close modal when clicking outside of it
-        window.onclick = function (event) {
+        window.addEventListener('click', function (event) {
             var modal = document.getElementById('mlipInfoModal');
             if (event.target == modal) {
                 closeMlipInfo();
             }
-        }
+        });
     </script>
 
 </body>
