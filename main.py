@@ -3,6 +3,7 @@ import asyncio
 import functools
 import itertools
 import json
+import math
 import logging
 import secrets
 import time
@@ -3505,8 +3506,8 @@ async def evaluate_insertion_energy(data: dict):
             results = _prediction_payload(
                 await backend.predict_one(cand_structure, _PROPS_ENERGY))
             per_atom_energy = results.get("energy_eV_per_atom")
-            if per_atom_energy is None:
-                raise ValueError("Prediction returned no energy value")
+            if per_atom_energy is None or not math.isfinite(per_atom_energy):
+                raise ValueError("Prediction returned no finite energy value")
             total_energy_eV = per_atom_energy * len(cand_structure)
         except Exception as e:
             logger.error(f"Energy prediction failed: {e}")
@@ -3594,8 +3595,8 @@ async def evaluate_insertion_energies(data: dict):
             try:
                 parsed = _prediction_payload(pred_result)
                 per_atom_energy = parsed.get("energy_eV_per_atom")
-                if per_atom_energy is None:
-                    raise ValueError("Prediction returned no energy value")
+                if per_atom_energy is None or not math.isfinite(per_atom_energy):
+                    raise ValueError("Prediction returned no finite energy value")
                 results.append({
                     "id": site_id,
                     "energy": per_atom_energy * num_atoms,
@@ -3722,8 +3723,8 @@ async def evaluate_candidate_energies(data: dict):
             try:
                 parsed = _prediction_payload(pred_result)
                 per_atom_energy = parsed.get("energy_eV_per_atom")
-                if per_atom_energy is None:
-                    raise ValueError("Prediction returned no energy value")
+                if per_atom_energy is None or not math.isfinite(per_atom_energy):
+                    raise ValueError("Prediction returned no finite energy value")
                 results[slot] = {
                     "id": cand_id,
                     "energy": per_atom_energy * num_atoms,

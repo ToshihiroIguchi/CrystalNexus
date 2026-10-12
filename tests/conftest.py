@@ -120,10 +120,21 @@ class FakeMagmomBackend(FakeBackend):
         return _EMTWithMagmoms()
 
 
+class FakeNarrowBackend(FakeBackend):
+    """EMT-backed backend that only supports Cu (distinct element set)."""
+
+    id = "fake-narrow"
+    display_name = "Fake Narrow"
+
+    def supported_elements(self):
+        return ["Cu"]
+
+
 @pytest.fixture
 def fake_backends(monkeypatch):
     """Register the fake backends and make the no-magmom one the default."""
     monkeypatch.setitem(_mlip_registry.MODEL_REGISTRY, "fake-emt", FakeBackend)
     monkeypatch.setitem(_mlip_registry.MODEL_REGISTRY, "fake-emt-magmom", FakeMagmomBackend)
+    monkeypatch.setitem(_mlip_registry.MODEL_REGISTRY, "fake-narrow", FakeNarrowBackend)
     monkeypatch.setenv("CRYSTALNEXUS_DEFAULT_MODEL", "fake-emt")
     return FakeBackend, FakeMagmomBackend
