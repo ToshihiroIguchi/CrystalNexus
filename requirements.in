@@ -11,14 +11,14 @@ jinja2==3.1.6
 requests==2.34.2                      # startup script health checks
 
 # Scientific stack
-numpy==2.3.5
+numpy==2.5.4
 scipy==1.18.1
 torch==2.8.0                          # CPU build on Windows
-pymatgen==2025.6.14
-pymatgen-analysis-defects==2025.9.26
+pymatgen==2026.9.24
+pymatgen-analysis-defects==2026.3.20
 
 # ML interatomic potentials
-chgnet==0.4.0                         # requires torch>=2.4.0, numpy>=1.26
+chgnet==0.4.2                         # requires torch>=2.4.0, numpy>=1.26
 # MACE-MP-0 (medium); MIT licensed, weights downloaded to ~/.cache/mace on first use.
 mace-torch==0.3.16
 e3nn==0.4.4                           # pinned by mace-torch; do not upgrade independently
