@@ -5,7 +5,6 @@ import itertools
 import json
 import logging
 import secrets
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -207,18 +206,6 @@ MAX_PREDICT_ATOMS = MAX_RELAX_ATOMS
 # atom. Below the candidate generator's min_dist=0.9 so UI candidates pass.
 MIN_INSERT_DISTANCE = 0.5
 RELAX_TIMEOUT_SECONDS = float(os.getenv('RELAX_TIMEOUT_SECONDS', '600'))
-# PET-MAD-DOS (ML electronic DOS prediction, POST /api/predict-dos).
-# Inference takes 0.02-0.25 s for 1-216 atoms; the cap mainly bounds memory
-# (~1.4 GB RSS at 216 atoms). The timeout covers inference only; the one-time
-# model load from local files is awaited separately. The running app never
-# downloads weights: they are pre-fetched by scripts/download_dos_model.py
-# into CRYSTALNEXUS_DOS_MODEL_DIR (default <project>/models/pet-mad-dos).
-MAX_DOS_ATOMS = int(os.getenv('MAX_DOS_ATOMS', '500'))
-DOS_TIMEOUT_SECONDS = float(os.getenv('DOS_TIMEOUT_SECONDS', '60'))
-# Returned energy window relative to the Fermi level (eV). The model grid
-# spans ~240 eV at 0.05 eV; the UI only needs the region around E_F.
-DOS_WINDOW_EV = (-20.0, 10.0)
-
 # Initialize once as global variable
 ALLOWED_ELEMENTS: Set[str] = get_chgnet_supported_elements()
 
@@ -230,10 +217,6 @@ _inference_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="chgn
 # immediately with a clear error instead of silently queuing behind the
 # only CHGNet worker thread (which would also starve Auto-mode screening).
 _relax_semaphore = asyncio.Semaphore(1)
-
-# Only one DOS prediction at a time (the model is not thread-safe and uses
-# ~1 GB+); a second request is rejected with 429 instead of queuing.
-_dos_semaphore = asyncio.Semaphore(1)
 
 # session_id -> {"state": {...}} published by RelaxationWatcher from the
 # executor thread and polled/streamed by GET /api/relax-progress/{id}.
@@ -653,200 +636,6 @@ def _compute_equivalent_indices(structure: Structure) -> "Optional[List[List[int
 # Global model manager instance
 chgnet_manager = CHGNetModelManager()
 
-
-class DOSModelUnavailable(RuntimeError):
-    """PET-MAD-DOS cannot be used: `upet` or the local model files are missing/invalid."""
-
-
-_DOS_FETCH_HINT = "Ask the administrator to run: python scripts/download_dos_model.py"
-_dos_tools_module = None
-
-
-def _dos_tools():
-    """Load scripts/download_dos_model.py (file names, sizes, SHA256, checks).
-
-    The scripts directory is not a package, so import it by path. It is the
-    single source of truth for the model manifest.
-    """
-    global _dos_tools_module
-    if _dos_tools_module is None:
-        import importlib.util
-        script = Path(__file__).resolve().parent / "scripts" / "download_dos_model.py"
-        if not script.is_file():
-            raise DOSModelUnavailable(
-                f"scripts/download_dos_model.py is missing. {_DOS_FETCH_HINT}")
-        spec = importlib.util.spec_from_file_location("download_dos_model", script)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        _dos_tools_module = module
-    return _dos_tools_module
-
-
-def get_dos_model_dir() -> Path:
-    return _dos_tools().default_model_dir()
-
-
-def dos_model_problems(full: bool = False) -> List[str]:
-    """Problems with the local PET-MAD-DOS files (empty list = usable).
-
-    full=False compares file sizes only (cheap, for status checks);
-    full=True also verifies SHA256 (done once when the model is loaded).
-    """
-    tools = _dos_tools()
-    return tools.check_model_dir(tools.default_model_dir(), full=full)
-
-
-class DOSModelManager:
-    """
-    Lazy singleton wrapper around upet's PETMADDOSCalculator (PET-MAD-DOS).
-
-    `upet` is an optional dependency and is imported only inside the loader,
-    so app start-up and tests work without it. The model is loaded ONLY from
-    the local files fetched by scripts/download_dos_model.py (explicit paths,
-    Hugging Face offline mode forced), so the server never touches the
-    network. Loading is blocking, so it runs on the shared single-thread
-    inference executor. All access to the calculator is serialized by that
-    executor, which also keeps it off the event loop.
-    """
-    _instance: Optional['DOSModelManager'] = None
-    _calculator = None
-    _lock = asyncio.Lock()
-    model_name = "PET-MAD-DOS"
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    @staticmethod
-    def _load_sync():
-        import contextlib
-        import io
-        import warnings
-
-        problems = dos_model_problems(full=True)
-        if problems:
-            raise DOSModelUnavailable(
-                "PET-MAD-DOS model files are missing or invalid ("
-                + "; ".join(problems) + f"). {_DOS_FETCH_HINT}")
-        model_dir = get_dos_model_dir()
-
-        # Defence in depth: with explicit local paths upet does not reach the
-        # network at all, but force offline mode so nothing can download by
-        # accident. Env vars are read when huggingface_hub is first imported,
-        # so also flip the constant if it is already loaded.
-        os.environ["HF_HUB_OFFLINE"] = "1"
-        os.environ["TRANSFORMERS_OFFLINE"] = "1"
-        os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
-        hf_constants = sys.modules.get("huggingface_hub.constants")
-        if hf_constants is not None:
-            hf_constants.HF_HUB_OFFLINE = True
-
-        try:
-            with warnings.catch_warnings(), contextlib.redirect_stdout(io.StringIO()):
-                # Known-noisy, harmless loader output (checkpoint upgrade
-                # warning, warp banner, "Loading ... from checkpoint" prints);
-                # real errors still raise.
-                warnings.filterwarnings("ignore", category=UserWarning)
-                warnings.filterwarnings("ignore", category=FutureWarning)
-                from upet.ase.dos import PETMADDOSCalculator
-                return PETMADDOSCalculator(
-                    version="latest",
-                    model_path=str(model_dir / "pet-mad-dos-v1.0.ckpt"),
-                    bandgap_model_path=str(model_dir / "bandgap-model.pt"),
-                    fermi_model_path=str(model_dir / "fermi-model.pt"),
-                    device="cpu")
-        except ImportError as e:
-            raise DOSModelUnavailable(
-                "DOS prediction requires the 'upet' package "
-                "(pip install upet==0.3.1).") from e
-        except Exception as e:
-            raise DOSModelUnavailable(f"Failed to load PET-MAD-DOS model: {e}") from e
-
-    async def get_calculator(self):
-        if self._calculator is None:
-            async with self._lock:
-                if self._calculator is None:  # Double-check locking
-                    self._calculator = await asyncio.get_running_loop().run_in_executor(
-                        _inference_executor, self._load_sync)
-                    logger.info("PET-MAD-DOS model loaded and cached")
-        return self._calculator
-
-    def predict_sync(self, atoms) -> dict:
-        """Run inference for one ASE Atoms object (call on the executor).
-
-        Returns plain numpy/float values: `energy` (full model grid, arbitrary
-        origin), `dos` (states/eV per cell, denoised, non-negative),
-        `fermi_level`, `band_gap` (eV), plus `sigma` and `energy_step`.
-        """
-        import torch
-        calc = self._calculator
-        with torch.no_grad():
-            r = calc.calculate(atoms)
-        dos = np.asarray(r["dos_denoised"].detach().cpu().numpy(), dtype=float)
-        step = float(calc.energy_interval)
-        return {
-            "energy": np.arange(len(dos)) * step,
-            "dos": dos,
-            "fermi_level": float(r["fermi_level"]),
-            "band_gap": float(r["bandgap"]),
-            "sigma": float(getattr(calc, "sigma", float("nan"))),
-            "energy_step": step,
-        }
-
-
-dos_manager = DOSModelManager()
-
-
-def dos_preload_enabled() -> bool:
-    """CRYSTALNEXUS_DOS_PRELOAD toggle (default on; 0/false/no/off disable)."""
-    value = os.getenv('CRYSTALNEXUS_DOS_PRELOAD', '1').strip().lower()
-    return value not in ('0', 'false', 'no', 'off')
-
-
-_dos_preloading = False
-
-
-async def preload_dos_model() -> bool:
-    """Load PET-MAD-DOS and run one tiny warm-up inference at startup.
-
-    Never raises (except CancelledError on shutdown): any problem is logged
-    as a warning and the lazy load on the first "Predict DOS" click remains
-    the fallback. Returns True when the model was loaded and warmed up.
-    """
-    global _dos_preloading
-    import importlib.util
-    try:
-        if importlib.util.find_spec("upet") is None:
-            logger.warning("PET-MAD-DOS preload skipped: 'upet' is not installed")
-            return False
-        problems = dos_model_problems(full=False)
-        if problems:
-            logger.warning("PET-MAD-DOS preload skipped: model files missing or invalid (%s)",
-                           "; ".join(problems))
-            return False
-
-        _dos_preloading = True
-        t0 = time.time()
-        await dos_manager.get_calculator()
-        t_load = time.time() - t0
-
-        from ase.build import bulk
-        t1 = time.time()
-        await asyncio.get_running_loop().run_in_executor(
-            _inference_executor, dos_manager.predict_sync, bulk('Si'))
-        t_warm = time.time() - t1
-        logger.info("PET-MAD-DOS preloaded in %.1f s (load %.1f s, warm-up %.1f s)",
-                    time.time() - t0, t_load, t_warm)
-        return True
-    except asyncio.CancelledError:
-        raise
-    except Exception as e:
-        logger.warning("PET-MAD-DOS preload failed (%s); the model will load lazily on first use", e)
-        return False
-    finally:
-        _dos_preloading = False
-
 # Background task for periodic cleanup
 async def periodic_cleanup_task():
     """Background task that runs periodic memory cleanup"""
@@ -1229,7 +1018,6 @@ class SessionManager:
             # pre-substitution relaxed cell.
             self.sessions[session_id].pop('relaxed_structure', None)
             self.sessions[session_id].pop('chgnet_result', None)
-            self.sessions[session_id].pop('dos_result', None)
             logger.info(f"Updated structure for session {session_id[:8]}...")
     
     def get_session_info(self, session_id: str) -> Optional[Dict]:
@@ -1353,23 +1141,11 @@ async def lifespan(app: FastAPI):
     # Start the periodic cleanup task
     cleanup_task = asyncio.create_task(periodic_cleanup_task())
     logger.info("Periodic cleanup task started")
-    # Preload the DOS model in the background (does not delay startup)
-    preload_task = None
-    if dos_preload_enabled():
-        preload_task = asyncio.create_task(preload_dos_model())
-    else:
-        logger.info("PET-MAD-DOS preload disabled (CRYSTALNEXUS_DOS_PRELOAD)")
     
     yield
     
     # Shutdown
     logger.info("Application shutting down, performing final cleanup")
-    if preload_task is not None:
-        preload_task.cancel()
-        try:
-            await preload_task
-        except asyncio.CancelledError:
-            logger.info("DOS preload task cancelled")
     cleanup_task.cancel()
     try:
         await cleanup_task
@@ -3412,7 +3188,6 @@ async def chgnet_relax_structure(request: dict):
             # invalidated them for the edit (see update_structure's comment).
             if session_info.get('structure_version', 0) == structure_version_at_start:
                 session_info['relaxed_structure'] = final_structure
-                session_info.pop('dos_result', None)  # belonged to the previous relaxed structure
                 session_info['chgnet_result'] = {
                     'fmax': fmax,
                     'converged': relaxation_info.get('converged', False),
@@ -3478,168 +3253,6 @@ async def chgnet_relax_structure(request: dict):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Internal server error")
-
-def _get_upet_version() -> Optional[str]:
-    try:
-        from importlib.metadata import version
-        return version("upet")
-    except Exception:
-        return None
-
-
-def _build_dos_response(structure: Structure, raw: dict) -> dict:
-    """Window the raw model grid around E_F and add derived quantities.
-
-    Pure function (no model access) so it can be unit-tested directly.
-    `integrated_dos` is the cumulative integral from the bottom of the full
-    model grid, so it equals the valence-electron count at E_F.
-    """
-    from scipy.integrate import cumulative_trapezoid
-
-    energy = np.asarray(raw["energy"], dtype=float)
-    dos = np.asarray(raw["dos"], dtype=float)
-    ef = float(raw["fermi_level"])
-    integrated = cumulative_trapezoid(dos, energy, initial=0.0)
-    rel = energy - ef
-    lo, hi = DOS_WINDOW_EV
-    mask = (rel >= lo) & (rel <= hi)
-    n_atoms = len(structure)
-    return {
-        "energies_rel_ef": rel[mask].tolist(),
-        "energy_grid": energy[mask].tolist(),
-        "dos": dos[mask].tolist(),
-        "dos_per_atom": (dos[mask] / n_atoms).tolist(),
-        "integrated_dos": integrated[mask].tolist(),
-        "fermi_level": ef,
-        "band_gap": float(raw["band_gap"]),
-        "n_atoms": n_atoms,
-        "formula": structure.composition.reduced_formula,
-        "window": [lo, hi],
-        "model_info": {
-            "name": DOSModelManager.model_name,
-            "version": _get_upet_version(),
-            "sigma": raw.get("sigma"),
-            "energy_step": raw.get("energy_step"),
-        },
-    }
-
-
-@app.get("/api/dos-status")
-async def dos_status():
-    """Whether the DOS model files are installed (cheap size check, no loading)."""
-    try:
-        problems = dos_model_problems(full=False)
-    except DOSModelUnavailable as e:
-        problems = [str(e)]
-    return {
-        "available": not problems,
-        "problems": problems,
-        "hint": _DOS_FETCH_HINT if problems else None,
-        "loaded": getattr(dos_manager, "_calculator", None) is not None,
-        "preloading": _dos_preloading,
-    }
-
-
-@app.post("/api/predict-dos")
-async def predict_dos(request: dict):
-    """
-    Predict the electronic DOS of the session's relaxed structure with the
-    ML model PET-MAD-DOS (total DOS only; qualitative).
-    """
-    try:
-        session_id = request.get("session_id")
-        if not session_id or not isinstance(session_id, str):
-            raise HTTPException(status_code=400, detail="Session ID is required")
-
-        session_info = session_manager.get_session_info(session_id)
-        if session_info is None:
-            raise HTTPException(status_code=404, detail=f"No structure found for session {session_id}")
-
-        structure = session_info.get('relaxed_structure')
-        if structure is None:
-            raise HTTPException(
-                status_code=400,
-                detail="No relaxed structure available. Relax the structure first, then predict the DOS.")
-
-        if len(structure) > MAX_DOS_ATOMS:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Structure has {len(structure)} atoms; the DOS prediction limit is "
-                       f"{MAX_DOS_ATOMS}. Reduce the supercell size.")
-
-        version_at_start = session_info.get('structure_version', 0)
-
-        # No await between this check and acquire(), so it is atomic on the
-        # event loop (same pattern as the relaxation semaphore).
-        if _dos_semaphore.locked():
-            raise HTTPException(
-                status_code=429,
-                detail="Another DOS prediction is already running. Please wait for it to finish.")
-        await _dos_semaphore.acquire()
-        try:
-            started = time.time()
-            try:
-                await dos_manager.get_calculator()
-            except DOSModelUnavailable as e:
-                raise HTTPException(status_code=503, detail=str(e))
-
-            from pymatgen.io.ase import AseAtomsAdaptor
-            clean = structure.copy()
-            if "magmom" in clean.site_properties:
-                clean.remove_site_property("magmom")
-            atoms = AseAtomsAdaptor.get_atoms(clean)
-
-            try:
-                raw = await asyncio.wait_for(
-                    asyncio.get_running_loop().run_in_executor(
-                        _inference_executor, dos_manager.predict_sync, atoms),
-                    timeout=DOS_TIMEOUT_SECONDS)
-            except asyncio.TimeoutError:
-                raise HTTPException(
-                    status_code=504,
-                    detail=f"DOS prediction timed out after {DOS_TIMEOUT_SECONDS:.0f} s.")
-
-            # The structure may have been edited or re-relaxed during inference.
-            if session_info.get('structure_version', 0) != version_at_start \
-                    or session_info.get('relaxed_structure') is not structure:
-                raise HTTPException(
-                    status_code=409,
-                    detail="The structure changed while the DOS was being predicted; result discarded.")
-
-            result = _build_dos_response(clean, raw)
-            result["elapsed_seconds"] = round(time.time() - started, 3)
-            result = _sanitize_json_value({"status": "success", **result})
-
-            session_info['dos_result'] = {
-                'structure_version': version_at_start,
-                'result': result,
-            }
-
-            try:
-                analytics_db.log_event(
-                    event_type="predict_dos",
-                    filename=session_info.get('filename', 'unknown'),
-                    formula=result["formula"],
-                    num_atoms=result["n_atoms"],
-                    execution_time=result["elapsed_seconds"],
-                    parameters={"band_gap_eV": result["band_gap"]},
-                    session_id=session_id,
-                )
-            except Exception as e:
-                logger.error(f"Failed to log DOS event: {e}")
-
-            return result
-        finally:
-            _dos_semaphore.release()
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"DOS prediction error: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail="Internal server error")
-
 
 def _new_history_points(slot: dict, sent: int) -> list:
     """Return the history entries of a progress slot beyond the first `sent`.
