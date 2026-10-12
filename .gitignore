@@ -28,6 +28,7 @@ MANIFEST
 # Virtual environments
 venv/
 venv_*/
+venv.old/
 env/
 ENV/
 
@@ -92,4 +93,3 @@ implementation_plan_*.md
 
 # Playwright MCP browser-testing artifacts
 .playwright-mcp/
-venv-mace/
