@@ -1,4 +1,4 @@
-"""Tests for the CHGNet relaxation endpoint (/api/chgnet-relax) and its
+"""Tests for the relaxation endpoint (/api/relax) and its
 supporting helpers: request validation (main._validate_relax_params),
 convergence evaluation (main.evaluate_convergence), concurrency control
 (main._relax_semaphore), the timeout/abort path, and the response contract
@@ -42,20 +42,20 @@ def _create_session(structure, filename="Cu.cif"):
 # ---------------------------------------------------------------------------
 
 def test_relax_rejects_missing_session_id(client):
-    response = client.post("/api/chgnet-relax", json={"fmax": 0.1, "max_steps": 10})
+    response = client.post("/api/relax", json={"fmax": 0.1, "max_steps": 10})
     assert response.status_code == 400
 
 
 def test_relax_rejects_invalid_fmax(client):
     session_id = _create_session(_cu_structure())
 
-    response = client.post("/api/chgnet-relax", json={
+    response = client.post("/api/relax", json={
         "session_id": session_id, "fmax": 0, "max_steps": 10,
     })
     assert response.status_code == 400
     assert "fmax" in response.json()["detail"]
 
-    response = client.post("/api/chgnet-relax", json={
+    response = client.post("/api/relax", json={
         "session_id": session_id, "fmax": 5.0, "max_steps": 10,
     })
     assert response.status_code == 400
@@ -65,13 +65,13 @@ def test_relax_rejects_invalid_fmax(client):
 def test_relax_rejects_invalid_max_steps(client):
     session_id = _create_session(_cu_structure())
 
-    response = client.post("/api/chgnet-relax", json={
+    response = client.post("/api/relax", json={
         "session_id": session_id, "fmax": 0.1, "max_steps": 999999,
     })
     assert response.status_code == 400
     assert "max_steps" in response.json()["detail"]
 
-    response = client.post("/api/chgnet-relax", json={
+    response = client.post("/api/relax", json={
         "session_id": session_id, "fmax": 0.1, "max_steps": "abc",
     })
     assert response.status_code == 400
@@ -81,7 +81,7 @@ def test_relax_rejects_invalid_max_steps(client):
 def test_relax_rejects_invalid_optimizer(client):
     session_id = _create_session(_cu_structure())
 
-    response = client.post("/api/chgnet-relax", json={
+    response = client.post("/api/relax", json={
         "session_id": session_id, "fmax": 0.1, "max_steps": 10, "optimizer": "NOPE",
     })
     assert response.status_code == 400
@@ -89,7 +89,7 @@ def test_relax_rejects_invalid_optimizer(client):
 
 
 def test_relax_rejects_missing_session(client):
-    response = client.post("/api/chgnet-relax", json={
+    response = client.post("/api/relax", json={
         "session_id": "nonexistent-id", "fmax": 0.1, "max_steps": 10,
     })
     assert response.status_code == 404
@@ -100,7 +100,7 @@ def test_relax_rejects_oversized_structure(client, monkeypatch):
     monkeypatch.setattr(main, "MAX_RELAX_ATOMS", 1)
     session_id = _create_session(_cu_structure())  # Cu.cif has 4 atoms > 1
 
-    response = client.post("/api/chgnet-relax", json={
+    response = client.post("/api/relax", json={
         "session_id": session_id, "fmax": 0.1, "max_steps": 10,
     })
     assert response.status_code == 413
@@ -117,9 +117,9 @@ def test_relax_cleans_up_progress_slot_when_calculator_load_fails(client, monkey
     async def _boom():
         raise RuntimeError("forced failure")
 
-    monkeypatch.setattr(main.chgnet_manager, "get_calculator", _boom)
+    monkeypatch.setattr(main.get_backend("chgnet"), "get_calculator", _boom)
 
-    response = client.post("/api/chgnet-relax", json={
+    response = client.post("/api/relax", json={
         "session_id": session_id, "fmax": 0.1, "max_steps": 10,
     })
     assert response.status_code == 503
@@ -245,7 +245,7 @@ def test_relax_response_contract(client):
     frontend's analysis modal relies on."""
     session_id = _create_session(_cu_structure(supercell=(2, 2, 2)))
 
-    response = client.post("/api/chgnet-relax", json={
+    response = client.post("/api/relax", json={
         "session_id": session_id, "fmax": 0.1, "max_steps": 50, "optimizer": "LBFGS",
     })
     assert response.status_code == 200
@@ -268,8 +268,11 @@ def test_relax_response_contract(client):
         assert key in initial_prediction, f"missing initial_prediction.{key}"
 
     model_info = data["model_info"]
-    for key in ("version", "device"):
+    for key in ("id", "display_name", "version", "device"):
         assert key in model_info, f"missing model_info.{key}"
+    assert model_info["id"] == "chgnet"
+    assert model_info["display_name"] == "CHGNet"
+    assert session_manager.get_session_info(session_id)["relax_result"]["model"] == "chgnet"
 
     trajectory_data = data["trajectory_data"]
     for key in ("steps", "energies", "force_magnitudes", "forces"):
@@ -285,7 +288,7 @@ def test_relax_trajectory_energies_are_per_atom(client):
     energy_eV_per_atom, not off by a factor of num_atoms (the total)."""
     session_id = _create_session(_cu_structure(supercell=(2, 2, 2)))  # 32 atoms
 
-    response = client.post("/api/chgnet-relax", json={
+    response = client.post("/api/relax", json={
         "session_id": session_id, "fmax": 0.1, "max_steps": 20, "optimizer": "LBFGS",
     })
     assert response.status_code == 200
@@ -311,7 +314,7 @@ def test_relax_second_concurrent_request_returns_429(client):
     first_response = {}
 
     def _run_first():
-        resp = client.post("/api/chgnet-relax", json={
+        resp = client.post("/api/relax", json={
             "session_id": session_id_1, "fmax": 0.01, "max_steps": 100, "optimizer": "LBFGS",
         })
         first_response["status_code"] = resp.status_code
@@ -321,7 +324,7 @@ def test_relax_second_concurrent_request_returns_429(client):
     time.sleep(1)
 
     try:
-        second_response = client.post("/api/chgnet-relax", json={
+        second_response = client.post("/api/relax", json={
             "session_id": session_id_2, "fmax": 0.1, "max_steps": 10,
         })
         assert second_response.status_code == 429
@@ -335,14 +338,14 @@ def test_relax_second_concurrent_request_returns_429(client):
 def test_relax_stale_result_not_saved_after_concurrent_edit(client):
     """If the session's structure is edited while a relaxation on it is still
     running, the relaxation's own completion must not resurrect
-    relaxed_structure/chgnet_result for a structure that is no longer current."""
+    relaxed_structure/relax_result for a structure that is no longer current."""
     structure = _cu_structure(supercell=(2, 2, 2))
     session_id = _create_session(structure)
 
     relax_thread_response = {}
 
     def _run_relax():
-        resp = client.post("/api/chgnet-relax", json={
+        resp = client.post("/api/relax", json={
             "session_id": session_id, "fmax": 0.01, "max_steps": 500, "optimizer": "LBFGS",
         })
         relax_thread_response["status_code"] = resp.status_code
@@ -360,10 +363,10 @@ def test_relax_stale_result_not_saved_after_concurrent_edit(client):
     assert relax_thread_response.get("status_code") == 200
 
     session_info = session_manager.get_session_info(session_id)
-    # The edit must win: no stale relaxed_structure/chgnet_result from the
+    # The edit must win: no stale relaxed_structure/relax_result from the
     # relaxation that was running against the pre-edit structure.
     assert "relaxed_structure" not in session_info
-    assert "chgnet_result" not in session_info
+    assert "relax_result" not in session_info
     assert session_info["current_structure"] is edited_structure
 
 
@@ -371,7 +374,7 @@ def test_relax_stale_result_not_saved_after_concurrent_edit(client):
 def test_relax_cif_header_includes_optimizer(client):
     session_id = _create_session(_cu_structure(supercell=(2, 2, 2)))
 
-    relax_response = client.post("/api/chgnet-relax", json={
+    relax_response = client.post("/api/relax", json={
         "session_id": session_id, "fmax": 0.1, "max_steps": 50, "optimizer": "LBFGS",
     })
     assert relax_response.status_code == 200
@@ -382,6 +385,7 @@ def test_relax_cif_header_includes_optimizer(client):
     assert cif_response.status_code == 200
     lines = cif_response.text.splitlines()
     assert any("optimizer=LBFGS" in line for line in lines)
+    assert any(line.startswith("# CHGNet relaxation: model=chgnet,") for line in lines)
 
 
 @pytest.mark.slow
@@ -389,7 +393,7 @@ def test_relax_timeout_returns_partial_result(client, monkeypatch):
     monkeypatch.setattr(main, "RELAX_TIMEOUT_SECONDS", 0.001)
     session_id = _create_session(_cu_structure(supercell=(2, 2, 2)))
 
-    response = client.post("/api/chgnet-relax", json={
+    response = client.post("/api/relax", json={
         "session_id": session_id, "fmax": 0.01, "max_steps": 100, "optimizer": "LBFGS",
     })
     assert response.status_code == 200
@@ -430,11 +434,11 @@ def test_relax_survives_spacegroup_analyzer_failure(client, monkeypatch):
     def _boom(*args, **kwargs):
         raise RuntimeError("spglib failure")
 
-    monkeypatch.setattr(main.chgnet_manager, "get_calculator", _fake_calculator)
+    monkeypatch.setattr(main.get_backend("chgnet"), "get_calculator", _fake_calculator)
     monkeypatch.setattr(main, "run_relaxation", _fake_run_relaxation)
     monkeypatch.setattr("pymatgen.symmetry.analyzer.SpacegroupAnalyzer", _boom)
 
-    response = client.post("/api/chgnet-relax", json={
+    response = client.post("/api/relax", json={
         "session_id": session_id, "fmax": 0.1, "max_steps": 10,
     })
     assert response.status_code == 200

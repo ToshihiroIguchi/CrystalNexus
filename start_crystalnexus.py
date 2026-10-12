@@ -738,7 +738,7 @@ def main():
         print("!!  LAN EXPOSURE WARNING  !!")
         print("  * There is NO authentication on / or on any /api/* endpoint.")
         print(f"    Any device that can reach this machine on port {PORT} can use the app.")
-        print("  * Any LAN device can upload CIF files and start CHGNet relaxations,")
+        print("  * Any LAN device can upload CIF files and start ML-potential relaxations,")
         print("    consuming this machine's CPU and RAM. Only POST /api/* is rate limited")
         print("    (60 req/min, burst 20, per client IP).")
         print("  * Sessions are shared globally, not per user: MAX_SESSIONS=100 with")

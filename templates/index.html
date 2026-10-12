@@ -186,7 +186,7 @@
             font-size: 14px;
         }
 
-        .chgnet-info-modal {
+        .mlip-info-modal {
             display: none;
             position: fixed;
             z-index: 1000;
@@ -197,7 +197,7 @@
             background-color: rgba(0, 0, 0, 0.4);
         }
 
-        .chgnet-info-content {
+        .mlip-info-content {
             background-color: #ffffff;
             margin: 3% auto;
             padding: 40px;
@@ -213,7 +213,7 @@
             line-height: 1.6;
         }
 
-        .chgnet-info-content h2 {
+        .mlip-info-content h2 {
             text-align: left;
             margin: 0 0 20px 0;
             color: #2c2c2c;
@@ -221,7 +221,7 @@
             font-weight: bold;
         }
 
-        .chgnet-info-close {
+        .mlip-info-close {
             color: #aaa;
             float: right;
             font-size: 28px;
@@ -229,17 +229,17 @@
             cursor: pointer;
         }
 
-        .chgnet-info-close:hover {
+        .mlip-info-close:hover {
             color: black;
         }
 
-        .chgnet-links {
+        .mlip-links {
             margin-top: 20px;
             padding-top: 20px;
             border-top: 1px solid #e8e8e8;
         }
 
-        .chgnet-links h4 {
+        .mlip-links h4 {
             margin: 0 0 12px 0;
             color: #2c2c2c;
             font-size: 16px;
@@ -247,7 +247,7 @@
             font-family: var(--main-font-family);
         }
 
-        .chgnet-links a {
+        .mlip-links a {
             display: block;
             margin: 6px 0;
             padding: 0;
@@ -259,22 +259,22 @@
             font-family: var(--main-font-family);
         }
 
-        .chgnet-links a:hover {
+        .mlip-links a:hover {
             background-color: transparent;
             color: #1c5d8b;
         }
 
-        .chgnet-section {
+        .mlip-section {
             margin-bottom: 24px;
             padding-bottom: 16px;
             border-bottom: 1px solid #e8e8e8;
         }
 
-        .chgnet-section:last-child {
+        .mlip-section:last-child {
             border-bottom: none;
         }
 
-        .chgnet-section h4 {
+        .mlip-section h4 {
             margin: 0 0 14px 0;
             color: #2c2c2c;
             font-size: 18px;
@@ -282,7 +282,7 @@
             font-family: var(--main-font-family);
         }
 
-        .chgnet-section h2 {
+        .mlip-section h2 {
             margin: 0 0 30px 0;
             color: #1a1a1a;
             font-size: 28px;
@@ -293,7 +293,7 @@
             font-family: var(--main-font-family);
         }
 
-        .chgnet-section p {
+        .mlip-section p {
             margin: 0 0 12px 0;
             text-align: justify;
             color: #333;
@@ -318,11 +318,11 @@
             margin: 0;
         }
 
-        .chgnet-info-content ul {
+        .mlip-info-content ul {
             padding-left: 20px;
         }
 
-        .chgnet-info-content li {
+        .mlip-info-content li {
             margin: 6px 0;
             line-height: 1.5;
         }
@@ -405,12 +405,19 @@
         <div class="right-panel">
             <div class="panel-section">
                 <div class="panel-title">
-                    CHGNet Calculation
-                    <span class="info-icon" onclick="showCHGNetInfo()"
-                        title="Click for more information about CHGNet">ℹ️</span>
+                    ML Potential Calculation
+                    <span class="info-icon" onclick="showMlipInfo()"
+                        title="Click for more information about the ML potential model">ℹ️</span>
                 </div>
-                <div id="chgnet-content">
-                    <div class="chgnet-controls">
+                <div id="mlip-content">
+                    <div class="mlip-controls">
+                        <div class="mlip-model-group" id="mlip-model-group">
+                            <label for="mlip-model-select">Model:</label>
+                            <select id="mlip-model-select" title="Select the ML potential used for all calculations">
+                                <option value="">Loading models...</option>
+                            </select>
+                            <div class="mlip-model-hint" id="mlip-model-hint"></div>
+                        </div>
                         <button class="button" id="analyze-btn" disabled>Analyze Structure</button>
 
                         <div class="relax-settings" style="margin-top: 15px;" id="relax-settings">
@@ -444,7 +451,7 @@
                         </div>
                     </div>
 
-                    <div class="chgnet-status" id="chgnet-status" style="display: none;">
+                    <div class="mlip-status" id="mlip-status" style="display: none;">
                         <div class="status-text" id="status-text">Ready</div>
                         <div class="progress-bar" id="progress-bar" style="display: none;">
                             <div class="progress-fill"></div>
@@ -459,7 +466,7 @@
                         <canvas id="relax-force-chart" style="width: 100%; height: 57px; display: block;"></canvas>
                     </div>
 
-                    <div class="chgnet-results" id="chgnet-results" style="display: none;">
+                    <div class="mlip-results" id="mlip-results" style="display: none;">
 
                         <!-- Calculation Time Display -->
                         <div class="calculation-time" id="calculation-time" style="display: none;"></div>
@@ -647,7 +654,129 @@
 
         window.currentCrystalData = null;
         let supercellData = null;
-        let chgnetElements = [];
+        let mlipElements = [];
+        // Models reported by /api/models and the persisted selection.
+        window.mlipModels = [];
+        const MLIP_MODEL_STORAGE_KEY = 'crystalnexus.mlipModel';
+
+        function getSelectedModelId() {
+            const sel = document.getElementById('mlip-model-select');
+            return sel && sel.value ? sel.value : null;
+        }
+
+        function getSelectedModelInfo() {
+            const id = getSelectedModelId();
+            return window.mlipModels.find(m => m.id === id) || null;
+        }
+
+        // True unless the selected model is known to lack the capability.
+        function selectedModelSupports(capability) {
+            const info = getSelectedModelInfo();
+            return !info || info.capabilities.includes(capability);
+        }
+
+        // Display name of the model currently selected in the panel.
+        function getSelectedMlipModelName() {
+            const info = getSelectedModelInfo();
+            return info ? info.display_name : 'ML Potential';
+        }
+
+        // Adds the selected model id to a request body (server default if none).
+        function withModel(body) {
+            const id = getSelectedModelId();
+            return id ? Object.assign({}, body, { model: id }) : body;
+        }
+
+        function updateModelHint() {
+            const hint = document.getElementById('mlip-model-hint');
+            if (!hint) return;
+            const info = getSelectedModelInfo();
+            if (!info) { hint.textContent = ''; return; }
+            let text = 'Energies from different models are not comparable; do not mix models within one analysis.';
+            if (info.id !== 'chgnet') {
+                text = 'The first use downloads the model weights (needs internet once). ' + text;
+            }
+            hint.textContent = text;
+        }
+
+        async function loadMlipModels() {
+            const sel = document.getElementById('mlip-model-select');
+            try {
+                const response = await fetch('/api/models');
+                const data = await response.json();
+                window.mlipModels = data.models || [];
+                if (sel) {
+                    sel.innerHTML = window.mlipModels.map(m =>
+                        `<option value="${escapeHtml(m.id)}"${m.available ? '' : ' disabled'}>${escapeHtml(m.display_name)}${m.available ? '' : ' (not installed)'}</option>`
+                    ).join('');
+                    let stored = null;
+                    try { stored = localStorage.getItem(MLIP_MODEL_STORAGE_KEY); } catch (e) { /* storage unavailable */ }
+                    const usable = id => window.mlipModels.some(m => m.id === id && m.available);
+                    const first = window.mlipModels.find(m => m.available);
+                    sel.value = usable(stored) ? stored
+                        : (usable(data.default) ? data.default : (first ? first.id : ''));
+                }
+            } catch (error) {
+                console.error('Error loading models:', error);
+                window.mlipModels = [];
+                if (sel) sel.innerHTML = '<option value="">Server default</option>';
+            }
+            lastMlipModelId = getSelectedModelId();
+            updateModelHint();
+            applyModelCapabilityUI();
+            await loadMlipElements();
+            refreshElementDropdownsForModel();
+        }
+
+        // Model whose results are currently shown (set once models are loaded).
+        let lastMlipModelId = null;
+
+        // Drop the previous model's analysis so it cannot be shown, exported or
+        // mixed with results of the newly selected model.
+        function resetResultsForModelChange() {
+            const resultsDiv = document.getElementById('mlip-results');
+            const hadResults = isStructureAnalyzed || window.currentAnalysisData
+                || (resultsDiv && resultsDiv.style.display !== 'none');
+            if (!hadResults) return;
+            resetPhysicalProperties();   // also hides #analysisActions (relaxed CIF / export)
+            hideRelaxCharts();
+            window.currentAnalysisData = null;
+            window.currentStructureInfo = null;
+            window.energyAnalysisData = null;
+            if (resultsDiv) resultsDiv.style.display = 'none';
+            const magneticItem = document.getElementById('magnetic-item');
+            if (magneticItem) magneticItem.style.display = '';
+            applyModelCapabilityUI();
+            updateAnalyzeButtonState();
+        }
+
+        async function onMlipModelChange() {
+            const id = getSelectedModelId();
+            try { if (id) localStorage.setItem(MLIP_MODEL_STORAGE_KEY, id); } catch (e) { /* storage unavailable */ }
+            updateModelHint();
+            applyModelCapabilityUI();
+            // Results of another model must not be mixed with this one.
+            if (id !== lastMlipModelId) {
+                lastMlipModelId = id;
+                resetResultsForModelChange();
+            }
+            await loadMlipElements();
+            refreshElementDropdownsForModel();
+        }
+
+        // Hide UI that the selected model cannot provide (e.g. magnetic moments).
+        function applyModelCapabilityUI() {
+            const magneticItem = document.getElementById('magnetic-item');
+            if (magneticItem && !selectedModelSupports('magmom')) {
+                magneticItem.style.display = 'none';
+            }
+        }
+
+        // Re-render element dropdowns after the supported element set changed.
+        function refreshElementDropdownsForModel() {
+            if (typeof filterSubstituteOptions === 'function') filterSubstituteOptions();
+            window.dispatchEvent(new CustomEvent('mlip-model-changed'));
+        }
         // Shared controller to abort an in-flight CIF analysis when a new file is selected
         let analysisAbortController = null;
 
@@ -738,7 +867,7 @@
                 }
 
                 if (detailBtn) detailBtn.style.display = 'inline-block';
-                if (item && type === 'magnetic') item.style.display = 'block';
+                if (item && type === 'magnetic') item.style.display = selectedModelSupports('magmom') ? 'block' : 'none';
             } else {
                 // Show status message
                 let message;
@@ -755,7 +884,8 @@
                 summaryElement.textContent = `${type === 'energy' ? 'Energy' : 'Magnetic'}: ${message}`;
                 if (detailBtn) detailBtn.style.display = 'none';
                 // Always show magnetic item to display status messages
-                if (item && type === 'magnetic') item.style.display = 'block';
+                // (unless the selected model has no magnetic moments)
+                if (item && type === 'magnetic') item.style.display = selectedModelSupports('magmom') ? 'block' : 'none';
             }
         }
 
@@ -894,9 +1024,11 @@
         // Initialize the application
         document.addEventListener('DOMContentLoaded', function () {
             loadSampleFiles();
-            loadCHGnetElements();
+            loadMlipModels();
+            const modelSelect = document.getElementById('mlip-model-select');
+            if (modelSelect) modelSelect.addEventListener('change', onMlipModelChange);
             setupEventListeners();
-            setupCHGNetEventListeners();
+            setupMlipEventListeners();
             setupDropZoneEventListeners();
 
             // Initialize unified display system
@@ -1382,7 +1514,7 @@
             }
         }
 
-        function setupCHGNetEventListeners() {
+        function setupMlipEventListeners() {
             const analyzeBtn = document.getElementById('analyze-btn');
 
             if (analyzeBtn) {
@@ -1394,7 +1526,7 @@
 
                     if (supercellData && window.currentFilename) {
                         dlog('✅ ANALYZE: Conditions met, running analysis...');
-                        await runCHGNetAnalysis();
+                        await runMlipAnalysis();
                     } else {
                         dlog('❌ ANALYZE: Conditions not met - cannot run analysis');
                         if (!supercellData) dlog('  - Missing supercellData');
@@ -1417,7 +1549,7 @@
         // === STRUCTURE CHANGE DETECTION ===
         let currentStructureHash = null;
         let isStructureAnalyzed = false;
-        // True while a CHGNet relax request is in flight (see F4): keeps the
+        // True while a relax request is in flight (see F4): keeps the
         // Analyze button disabled so a duplicate relax request can't be fired
         // (and 429 / stomp the first run's progress UI) while one is running.
         let relaxInProgress = false;
@@ -1491,7 +1623,7 @@
             updateAnalyzeButtonState();
         }
 
-        function enableCHGNetButtons() {
+        function enableMlipButtons() {
             const analyzeBtn = document.getElementById('analyze-btn');
 
             if (analyzeBtn) {
@@ -1504,7 +1636,7 @@
             updateStatusDisplay('magnetic', 'ready');
         }
 
-        function setCHGNetButtonState(state, text) {
+        function setMlipButtonState(state, text) {
             const analyzeBtn = document.getElementById('analyze-btn');
             if (!analyzeBtn) return;
 
@@ -1541,8 +1673,8 @@
             }
         }
 
-        function showCHGNetStatus(message, showProgress = false) {
-            const statusDiv = document.getElementById('chgnet-status');
+        function showMlipStatus(message, showProgress = false) {
+            const statusDiv = document.getElementById('mlip-status');
             const statusText = document.getElementById('status-text');
             const progressBar = document.getElementById('progress-bar');
 
@@ -1556,8 +1688,8 @@
             }
         }
 
-        function hideCHGNetStatus() {
-            const statusDiv = document.getElementById('chgnet-status');
+        function hideMlipStatus() {
+            const statusDiv = document.getElementById('mlip-status');
             statusDiv.style.display = 'none';
         }
 
@@ -1592,8 +1724,8 @@
             }
         }
 
-        function displayCHGNetResults(data, isRelaxation = false) {
-            const resultsDiv = document.getElementById('chgnet-results');
+        function displayMlipResults(data, isRelaxation = false) {
+            const resultsDiv = document.getElementById('mlip-results');
             resultsDiv.style.display = 'block';
 
             const initialPred = data.initial_prediction;
@@ -2483,8 +2615,7 @@ c = ${relaxedInfo.lattice_parameters.c.toFixed(5)} Å
 γ = ${relaxedInfo.lattice_parameters.gamma.toFixed(5)}°
 Volume = ${relaxedInfo.volume.toFixed(5)} Å³
 
-⚡ Structure relaxed with CHGNet
-Note: CHGNet may overestimate lattice constants and underestimate density`;
+⚡ Structure relaxed with ${getMlipModelName()}${getMlipLatticeNote() ? '\n' + 'Note: ' + getMlipLatticeNote() : ''}`;
 
                 dlog('Copying relaxed crystal information');
                 const result = await smartCopyToClipboard(crystalInfoText);
@@ -2692,7 +2823,7 @@ Crystal system: ${data.crystal_system}`;
         // displaySiteEnergiesResults function removed - Site Energies are now displayed in Energy details
 
 
-        async function runCHGNetAnalysis() {
+        async function runMlipAnalysis() {
             // Capture the structure generation this run started against, so
             // results can be discarded below if a Manual edit, Reset, or new
             // CIF load changed the structure underneath this long-running
@@ -2708,7 +2839,7 @@ Crystal system: ${data.crystal_system}`;
                 const startTime = performance.now();
 
                 // Start processing state with animation
-                setCHGNetButtonState('relaxing');
+                setMlipButtonState('relaxing');
 
                 // Update display status to calculating
                 updateStatusDisplay('energy', 'calculating');
@@ -2718,14 +2849,14 @@ Crystal system: ${data.crystal_system}`;
                 const maxSteps = parseInt(document.getElementById('max-steps-input').value);
                 const optimizer = document.getElementById('optimizer-input').value;
 
-                const requestData = {
+                const requestData = withModel({
                     session_id: window.sessionId,
                     fmax: fmax,
                     max_steps: maxSteps,
                     optimizer: optimizer
-                };
+                });
 
-                dlog('🔬 Starting CHGNet analysis:', requestData);
+                dlog('🔬 Starting ML potential analysis:', requestData);
 
                 let maxProgressFraction = 0;
                 // First observed max_force_eV_per_A this run -- forceFraction
@@ -2736,7 +2867,7 @@ Crystal system: ${data.crystal_system}`;
                 let initialMaxForce = null;
 
                 // Live charts: created on first use, cleared every run, and left
-                // visible afterwards (hideCHGNetStatus() does not touch them).
+                // visible afterwards (hideMlipStatus() does not touch them).
                 const relaxChartsEl = document.getElementById('relax-charts');
                 relaxChartsEl.style.display = 'block';
                 if (!window.relaxEnergyChart) {
@@ -2760,7 +2891,7 @@ Crystal system: ${data.crystal_system}`;
                             window.relaxEnergyChart.addPoints(state.history.map(h => ({ x: h.step, y: h.energy_eV })));
                             window.relaxForceChart.addPoints(state.history.map(h => ({ x: h.step, y: h.max_force_eV_per_A })));
                         }
-                        showCHGNetStatus(
+                        showMlipStatus(
                             `Step ${state.step} / ${state.max_steps} — max force ${state.max_force_eV_per_A.toFixed(4)} eV/Å (target ${state.fmax})`,
                             true
                         );
@@ -2796,7 +2927,7 @@ Crystal system: ${data.crystal_system}`;
 
                 let data;
                 try {
-                    const response = await fetch('/api/chgnet-relax', {
+                    const response = await fetch('/api/relax', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
@@ -2805,7 +2936,7 @@ Crystal system: ${data.crystal_system}`;
                     });
 
                     if (!response.ok) {
-                        let errorMessage = 'Error occurred during CHGNet analysis.';
+                        let errorMessage = 'Error occurred during ML potential analysis.';
                         try {
                             const errorData = await response.json();
                             if (errorData.detail) {
@@ -2823,10 +2954,10 @@ Crystal system: ${data.crystal_system}`;
                     }
 
                     // Structure calculation phase
-                    setCHGNetButtonState('calculating_structure');
+                    setMlipButtonState('calculating_structure');
 
                     data = await response.json();
-                    dlog('✅ CHGNet analysis completed:', data);
+                    dlog('✅ ML potential analysis completed:', data);
 
                     // The structure may have been edited, reset, or replaced
                     // while this relax was running -- discard the result
@@ -2834,12 +2965,12 @@ Crystal system: ${data.crystal_system}`;
                     // the UI for whatever structure exists now.
                     if (structureGeneration !== generationAtStart) {
                         dlog('Discarding stale relax result — structure changed during analysis');
-                        setCHGNetButtonState('complete');
+                        setMlipButtonState('complete');
                         return;
                     }
 
                     // Properties calculation phase
-                    setCHGNetButtonState('calculating_properties');
+                    setMlipButtonState('calculating_properties');
 
                     // The SSE stream may not have delivered the last steps; the
                     // response carries the complete history, so redraw from it.
@@ -2851,7 +2982,7 @@ Crystal system: ${data.crystal_system}`;
                         window.relaxForceChart.addPoints(fullHistory.map(h => ({ x: h.step, y: h.max_force_eV_per_A })));
                     }
 
-                    displayCHGNetResults(data, true);
+                    displayMlipResults(data, true);
 
                     if (data.relaxation_info?.aborted) {
                         showNotification('Relaxation hit the time limit; showing the best structure found so far.', 'warning');
@@ -2868,7 +2999,7 @@ Crystal system: ${data.crystal_system}`;
                     }
                 } finally {
                     progressSource.close();
-                    hideCHGNetStatus();
+                    hideMlipStatus();
                 }
 
                 // Update structure information with relaxed data
@@ -2895,7 +3026,7 @@ Crystal system: ${data.crystal_system}`;
                 // changed while updateRelaxed3DVisualization was in flight.
                 if (structureGeneration !== generationAtStart) {
                     dlog('Discarding stale relax result — structure changed during analysis');
-                    setCHGNetButtonState('complete');
+                    setMlipButtonState('complete');
                     return;
                 }
 
@@ -2903,7 +3034,7 @@ Crystal system: ${data.crystal_system}`;
                 const endTime = performance.now();
                 const executionTime = ((endTime - startTime) / 1000).toFixed(2);
 
-                showNotification(`CHGNet structure analysis completed successfully! (${executionTime}s)`, 'success');
+                showNotification(`Structure analysis completed successfully! (${executionTime}s)`, 'success');
 
                 // Display calculation time in results with steps
                 const steps = data.relaxation_info?.optimizer_steps !== undefined
@@ -2919,11 +3050,11 @@ Crystal system: ${data.crystal_system}`;
                 markStructureAsAnalyzed();
 
             } catch (error) {
-                console.error('❌ CHGNet analysis failed:', error);
-                showNotification(`CHGNet analysis failed: ${error.message}`, 'error');
+                console.error('❌ ML potential analysis failed:', error);
+                showNotification(`Analysis failed: ${error.message}`, 'error');
 
                 // Restore button on error
-                setCHGNetButtonState('complete');
+                setMlipButtonState('complete');
 
                 // A failed relax must not leave the Energy/Magnetic summary
                 // panels stuck showing "Calculating..." (see F5).
@@ -2952,7 +3083,7 @@ Crystal system: ${data.crystal_system}`;
 
             infoElement.innerHTML = `
                 <div style="margin-bottom: 15px;">
-                    <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Relaxed Supercell Structure Information: <a href="/static/user_guide.html#limitations" target="_blank" rel="noopener noreferrer" title="Important: CHGNet may overestimate lattice constants and underestimate density - Click for details" style="color: #e74c3c; text-decoration: none; margin-left: 5px;">⚠️</a></div>
+                    <div style="font-weight: bold; color: #2c3e50; margin-bottom: 8px;">Relaxed Supercell Structure Information: ${getMlipLatticeNote() ? `<a href="/static/user_guide.html#limitations" target="_blank" rel="noopener noreferrer" title="Important: ${escapeHtml(getMlipLatticeNote())} - Click for details" style="color: #e74c3c; text-decoration: none; margin-left: 5px;">⚠️</a>` : ''}</div>
                     <div><strong>Formula:</strong> ${escapeHtml(relaxedStructureInfo.formula)}<button class="copy-btn" id="copy-formula-relaxed" onclick="copyFormula('copy-formula-relaxed')" title="Copy: Formula">📋</button></div>
                     <div><strong>Supercell size:</strong> ${aSize} × ${bSize} × ${cSize}</div>
                     <div><strong>Total atoms:</strong> ${relaxedStructureInfo.num_sites}</div>
@@ -2974,8 +3105,8 @@ Crystal system: ${data.crystal_system}`;
                 
                 
                 <div style="font-size: 12px; color: #e74c3c; font-style: italic;">
-                    ⚡ Structure relaxed with CHGNet<br>
-                    <span style="font-size: 11px; margin-top: 3px; display: block;">Note: CHGNet may overestimate lattice constants and underestimate density</span>
+                    ⚡ Structure relaxed with ${escapeHtml(getMlipModelName())}<br>
+                    ${getMlipLatticeNote() ? `<span style="font-size: 11px; margin-top: 3px; display: block;">Note: ${escapeHtml(getMlipLatticeNote())}</span>` : ''}
                 </div>
             `;
 
@@ -3086,7 +3217,7 @@ Crystal system: ${data.crystal_system}`;
                     }
                     showViewerError(
                         'Failed to display relaxed structure. Could not retrieve accurate structure data. ' +
-                        `CHGNet calculation completed but 3D display unavailable. Error: ${error.message}`
+                        `Calculation completed but 3D display unavailable. Error: ${error.message}`
                     );
                 }
 
@@ -3231,8 +3362,8 @@ Crystal system: ${data.crystal_system}`;
                 // Initialize 3D viewer (mock for now)
                 initializeViewer();
 
-                // Enable CHGNet buttons when supercell is created
-                enableCHGNetButtons();
+                // Enable ML potential buttons when supercell is created
+                enableMlipButtons();
 
             } catch (error) {
                 console.error('Error creating supercell:', error);
@@ -3342,15 +3473,16 @@ Crystal system: ${data.crystal_system}`;
             }
         }
 
-        async function loadCHGnetElements() {
+        async function loadMlipElements() {
             try {
-                const response = await fetch('/api/chgnet-elements');
+                const modelId = getSelectedModelId();
+                const response = await fetch('/api/elements' + (modelId ? '?model=' + encodeURIComponent(modelId) : ''));
                 const data = await response.json();
-                chgnetElements = data.elements || [];
-                dlog(`Loaded ${chgnetElements.length} CHGnet supported elements`);
+                mlipElements = data.elements || [];
+                dlog(`Loaded ${mlipElements.length} supported elements`);
             } catch (error) {
-                console.error('Error loading CHGnet elements:', error);
-                chgnetElements = [];
+                console.error('Error loading supported elements:', error);
+                mlipElements = [];
             }
         }
 
@@ -3438,7 +3570,7 @@ Crystal system: ${data.crystal_system}`;
                 return;
             }
 
-            const chgnetOptions = chgnetElements.map(element =>
+            const mlipOptions = mlipElements.map(element =>
                 `<option value="${element}">${element}</option>`
             ).join('');
 
@@ -3500,7 +3632,7 @@ Crystal system: ${data.crystal_system}`;
                             <option value="">Select operation...</option>
                             <option value="DELETE">🗑️ Delete atom</option>
                             <optgroup label="Substitute with:">
-                                ${chgnetOptions}
+                                ${mlipOptions}
                             </optgroup>
                         </select>
                     </div>
@@ -3735,7 +3867,7 @@ Crystal system: ${data.crystal_system}`;
                 : targetValue;
 
             const previousValue = operationSelect.value;
-            const filteredOptions = chgnetElements
+            const filteredOptions = mlipElements
                 .filter(element => element !== excludedElement)
                 .map(element => `<option value="${element}">${element}</option>`)
                 .join('');
@@ -3749,7 +3881,7 @@ Crystal system: ${data.crystal_system}`;
             `;
 
             operationSelect.value = (previousValue === 'DELETE' ||
-                (previousValue && previousValue !== excludedElement && chgnetElements.includes(previousValue)))
+                (previousValue && previousValue !== excludedElement && mlipElements.includes(previousValue)))
                 ? previousValue
                 : '';
         }
@@ -3761,7 +3893,7 @@ Crystal system: ${data.crystal_system}`;
                 const response = await fetch('/api/get-insertable-elements', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ session_id: window.sessionId })
+                    body: JSON.stringify(withModel({ session_id: window.sessionId }))
                 });
                 const data = await response.json();
 
@@ -3903,7 +4035,7 @@ Crystal system: ${data.crystal_system}`;
                 // Phase 2: Energy Prediction, chunked into batch requests so a
                 // single request stays short (Cancel keeps working between chunks)
                 // while still cutting the number of round-trips by ~8x.
-                showExecuteStatus(`Energy Prediction (CHGNet) for ${element}...`, true, true);
+                showExecuteStatus(`Energy Prediction (${getSelectedMlipModelName()}) for ${element}...`, true, true);
                 updateExecuteProgress(0, voids.length);
 
                 let completed = 0;
@@ -3918,11 +4050,11 @@ Crystal system: ${data.crystal_system}`;
                         const energyResponse = await fetch('/api/evaluate-insertion-energies', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
+                            body: JSON.stringify(withModel({
                                 session_id: window.sessionId,
                                 element: element,
                                 sites: chunk.map(v => ({ id: v.id, frac_coords: v.frac_coords }))
-                            }),
+                            })),
                             signal: controller.signal
                         });
 
@@ -4074,6 +4206,14 @@ Crystal system: ${data.crystal_system}`;
             operationSelect.disabled = !elementTypeDropdown.value;
 
             let insertableElementsLoaded = false;
+            // Element sets differ per model: reload the insertion list.
+            window.addEventListener('mlip-model-changed', async () => {
+                insertableElementsLoaded = false;
+                if (window.currentOperationMode === 'insert' && window.sessionId) {
+                    await loadInsertableElements();
+                    insertableElementsLoaded = true;
+                }
+            });
 
             async function switchTab(mode) {
                 if (window.viewer3D && typeof clearGhostAtom === 'function') clearGhostAtom(); // Clear preview
@@ -4613,7 +4753,7 @@ Crystal system: ${data.crystal_system}`;
             if (!cand) return;
 
             dlog(`🧪 Evaluating specific candidate: ${cand.label} for ${element}`);
-            // showCancel=true: a single CHGNet call is normally quick, but on a
+            // showCancel=true: a single ML potential call is normally quick, but on a
             // large structure it can still take a while, and previously this
             // path had no Cancel button at all.
             if (currentAbortController) currentAbortController.abort();
@@ -4635,11 +4775,11 @@ Crystal system: ${data.crystal_system}`;
                 const response = await fetch('/api/evaluate-insertion-energy', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
+                    body: JSON.stringify(withModel({
                         session_id: window.sessionId,
                         element: element,
                         frac_coords: cand.frac_coords
-                    }),
+                    })),
                     signal: controller.signal
                 });
                 const data = await response.json();
@@ -4925,7 +5065,7 @@ Crystal system: ${data.crystal_system}`;
             }
         }
 
-        // Auto-mode candidates are ranked by unrelaxed (single-point) CHGNet
+        // Auto-mode candidates are ranked by unrelaxed (single-point) ML potential
         // energy, not the energy after relaxation -- measurements (plan doc
         // snug-churning-pike.md) found the top-ranked candidate can change
         // after relaxing, especially for substitutions with a larger ionic
@@ -5016,7 +5156,7 @@ Crystal system: ${data.crystal_system}`;
 
             // Reduce targetAtoms to one representative per symmetry-equivalent
             // group (via /api/equivalent-sites) so the sweep below doesn't
-            // waste CHGNet evaluations on candidates guaranteed to produce
+            // waste ML potential evaluations on candidates guaranteed to produce
             // symmetrically identical structures (see plan doc
             // snug-churning-pike.md). Purely an optimization: any failure
             // here (network error, non-OK response, malformed body) falls
@@ -5170,7 +5310,7 @@ Crystal system: ${data.crystal_system}`;
                         const response = await fetch('/api/evaluate-candidate-energies', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ session_id: window.sessionId, candidates }),
+                            body: JSON.stringify(withModel({ session_id: window.sessionId, candidates })),
                             signal: timeoutController.signal
                         });
 
@@ -5661,7 +5801,7 @@ Crystal system: ${data.crystal_system}`;
                 await updateStructureVisualization();
                 resetCrystalView();
 
-                // Clear any previous CHGNet analysis results
+                // Clear any previous ML potential analysis results
                 resetPhysicalProperties();
 
                 dlog('✓ Complete structure reset successful');
@@ -6919,7 +7059,7 @@ Crystal system: ${data.crystal_system}`;
                 <div>Force Tolerance: ${data.relaxation_info?.fmax || 'N/A'} eV/Å</div>
                 <div>Max Steps: ${data.relaxation_info?.max_steps || 'N/A'}</div>
                 <div>Optimizer: ${data.relaxation_info?.optimizer || 'N/A'}</div>
-                <div>Model: CHGNet v${data.model_info?.version || '0.3.0'}</div>
+                <div>Model: ${escapeHtml(data.model_info?.display_name || 'N/A')}${data.model_info?.version ? ' v' + escapeHtml(String(data.model_info.version)) : ''}</div>
                 <div>Device: ${data.model_info?.device || 'CPU'}</div>
             `;
         }
@@ -7010,6 +7150,14 @@ Crystal system: ${data.crystal_system}`;
                 return;
             }
 
+            // Hide columns the model did not provide (e.g. MACE has no magnetic
+            // moments or site energies).
+            const propsTable = document.getElementById('atomicPropertiesTable');
+            if (propsTable) {
+                propsTable.classList.toggle('hide-magmom', magmoms.length === 0);
+                propsTable.classList.toggle('hide-site-energy', siteEnergies.length === 0);
+            }
+
             // Populate table rows
             for (let i = 0; i < numAtoms; i++) {
                 const atomLabel = window.currentLabels && window.currentLabels[i] ? window.currentLabels[i] : `Atom ${i + 1}`;
@@ -7033,8 +7181,8 @@ Crystal system: ${data.crystal_system}`;
                 const row = document.createElement('tr');
                 row.innerHTML = `
                     <td>${escapeHtml(atomLabel)}</td>
-                    <td class="site-energy">${siteEnergy}</td>
-                    <td class="magnetic-moment">${magmom}</td>
+                    <td class="site-energy col-site-energy">${siteEnergy}</td>
+                    <td class="magnetic-moment col-magmom">${magmom}</td>
                     <td>${fx}</td>
                     <td>${fy}</td>
                     <td>${fz}</td>
@@ -7533,8 +7681,8 @@ Crystal system: ${data.crystal_system}`;
                             <thead>
                                 <tr>
                                     <th>Atom</th>
-                                    <th>Site Energy (eV)</th>
-                                    <th>Magnetic (μB)</th>
+                                    <th class="col-site-energy">Site Energy (eV)</th>
+                                    <th class="col-magmom">Magnetic (μB)</th>
                                     <th>Fx (eV/Å)</th>
                                     <th>Fy (eV/Å)</th>
                                     <th>Fz (eV/Å)</th>
@@ -7595,13 +7743,13 @@ Crystal system: ${data.crystal_system}`;
                 }
             }
 
-            // Check for CHGNet optimization. window.currentAnalysisData is the
-            // raw /api/chgnet-relax response (see displayCHGNetResults) and has
+            // Check for ML potential optimization. window.currentAnalysisData is the
+            // raw /api/relax response (see displayMlipResults) and has
             // no top-level `energy` field; relaxed_structure_info is the
             // field that's actually present once a relax has completed (same
             // check used elsewhere, e.g. copyToSpreadsheet).
             if (window.currentAnalysisData?.relaxed_structure_info) {
-                operations.push('chgnet_optimized');
+                operations.push('mlip_optimized');
             }
 
             // Check for element substitutions (compare with original formula)
@@ -7712,8 +7860,12 @@ Crystal system: ${data.crystal_system}`;
 
                 dlog('Extracted values:', { formula, energy, magnetic });
 
-                // Generate tab-separated values
-                const tabSeparatedData = `${formula}\t${energy}\t${magnetic}`;
+                // Generate tab-separated values; the magnetic column is
+                // omitted for models without magnetic moments.
+                const hasMagmom = Array.isArray(data.final_prediction?.magmoms_muB);
+                const tabSeparatedData = hasMagmom
+                    ? `${formula}\t${energy}\t${magnetic}`
+                    : `${formula}\t${energy}`;
 
                 // Copy to clipboard
                 if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -8042,8 +8194,17 @@ Crystal system: ${data.crystal_system}`;
             dlog('- window.currentAnalysisData:', window.currentAnalysisData);
             dlog('- window.currentStructureInfo:', window.currentStructureInfo);
 
-            let text = 'Energy and Magnetic Properties\n';
+            const exportModelInfo = window.currentAnalysisData?.model_info;
+            // Models without magnetic moments (e.g. MACE) get no magnetic section.
+            const exportHasMagmom = !window.currentAnalysisData
+                || Array.isArray(window.currentAnalysisData.final_prediction?.magmoms_muB);
+            let text = exportHasMagmom ? 'Energy and Magnetic Properties\n' : 'Energy Properties\n';
             text += '================================\n\n';
+            if (exportModelInfo) {
+                text += `Model: ${exportModelInfo.display_name || exportModelInfo.id}${exportModelInfo.version ? ' v' + exportModelInfo.version : ''}`
+                    + `${exportModelInfo.id ? ' (' + exportModelInfo.id + ')' : ''}\n`;
+                text += 'Note: energies from different models are not comparable.\n\n';
+            }
 
             // Use direct data access instead of HTML parsing
             let energyData = null;
@@ -8100,12 +8261,12 @@ Crystal system: ${data.crystal_system}`;
             }
 
             // If direct data is not available, fall back to HTML extraction
-            if (!energyData || !magneticData) {
+            if (!energyData || (!magneticData && exportHasMagmom)) {
                 console.warn('Direct data not available, falling back to HTML extraction');
                 if (!energyData) {
                     energyData = extractEnergyFromDisplay();
                 }
-                if (!magneticData) {
+                if (!magneticData && exportHasMagmom) {
                     magneticData = extractMagneticFromDisplay();
                 }
             }
@@ -8142,15 +8303,15 @@ Crystal system: ${data.crystal_system}`;
                     });
                 }
                 text += '\n';
-            } else {
+            } else if (exportHasMagmom) {
                 text += 'Magnetic Information: Not available\n\n';
             }
 
             // Add calculation details
             text += 'Calculation Details:\n';
             text += '===================\n';
-            // The /api/chgnet-relax response nests this under relaxation_info
-            // (see main.py's chgnet_relax_structure), not at the top level of
+            // The /api/relax response nests this under relaxation_info
+            // (see main.py's relax_structure), not at the top level of
             // the analysis data -- read from there so these fields aren't
             // silently omitted (see F13).
             const relaxationInfo = window.currentAnalysisData?.relaxation_info;
@@ -8163,7 +8324,10 @@ Crystal system: ${data.crystal_system}`;
             if (relaxationInfo?.fmax !== undefined) {
                 text += `Force tolerance (fmax): ${relaxationInfo.fmax} eV/Å\n`;
             }
-            text += 'Model: CHGNet\n';
+            const exportModel = window.currentAnalysisData?.model_info;
+            if (exportModel) {
+                text += `Model: ${exportModel.display_name || exportModel.id}${exportModel.version ? ' v' + exportModel.version : ''}\n`;
+            }
 
             dlog('Generated Energy and Magnetic text:', text);
             return text;
@@ -8283,10 +8447,14 @@ Crystal system: ${data.crystal_system}`;
             dlog('=== GENERATING FINAL ATOMIC PROPERTIES CSV ===');
             dlog('Using same logic as populateAtomicPropertiesTable');
 
-            let csv = 'Atom,Site Energy (eV),Magnetic (μB),Fx (eV/Å),Fy (eV/Å),Fz (eV/Å),|F| (eV/Å)\n';
+            const csvModel = window.currentAnalysisData?.model_info;
+            let csv = csvModel
+                ? `# Model: ${csvModel.display_name || csvModel.id}${csvModel.version ? ' v' + csvModel.version : ''} (${csvModel.id})\n`
+                : '';
 
             if (!window.currentAnalysisData?.final_prediction) {
                 console.warn('No final prediction data available');
+                csv += 'Atom,Site Energy (eV),Magnetic (μB),Fx (eV/Å),Fy (eV/Å),Fz (eV/Å),|F| (eV/Å)\n';
                 csv += 'No data available,-,-,-,-,-,-\n';
                 return csv;
             }
@@ -8299,10 +8467,14 @@ Crystal system: ${data.crystal_system}`;
             const siteEnergies = finalPred.site_energies_eV || [];
             const magmoms = finalPred.magmoms_muB || [];
 
-            dlog('Data arrays:');
-            dlog('- forces:', forces);
-            dlog('- siteEnergies:', siteEnergies);
-            dlog('- magmoms:', magmoms);
+            // Site energy / magnetic columns exist only if the model provided them.
+            const hasSiteEnergy = siteEnergies.length > 0;
+            const hasMagmom = magmoms.length > 0;
+            const header = ['Atom'];
+            if (hasSiteEnergy) header.push('Site Energy (eV)');
+            if (hasMagmom) header.push('Magnetic (μB)');
+            header.push('Fx (eV/Å)', 'Fy (eV/Å)', 'Fz (eV/Å)', '|F| (eV/Å)');
+            csv += header.join(',') + '\n';
 
             // Determine number of atoms (same logic as display)
             const numAtoms = Math.max(forces.length, siteEnergies.length, magmoms.length);
@@ -8310,7 +8482,7 @@ Crystal system: ${data.crystal_system}`;
 
             if (numAtoms === 0) {
                 console.warn('No atomic data available');
-                csv += 'No data available,-,-,-,-,-,-\n';
+                csv += 'No data available' + ',-'.repeat(header.length - 1) + '\n';
                 return csv;
             }
 
@@ -8335,7 +8507,11 @@ Crystal system: ${data.crystal_system}`;
                     fMag = magnitude.toFixed(6);
                 }
 
-                csv += `${atomLabel},${siteEnergy},${magmom},${fx},${fy},${fz},${fMag}\n`;
+                const cols = [atomLabel];
+                if (hasSiteEnergy) cols.push(siteEnergy);
+                if (hasMagmom) cols.push(magmom);
+                cols.push(fx, fy, fz, fMag);
+                csv += cols.join(',') + '\n';
             }
 
             dlog('Generated Final Atomic Properties CSV:', csv);
@@ -8464,13 +8640,14 @@ Crystal system: ${data.crystal_system}`;
         }
     </script>
 
-    <!-- CHGNet Information Modal -->
-    <div id="chgnetInfoModal" class="chgnet-info-modal">
-        <div class="chgnet-info-content">
-            <span class="chgnet-info-close" onclick="closeCHGNetInfo()">&times;</span>
+    <!-- Model Information Modal: one block per model, shown by showMlipInfo() -->
+    <div id="mlipInfoModal" class="mlip-info-modal">
+        <div class="mlip-info-content">
+            <span class="mlip-info-close" onclick="closeMlipInfo()">&times;</span>
+            <div id="mlip-info-chgnet" class="mlip-info-model">
             <h2>CHGNet: Charge-informed Graph Neural Network</h2>
 
-            <div class="chgnet-section">
+            <div class="mlip-section">
                 <h4>1. Scientific Foundation</h4>
                 <p>CHGNet (Crystal Hamiltonian Graph Neural Network) is a pretrained universal neural network potential
                     for charge-informed atomistic modeling, developed by Deng et al. (2023). This method represents a
@@ -8479,7 +8656,7 @@ Crystal system: ${data.crystal_system}`;
                     moments.</p>
             </div>
 
-            <div class="chgnet-section">
+            <div class="mlip-section">
                 <h4>2. Methodology</h4>
                 <p><strong>Graph Neural Network Architecture:</strong> Crystal structures are represented as undirected
                     graphs G = (V, E), with vertices V corresponding to atoms and edges E representing interatomic
@@ -8491,24 +8668,24 @@ Crystal system: ${data.crystal_system}`;
                     through shared representations. The total loss function incorporates task-specific weighting
                     coefficients optimized during training.</p>
 
-                <p><strong>Universal Potential:</strong> The model covers 89 elements from hydrogen to actinium, trained
+                <p><strong>Universal Potential:</strong> The model covers 86 elements (hydrogen to uranium, excluding the noble gases), trained
                     with approximately 400,000 trainable parameters optimized for computational efficiency while
                     maintaining chemical accuracy.</p>
             </div>
 
-            <div class="chgnet-section">
+            <div class="mlip-section">
                 <h4>3. Training Dataset</h4>
                 <p>The model is trained on 1,580,395 crystal structures from the Materials Project database,
                     encompassing:</p>
                 <ul>
-                    <li>Comprehensive elemental coverage (89 elements: H-Ac)</li>
+                    <li>Broad elemental coverage (86 elements: H-U, no noble gases)</li>
                     <li>Diverse crystal systems and space groups with representative sampling</li>
                     <li>Multiple property targets: energies, forces, stresses, and magnetic moments</li>
                     <li>Materials spanning metallic, semiconducting, and insulating electronic structures</li>
                 </ul>
             </div>
 
-            <div class="chgnet-section">
+            <div class="mlip-section">
                 <h4>4. Performance Characteristics</h4>
 
                 <p><strong>Energetic Properties:</strong> Energy predictions achieve mean absolute errors of 29.8
@@ -8528,7 +8705,7 @@ Crystal system: ${data.crystal_system}`;
                     calculations.</p>
             </div>
 
-            <div class="chgnet-section">
+            <div class="mlip-section">
                 <h4>5. Applications and Limitations</h4>
                 <p>CHGNet enables rapid screening of materials properties, high-throughput computational materials
                     discovery, and large-scale atomistic simulations previously computationally prohibitive with ab
@@ -8541,7 +8718,7 @@ Crystal system: ${data.crystal_system}`;
                     densities due to sampling bias toward near-equilibrium configurations in the training dataset.</p>
             </div>
 
-            <div class="chgnet-section">
+            <div class="mlip-section">
                 <h4>Reference</h4>
                 <div class="citation-box">
                     <p>Deng, B., Zhong, P., Jun, K. <em>et al.</em> CHGNet as a pretrained universal neural network
@@ -8553,7 +8730,7 @@ Crystal system: ${data.crystal_system}`;
                 </div>
             </div>
 
-            <div class="chgnet-links">
+            <div class="mlip-links">
                 <h4>External Resources</h4>
                 <a href="https://www.nature.com/articles/s42256-023-00716-3" target="_blank" rel="noopener noreferrer">Nature Machine Intelligence
                     Paper</a>
@@ -8561,23 +8738,97 @@ Crystal system: ${data.crystal_system}`;
                 <a href="https://materialsproject.org/" target="_blank" rel="noopener noreferrer">Materials Project Database</a>
                 <a href="https://chgnet.lbl.gov/" target="_blank" rel="noopener noreferrer">Official Documentation</a>
             </div>
+            </div>
+
+            <div id="mlip-info-mace" class="mlip-info-model" style="display: none;">
+            <h2>MACE-MP-0: A Foundation Model for Atomistic Materials Chemistry</h2>
+
+            <div class="mlip-section">
+                <h4>1. Scientific Foundation</h4>
+                <p>MACE-MP-0 is a pretrained foundation interatomic potential built on the MACE architecture
+                    (higher-order equivariant message passing neural networks), developed by Batatia et al. It is
+                    intended to be used out of the box for atomistic simulations across most of the periodic table
+                    without any system-specific training.</p>
+            </div>
+
+            <div class="mlip-section">
+                <h4>2. Model Used Here</h4>
+                <p>CrystalNexus uses the original <strong>MACE-MP-0 &ldquo;medium&rdquo;</strong> checkpoint
+                    (about 4.7 million parameters) through the <code>mace-torch</code> package, running on CPU in
+                    double precision by default (set <code>MACE_DTYPE=float32</code> for faster, lower-memory
+                    calculations). It covers 89 elements (Z = 1&ndash;83 and 89&ndash;94). Predicted properties are
+                    total energy, forces and stress; <strong>magnetic moments and site energies are not
+                        provided</strong>, so those fields are hidden when this model is selected.</p>
+            </div>
+
+            <div class="mlip-section">
+                <h4>3. Training Dataset</h4>
+                <p>The model is trained on the MPtrj dataset (Materials Project relaxation trajectories, PBE/PBE+U
+                    DFT), the same training data lineage as CHGNet.</p>
+            </div>
+
+            <div class="mlip-section">
+                <h4>4. Using it alongside CHGNet</h4>
+                <p>Both models are trained on MPtrj, but their absolute energies are <strong>not
+                        interchangeable</strong>: energies, energy differences and relaxed geometries can differ
+                    between the two. Do not mix models within one analysis; compare results only when they come from
+                    the same model. Every result and export shows the model that produced it.</p>
+                <p><strong>First use:</strong> the model weights are downloaded once (to <code>~/.cache/mace</code>),
+                    so the first calculation needs an internet connection. The MACE code and the MACE-MP-0 weights
+                    are released under the MIT license.</p>
+            </div>
+
+            <div class="mlip-section">
+                <h4>Reference</h4>
+                <div class="citation-box">
+                    <p>Batatia, I., Benner, P., Chiang, Y. <em>et al.</em> A foundation model for atomistic materials
+                        chemistry. <em>arXiv</em>:2401.00096 (2023).
+                    </p>
+                    <p>arXiv: <a href="https://arxiv.org/abs/2401.00096" target="_blank" rel="noopener noreferrer"
+                            style="color: #2980b9;">2401.00096</a></p>
+                </div>
+            </div>
+
+            <div class="mlip-links">
+                <h4>External Resources</h4>
+                <a href="https://github.com/ACEsuit/mace" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
+                <a href="https://arxiv.org/abs/2401.00096" target="_blank" rel="noopener noreferrer">arXiv Paper</a>
+                <a href="https://materialsproject.org/" target="_blank" rel="noopener noreferrer">Materials Project Database</a>
+            </div>
+            </div>
         </div>
     </div>
 
     <script>
-        function showCHGNetInfo() {
-            document.getElementById('chgnetInfoModal').style.display = 'block';
+        // Display name of the model that produced the current relaxation result
+        // (falls back to the model selected in the panel).
+        function getMlipModelName() {
+            return window.currentAnalysisData?.model_info?.display_name || getSelectedMlipModelName();
         }
 
-        function closeCHGNetInfo() {
-            document.getElementById('chgnetInfoModal').style.display = 'none';
+        // CHGNet-specific caveat; empty for every other model.
+        function getMlipLatticeNote() {
+            return window.currentAnalysisData?.model_info?.id === 'chgnet'
+                ? 'CHGNet may overestimate lattice constants and underestimate density'
+                : '';
+        }
+
+        function showMlipInfo() {
+            const isMace = (getSelectedModelId() || '').startsWith('mace');
+            document.getElementById('mlip-info-chgnet').style.display = isMace ? 'none' : 'block';
+            document.getElementById('mlip-info-mace').style.display = isMace ? 'block' : 'none';
+            document.getElementById('mlipInfoModal').style.display = 'block';
+        }
+
+        function closeMlipInfo() {
+            document.getElementById('mlipInfoModal').style.display = 'none';
         }
 
         // Close modal when clicking outside of it
         window.onclick = function (event) {
-            var modal = document.getElementById('chgnetInfoModal');
+            var modal = document.getElementById('mlipInfoModal');
             if (event.target == modal) {
-                closeCHGNetInfo();
+                closeMlipInfo();
             }
         }
     </script>

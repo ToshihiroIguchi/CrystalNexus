@@ -10,13 +10,12 @@ CrystalNexus is a comprehensive web-based application for crystal structure anal
 *   **Smart Supercell Generation**: Create custom supercells (e.g., 2x2x2) with a single click. The application automatically handles atomic positions and lattice vectors.
 *   **Materials Project Integration**: Quickly search for and download structures from the Materials Project database via a direct integrated link.
 
-###  Machine Learning Integration (CHGNet v0.4.0)
-*   **State-of-the-Art Model**: Utilizes the latest CHGNet pre-trained transformer model for accurate universal interatomic potential predictions.
+###  Machine Learning Integration (CHGNet and MACE-MP-0)
+*   **Selectable Models**: Choose the ML potential per calculation in the **Model** dropdown (default: CHGNet v0.4.0). See [ML potential models](#ml-potential-models).
 *   **One-Click Relaxation**: Automatically optimizes atomic positions and lattice parameters to find the ground-state structure.
 *   **Property Prediction**: Instantly calculates:
     *   **Total Energy** (eV/atom)
-    *   **Magnetic Moments** (magmom)
-    *   **Site-Specific Energies**
+    *   **Magnetic Moments** (magmom) and **Site-Specific Energies** (CHGNet only)
 *   **Auto Mode Optimization**: An advanced AI-driven feature that iteratively substitutes, deletes, or inserts atoms to discover the most energetically favorable configuration.
 *   **Real-time Feedback**: Watch energy minimization progress live via dynamic sparkline charts.
 
@@ -94,7 +93,7 @@ Check if the installation was successful by listing the installed packages:
 ```bash
 pip list
 ```
-Ensure `chgnet`, `pymatgen`, `fastapi`, and `torch` are present.
+Ensure `chgnet`, `mace-torch`, `pymatgen`, `fastapi`, and `torch` are present. If `mace-torch` is missing the app still starts and shows MACE as "not installed".
 
 ---
 
@@ -141,7 +140,7 @@ This binds `0.0.0.0` and:
 
 **Security implications of LAN mode** — this is a genuinely unauthenticated app, so only expose it on a network you trust:
 *   There is no authentication on `/` or on any `/api/*` endpoint; anyone who can reach the machine on that port can use the full application.
-*   Any LAN device can upload CIF files and trigger CHGNet relaxations, consuming this machine's CPU and RAM. `POST /api/*` requests are rate-limited per client IP (60 requests/min, burst 20), but this only throttles abuse, it doesn't prevent it.
+*   Any LAN device can upload CIF files and trigger ML-potential relaxations, consuming this machine's CPU and RAM. `POST /api/*` requests are rate-limited per client IP (60 requests/min, burst 20), but this only throttles abuse, it doesn't prevent it.
 *   Sessions are shared globally across all clients (`MAX_SESSIONS=100`, least-recently-used eviction). Each client IP is further capped at `MAX_SESSIONS_PER_IP=10` concurrent sessions of its own, so one device can no longer evict *other* LAN users' sessions just by opening enough tabs -- but multiple browser tabs/devices sharing the same IP (e.g. behind the same NAT) still compete for that one IP's 10-session budget.
 *   Every visitor's IP address and User-Agent is logged to `analytics.db`, retained for `ANALYTICS_RETENTION_DAYS` (default 90) days.
 
@@ -154,6 +153,30 @@ netsh advfirewall firewall add rule name="CrystalNexus 8090" dir=in action=allow
 (`profile=private` keeps the rule off public/untrusted networks.) The script also prints the matching `delete rule` command so you can remove it later.
 
 LAN IP detection is best-effort: it may list several candidate addresses if your machine has VPN/WSL/Hyper-V virtual adapters, and it may occasionally fail to detect anything, in which case run `ipconfig` and look for your Wi-Fi/Ethernet adapter's IPv4 address.
+
+### Configuration notes (renamed variables)
+
+The model-specific environment variables were renamed with the move to a model-neutral API (the old names are no longer read):
+
+| Old | New |
+|---|---|
+| `CHGNET_BATCH_SIZE` | `MLIP_BATCH_SIZE` |
+| `CHGNET_RELAX_OPTIMIZER` | `RELAX_OPTIMIZER` |
+
+The HTTP endpoints were renamed likewise: `/api/chgnet-predict` -> `/api/predict`, `/api/chgnet-relax` -> `/api/relax`, `/api/chgnet-elements` -> `/api/elements` (the `chgnet_available` response key is now `available`).
+
+### ML potential models
+
+| Model id | Name | Magnetic moments | Site energies | Elements | License |
+|---|---|---|---|---|---|
+| `chgnet` (default) | CHGNet | yes | yes | 86 (H-U, no noble gases) | Berkeley Lab BSD-style |
+| `mace-mp-0-medium` | MACE-MP-0 (medium) | no | no | 89 (Z = 1-83, 89-94) | MIT |
+
+*   **Selecting a model**: use the **Model** dropdown in the ML Potential panel (saved in your browser), or pass `"model": "<id>"` in the JSON body of `/api/predict`, `/api/relax`, `/api/evaluate-insertion-energy`, `/api/evaluate-insertion-energies` and `/api/evaluate-candidate-energies`. Omitted means the server default (`CRYSTALNEXUS_DEFAULT_MODEL`, default `chgnet`). Unknown ids return 400; a model that is not installed returns 503; a structure containing elements the model does not support returns 422 listing them (checked before any calculation).
+*   **Endpoints**: `GET /api/models` lists `id`, `display_name`, `available`, `capabilities`, `version`, `is_default`. `GET /api/elements?model=<id>` returns that model's elements (unknown id: 400; not installed: 200 with `available: false` and an empty list).
+*   **First MACE use downloads weights** (about 45 MB) to `~/.cache/mace`, so an internet connection is needed once; offline without cached weights the API returns 503 with an explanatory message.
+*   **MACE precision**: `MACE_DTYPE` (`float64` default, or `float32` for speed/memory).
+*   **Do not mix models in one analysis.** Both models are trained on MPtrj, but absolute energies are not interchangeable between them. Results, relaxed CIF headers and text/CSV exports state which model produced them. Relaxation concurrency is global: a second relaxation returns 429 regardless of the model.
 
 ### Workflow Guide
 
@@ -168,8 +191,8 @@ LAN IP detection is best-effort: it may list several candidate addresses if your
 *   **Pan**: Right-click (or Ctrl+Left-click) and drag.
 *   **Inspect**: Hover over atoms to see their element and coordinates.
 
-#### 3. Structure Analysis (CHGNet)
-*   **Analyze & Relax**: Click **"Analyze Structure"**. CHGNet relaxes the geometry (optimizing atomic positions and the cell) and reports the energy of the resulting structure. The 3D view updates to show the relaxed structure.
+#### 3. Structure Analysis (ML potential)
+*   **Analyze & Relax**: Click **"Analyze Structure"**. The ML potential selected in the **Model** dropdown (CHGNet by default) relaxes the geometry (optimizing atomic positions and the cell) and reports the energy of the resulting structure. The 3D view updates to show the relaxed structure.
 *   **Advanced Settings**: Expand **"⚙️ Advanced Settings"** to tune the force tolerance, max steps, and optimizer (LBFGS/FIRE/BFGS) before analyzing.
 
 #### 4. Advanced Editing

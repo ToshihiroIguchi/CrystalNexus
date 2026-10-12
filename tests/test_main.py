@@ -3,7 +3,8 @@ import platform
 
 import pytest
 
-from main import ALLOWED_ELEMENTS, CHGNET_AVAILABLE
+from main import ALLOWED_ELEMENTS
+from mlip.registry import is_available as model_is_available
 
 
 def test_health_check(client):
@@ -39,9 +40,9 @@ def test_sample_cif_files(client):
     assert count_cif_files(structure) > 0
 
 
-def test_chgnet_elements(client):
-    """Test CHGNet elements endpoint"""
-    response = client.get("/api/chgnet-elements")
+def test_elements(client):
+    """Test the supported-elements endpoint"""
+    response = client.get("/api/elements")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
@@ -49,6 +50,19 @@ def test_chgnet_elements(client):
     assert "total_elements" in data
     assert isinstance(data["elements"], list)
     assert data["total_elements"] > 50  # Should have many elements
+    assert isinstance(data["available"], bool)
+    assert "chgnet_available" not in data
+
+
+@pytest.mark.parametrize("method,path", [
+    ("post", "/api/chgnet-predict"),
+    ("post", "/api/chgnet-relax"),
+    ("get", "/api/chgnet-elements"),
+])
+def test_old_chgnet_endpoints_are_removed(client, method, path):
+    """The pre-rename CHGNet-specific paths must no longer exist."""
+    response = getattr(client, method)(path, **({"json": {}} if method == "post" else {}))
+    assert response.status_code == 404
 
 
 def test_windows_compatibility():
@@ -116,10 +130,10 @@ def test_element_count():
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not CHGNET_AVAILABLE, reason="CHGNet not available")
-def test_chgnet_predict(client):
-    """Test CHGNet prediction endpoint returns a physical result"""
-    response = client.post("/api/chgnet-predict", json={
+@pytest.mark.skipif(not model_is_available("chgnet"), reason="CHGNet not available")
+def test_predict(client):
+    """Test prediction endpoint returns a physical result"""
+    response = client.post("/api/predict", json={
         "filename": "Metals/Cu.cif",
         "operations": [],
         "supercell_size": [1, 1, 1]
@@ -135,10 +149,10 @@ def test_chgnet_predict(client):
     assert energy < 0
 
 
-def test_chgnet_predict_validates_supercell_size(client):
+def test_predict_validates_supercell_size(client):
     """supercell_size must be validated before the (expensive, model-
     loading) CHGNet path runs, so this stays fast even without CHGNet."""
-    response = client.post("/api/chgnet-predict", json={
+    response = client.post("/api/predict", json={
         "filename": "Metals/Cu.cif",
         "operations": [],
         "supercell_size": [99, 1, 1],
@@ -146,14 +160,14 @@ def test_chgnet_predict_validates_supercell_size(client):
     assert response.status_code == 400
 
 
-def test_chgnet_predict_rejects_oversized_structure(client, monkeypatch):
+def test_predict_rejects_oversized_structure(client, monkeypatch):
     """Regression (B2): the resolved structure's site count must be checked
     against MAX_PREDICT_ATOMS before the (expensive, model-loading) CHGNet
     path runs, so this stays fast even without CHGNet."""
     import main
     monkeypatch.setattr(main, "MAX_PREDICT_ATOMS", 1)
 
-    response = client.post("/api/chgnet-predict", json={
+    response = client.post("/api/predict", json={
         "filename": "Metals/Cu.cif",
         "operations": [],
         "supercell_size": [2, 2, 2],
@@ -162,11 +176,11 @@ def test_chgnet_predict_rejects_oversized_structure(client, monkeypatch):
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not CHGNET_AVAILABLE, reason="CHGNet not available")
-def test_chgnet_predict_with_substitution(client):
-    """A substitution passed through /api/chgnet-predict must actually
+@pytest.mark.skipif(not model_is_available("chgnet"), reason="CHGNet not available")
+def test_predict_with_substitution(client):
+    """A substitution passed through /api/predict must actually
     apply and be reflected in the returned structure info."""
-    response = client.post("/api/chgnet-predict", json={
+    response = client.post("/api/predict", json={
         "filename": "Metals/Cu.cif",
         "operations": [{"action": "substitute", "index": 0, "to": "Ni"}],
         "supercell_size": [1, 1, 1],
@@ -179,11 +193,11 @@ def test_chgnet_predict_with_substitution(client):
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not CHGNET_AVAILABLE, reason="CHGNet not available")
-def test_chgnet_predict_reports_skipped_operations(client):
+@pytest.mark.skipif(not model_is_available("chgnet"), reason="CHGNet not available")
+def test_predict_reports_skipped_operations(client):
     """An out-of-range operation must be reported in operations_skipped
     rather than silently dropped (the field the frontend now reads)."""
-    response = client.post("/api/chgnet-predict", json={
+    response = client.post("/api/predict", json={
         "filename": "Metals/Cu.cif",
         "operations": [{"action": "substitute", "index": 9999, "to": "Ni"}],
         "supercell_size": [1, 1, 1],
@@ -201,7 +215,7 @@ def test_default_port():
     shell already had CRYSTALNEXUS_PORT set when the suite started,
     main.PORT legitimately reflects that value instead of the default --
     skip in that case rather than reloading the whole main module (which
-    would also reset chgnet_manager's cached model and session_manager's
+    would also reset the backend's cached model and session_manager's
     session store for every test that runs afterward in this session).
     """
     import main

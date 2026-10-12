@@ -210,8 +210,8 @@
 
     <h3>2.3 Training Dataset and Validation</h3>
 
-    <p>The CHGNet model was trained on 1,580,395 structures from the Materials Project database, encompassing 89
-        elements from hydrogen to actinium<sup><a href="#ref3" class="citation">[3]</a>,<a href="#ref4"
+    <p>The CHGNet model was trained on 1,580,395 structures from the Materials Project database, encompassing a broad range of
+        elements<sup><a href="#ref3" class="citation">[3]</a>,<a href="#ref4"
                 class="citation">[4]</a></sup>. The training set includes diverse crystal systems, space groups, and
         chemical compositions to ensure broad applicability. Validation against DFT calculations demonstrates mean
         absolute errors of 29.8 meV/atom for energies and 0.076 eV/Å for forces<sup><a href="#ref3"
@@ -232,7 +232,7 @@
     <p>The application implements rigorous validation protocols for Crystallographic Information File (CIF) inputs.
         Occupancy validation ensures all atomic sites possess full occupancy ($1.0 \pm 10^{-6}$), as partial
         occupancy structures are incompatible with the CHGNet training paradigm. Element validation restricts inputs to
-        the 89 elements supported by the underlying model.</p>
+        the elements supported by the selected model (86 for CHGNet).</p>
 
     <h3>3.3 Structure Optimization Protocol</h3>
 
@@ -257,7 +257,7 @@
                 count)</li>
             <li><strong>Structure Modification:</strong> Element substitution, atom deletion, and element insertion
                 capabilities</li>
-            <li><strong>Property Prediction:</strong> CHGNet-based calculation of energies and magnetic moments</li>
+            <li><strong>Property Prediction:</strong> ML-potential (CHGNet by default) calculation of energies and magnetic moments</li>
             <li><strong>Results Analysis:</strong> Visualization of optimized structures and quantitative property data
             </li>
         </ol>
@@ -274,6 +274,18 @@
         <li><strong>Optimized Geometry:</strong> Relaxed atomic positions and lattice parameters</li>
         <li><strong>Computational Metrics:</strong> Calculation time and convergence statistics</li>
     </ul>
+
+    <h3>4.2 Model Selection</h3>
+
+    <p>The ML potential is chosen per request with the <strong>Model</strong> dropdown in the ML Potential panel.
+        Two models are available: CHGNet<sup><a href="#ref3" class="citation">[3]</a></sup> (default; provides magnetic
+        moments and site energies) and MACE-MP-0 (medium)<sup><a href="#ref9" class="citation">[9]</a></sup> (MIT license;
+        energy, forces and stress only, so magnetic-moment and site-energy fields are hidden). The element list is
+        updated for the selected model, and a structure containing elements the model does not support is rejected
+        before any calculation. The first MACE calculation downloads the model weights once (internet access is
+        required). Both models are trained on the MPtrj dataset, but their absolute energies are <strong>not
+            interchangeable</strong>: do not mix models within one analysis. Results and exports name the model that
+        produced them.</p>
 
     <h2>5. Advanced Structure Modification Algorithms</h2>
 
@@ -294,9 +306,9 @@
             <div class="equation">
                 $$i^* = \text{arg min}_i \{ E(\text{Operation applied at site } i) \}$$
             </div>
-            Energy predictions are performed using the CHGNet universal potential<sup><a href="#ref3"
+            Energy predictions are performed using the ML potential (CHGNet by default)<sup><a href="#ref3"
                     class="citation">[3]</a></sup>. Candidate sites are screened in batches of up to 8 per request
-            (one native batched CHGNet call per batch, rather than one request per site), which keeps large sweeps
+            (one native batched model call per batch, rather than one request per site), which keeps large sweeps
             responsive to cancellation: the search can be stopped mid-sweep with no partial operation applied, and a
             sweep is automatically aborted if it runs pathologically long.
         </li>
@@ -320,7 +332,7 @@
                     impractically slow on larger supercells; the fingerprint approach scales linearly and returns the
                     same sites.</li>
                 <li><strong>Energetic Stability Evaluation:</strong> Each candidate interstitial site is evaluated for
-                    thermodynamic stability using CHGNet energy predictions. The site yielding the lowest total energy
+                    thermodynamic stability using ML-potential energy predictions. The site yielding the lowest total energy
                     is recommended as the optimal insertion point<sup><a href="#ref3" class="citation">[3]</a></sup>.
                 </li>
             </ol>
@@ -428,6 +440,12 @@
             <em>npj Comput. Mater.</em> <strong>10</strong>, 252 (2024). <a
                 href="https://doi.org/10.1038/s41524-024-01500-6"
                 target="_blank" rel="noopener noreferrer">https://doi.org/10.1038/s41524-024-01500-6</a>
+        </div>
+
+        <div class="ref-item" id="ref9">
+            [9] Batatia, I. <em>et al.</em> A foundation model for atomistic materials chemistry. <em>arXiv</em>
+            2401.00096 (2023). <a href="https://arxiv.org/abs/2401.00096"
+                target="_blank" rel="noopener noreferrer">https://arxiv.org/abs/2401.00096</a>
         </div>
     </div>
 

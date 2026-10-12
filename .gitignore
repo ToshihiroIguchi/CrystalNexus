@@ -91,3 +91,4 @@ implementation_plan_*.md
 
 # Playwright MCP browser-testing artifacts
 .playwright-mcp/
+venv-mace/

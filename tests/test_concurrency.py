@@ -1,7 +1,7 @@
 """Concurrency tests for the CPU-bound-work offloading fix (T1-T6):
 
 - /api/apply-atomic-operations, /api/reset-session-structure,
-  /api/generate-modified-structure-cif, /api/chgnet-predict, and
+  /api/generate-modified-structure-cif, /api/predict, and
   /api/generate-relaxed-structure-cif now run their pymatgen work in a
   worker thread via asyncio.to_thread instead of blocking the single
   FastAPI event loop (see the private *_sync/_load_*/_label_and_* helpers
@@ -166,15 +166,15 @@ def test_generate_modified_structure_cif_helper_runs_off_event_loop_thread(clien
     assert helper_thread["thread"] != loop_thread["thread"]
 
 
-def test_chgnet_predict_helper_runs_off_event_loop_thread(client, monkeypatch):
+def test_predict_helper_runs_off_event_loop_thread(client, monkeypatch, fake_backends):
     loop_thread = _capture_thread(monkeypatch, main, "validate_supercell_size")
-    helper_thread = _capture_thread(monkeypatch, main, "_load_structure_for_chgnet_predict")
+    helper_thread = _capture_thread(monkeypatch, main, "_load_structure_for_predict")
 
-    # Structure resolution (the offloaded part) always runs first regardless
-    # of whether CHGNet itself is available, so don't assert on the final
-    # status code (200, or 503 if the model can't load) -- only that the
-    # helper ran, and ran off the event-loop thread.
-    client.post("/api/chgnet-predict", json={
+    # A fake EMT backend (fake_backends fixture) is the default model here,
+    # so this fast test never loads a real CHGNet model. Structure resolution
+    # (the offloaded part) runs first either way; only that the helper ran,
+    # and ran off the event-loop thread, is asserted.
+    client.post("/api/predict", json={
         "filename": "Metals/Cu.cif", "operations": [], "supercell_size": [1, 1, 1],
     })
 
@@ -187,7 +187,7 @@ def test_generate_relaxed_cif_helper_runs_off_event_loop_thread(client, monkeypa
     session_id = _create_session(structure)
     session_info = session_manager.get_session_info(session_id)
     session_info["relaxed_structure"] = structure.copy()
-    session_info["chgnet_result"] = {"fmax": 0.1, "converged": True, "steps": 1, "optimizer": "FIRE"}
+    session_info["relax_result"] = {"fmax": 0.1, "converged": True, "steps": 1, "optimizer": "FIRE"}
 
     loop_thread = _capture_thread(monkeypatch, session_manager, "get_session_info")
     helper_thread = _capture_thread(monkeypatch, main, "_label_and_write_relaxed_cif")
@@ -313,7 +313,7 @@ def test_generate_relaxed_cif_does_not_mutate_session_structure(client):
     session_info = session_manager.get_session_info(session_id)
     relaxed = structure.copy()
     session_info["relaxed_structure"] = relaxed
-    session_info["chgnet_result"] = {"fmax": 0.1, "converged": True, "steps": 1, "optimizer": "FIRE"}
+    session_info["relax_result"] = {"fmax": 0.1, "converged": True, "steps": 1, "optimizer": "FIRE"}
 
     original_labels = [site.label for site in relaxed.sites]
 

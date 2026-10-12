@@ -70,3 +70,71 @@ def _generous_rate_limit_for_tests():
     yield
     main.RATE_LIMIT_BURST = old_burst
     main.RATE_LIMIT_REQUESTS_PER_MINUTE = old_rate
+
+
+# ---------------------------------------------------------------------------
+# Fake MLIP backends (ASE EMT) -- no model download or load
+# ---------------------------------------------------------------------------
+
+from ase.calculators.emt import EMT  # noqa: E402
+import numpy as np  # noqa: E402
+
+from mlip import registry as _mlip_registry  # noqa: E402
+from mlip.base import (CAP_ENERGY, CAP_FORCES, CAP_MAGMOM, CAP_STRESS,  # noqa: E402
+                       MLIPBackend)
+
+
+class FakeBackend(MLIPBackend):
+    """EMT-backed backend without magnetic moments."""
+
+    id = "fake-emt"
+    display_name = "Fake EMT"
+    capabilities = frozenset({CAP_ENERGY, CAP_FORCES, CAP_STRESS})
+
+    def version(self):
+        return "0.0-test"
+
+    def supported_elements(self):
+        return ["Al", "Cu", "Ni"]
+
+    async def _build_calculator(self):
+        return EMT()
+
+
+class _EMTWithMagmoms(EMT):
+    implemented_properties = EMT.implemented_properties + ["magmoms"]
+
+    def calculate(self, atoms=None, properties=("energy",), system_changes=None):
+        super().calculate(atoms, properties, system_changes or [])
+        self.results["magmoms"] = np.zeros(len(atoms))
+
+
+class FakeMagmomBackend(FakeBackend):
+    """EMT-backed backend that also reports (zero) magnetic moments."""
+
+    id = "fake-emt-magmom"
+    display_name = "Fake EMT (magmom)"
+    capabilities = FakeBackend.capabilities | {CAP_MAGMOM}
+
+    async def _build_calculator(self):
+        return _EMTWithMagmoms()
+
+
+class FakeNarrowBackend(FakeBackend):
+    """EMT-backed backend that only supports Cu (distinct element set)."""
+
+    id = "fake-narrow"
+    display_name = "Fake Narrow"
+
+    def supported_elements(self):
+        return ["Cu"]
+
+
+@pytest.fixture
+def fake_backends(monkeypatch):
+    """Register the fake backends and make the no-magmom one the default."""
+    monkeypatch.setitem(_mlip_registry.MODEL_REGISTRY, "fake-emt", FakeBackend)
+    monkeypatch.setitem(_mlip_registry.MODEL_REGISTRY, "fake-emt-magmom", FakeMagmomBackend)
+    monkeypatch.setitem(_mlip_registry.MODEL_REGISTRY, "fake-narrow", FakeNarrowBackend)
+    monkeypatch.setenv("CRYSTALNEXUS_DEFAULT_MODEL", "fake-emt")
+    return FakeBackend, FakeMagmomBackend

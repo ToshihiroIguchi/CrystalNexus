@@ -1300,8 +1300,42 @@ body {
     cursor: not-allowed;
 }
 
-.chgnet-controls {
+.mlip-controls {
     margin-bottom: 20px;
+}
+
+.mlip-model-group {
+    margin-bottom: 12px;
+}
+
+.mlip-model-group label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #2c3e50;
+    margin-bottom: 5px;
+}
+
+.mlip-model-group select {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 13px;
+    background-color: #fff;
+}
+
+.mlip-model-hint {
+    font-size: 11px;
+    color: #7f8c8d;
+    margin-top: 4px;
+    line-height: 1.35;
+}
+
+/* Hide atomic-property columns the selected model does not provide. */
+.data-table.hide-magmom .col-magmom,
+.data-table.hide-site-energy .col-site-energy {
+    display: none;
 }
 
 .button-subtitle {
@@ -1332,7 +1366,7 @@ body {
     font-size: 13px;
 }
 
-.chgnet-status {
+.mlip-status {
     background-color: #f8f9fa;
     border: 1px solid #e0e0e0;
     border-radius: 6px;
@@ -1379,7 +1413,7 @@ body {
 }
 
 
-.chgnet-results {
+.mlip-results {
     border-top: 1px solid #e0e0e0;
     padding-top: 15px;
 }
