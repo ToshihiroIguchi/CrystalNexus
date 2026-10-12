@@ -210,8 +210,8 @@
 
     <h3>2.3 Training Dataset and Validation</h3>
 
-    <p>The CHGNet model was trained on 1,580,395 structures from the Materials Project database, encompassing 89
-        elements from hydrogen to actinium<sup><a href="#ref3" class="citation">[3]</a>,<a href="#ref4"
+    <p>The CHGNet model was trained on 1,580,395 structures from the Materials Project database, encompassing a broad range of
+        elements<sup><a href="#ref3" class="citation">[3]</a>,<a href="#ref4"
                 class="citation">[4]</a></sup>. The training set includes diverse crystal systems, space groups, and
         chemical compositions to ensure broad applicability. Validation against DFT calculations demonstrates mean
         absolute errors of 29.8 meV/atom for energies and 0.076 eV/Å for forces<sup><a href="#ref3"
@@ -232,7 +232,7 @@
     <p>The application implements rigorous validation protocols for Crystallographic Information File (CIF) inputs.
         Occupancy validation ensures all atomic sites possess full occupancy ($1.0 \pm 10^{-6}$), as partial
         occupancy structures are incompatible with the CHGNet training paradigm. Element validation restricts inputs to
-        the 89 elements supported by the underlying model.</p>
+        the elements supported by the selected model (86 for CHGNet).</p>
 
     <h3>3.3 Structure Optimization Protocol</h3>
 

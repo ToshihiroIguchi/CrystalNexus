@@ -721,10 +721,33 @@
                 window.mlipModels = [];
                 if (sel) sel.innerHTML = '<option value="">Server default</option>';
             }
+            lastMlipModelId = getSelectedModelId();
             updateModelHint();
             applyModelCapabilityUI();
             await loadMlipElements();
             refreshElementDropdownsForModel();
+        }
+
+        // Model whose results are currently shown (set once models are loaded).
+        let lastMlipModelId = null;
+
+        // Drop the previous model's analysis so it cannot be shown, exported or
+        // mixed with results of the newly selected model.
+        function resetResultsForModelChange() {
+            const resultsDiv = document.getElementById('mlip-results');
+            const hadResults = isStructureAnalyzed || window.currentAnalysisData
+                || (resultsDiv && resultsDiv.style.display !== 'none');
+            if (!hadResults) return;
+            resetPhysicalProperties();   // also hides #analysisActions (relaxed CIF / export)
+            hideRelaxCharts();
+            window.currentAnalysisData = null;
+            window.currentStructureInfo = null;
+            window.energyAnalysisData = null;
+            if (resultsDiv) resultsDiv.style.display = 'none';
+            const magneticItem = document.getElementById('magnetic-item');
+            if (magneticItem) magneticItem.style.display = '';
+            applyModelCapabilityUI();
+            updateAnalyzeButtonState();
         }
 
         async function onMlipModelChange() {
@@ -733,10 +756,9 @@
             updateModelHint();
             applyModelCapabilityUI();
             // Results of another model must not be mixed with this one.
-            if (window.currentAnalysisData && window.currentAnalysisData.model_info
-                && window.currentAnalysisData.model_info.id !== id
-                && typeof resetPhysicalProperties === 'function') {
-                resetPhysicalProperties();
+            if (id !== lastMlipModelId) {
+                lastMlipModelId = id;
+                resetResultsForModelChange();
             }
             await loadMlipElements();
             refreshElementDropdownsForModel();
@@ -8646,7 +8668,7 @@ Crystal system: ${data.crystal_system}`;
                     through shared representations. The total loss function incorporates task-specific weighting
                     coefficients optimized during training.</p>
 
-                <p><strong>Universal Potential:</strong> The model covers 89 elements from hydrogen to actinium, trained
+                <p><strong>Universal Potential:</strong> The model covers 86 elements (hydrogen to uranium, excluding the noble gases), trained
                     with approximately 400,000 trainable parameters optimized for computational efficiency while
                     maintaining chemical accuracy.</p>
             </div>
@@ -8656,7 +8678,7 @@ Crystal system: ${data.crystal_system}`;
                 <p>The model is trained on 1,580,395 crystal structures from the Materials Project database,
                     encompassing:</p>
                 <ul>
-                    <li>Comprehensive elemental coverage (89 elements: H-Ac)</li>
+                    <li>Broad elemental coverage (86 elements: H-U, no noble gases)</li>
                     <li>Diverse crystal systems and space groups with representative sampling</li>
                     <li>Multiple property targets: energies, forces, stresses, and magnetic moments</li>
                     <li>Materials spanning metallic, semiconducting, and insulating electronic structures</li>
