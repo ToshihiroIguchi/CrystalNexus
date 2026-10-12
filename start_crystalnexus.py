@@ -215,6 +215,10 @@ def _child_env(host: str, port: int, token: Optional[str]) -> dict:
     env = dict(os.environ)
     env["CRYSTALNEXUS_HOST"] = host
     env["CRYSTALNEXUS_PORT"] = str(port)
+    # Force UTF-8 child output so the launcher's UTF-8 decoding never sees
+    # locale (cp932) bytes.
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
     if token:
         env["CRYSTALNEXUS_ANALYTICS_TOKEN"] = token
     return env
@@ -341,22 +345,128 @@ def stop_existing_server():
         print(f"ERROR Failed to stop existing server: {e}")
         return False
 
-def _stream_child_output(process: subprocess.Popen, tail: "collections.deque[str]") -> None:
-    """Relay the child's stdout/stderr to our console and keep the last lines in `tail`.
+# Bound on lines waiting to be displayed. If the display side is slow or dead,
+# the oldest-unshown lines are dropped instead of ever blocking the reader.
+_DISPLAY_QUEUE_MAX = 2000
 
-    Must start right after Popen: the OS pipe buffer is small (a few tens of
-    KB on Windows), and an uvicorn process writes to it continuously, so a
-    pipe nobody drains will eventually block the child. Combining
-    stderr into stdout (see start_backend) means a single reader here
-    captures both.
+
+def _stream_child_output(process, tail, display_queue=None) -> None:
+    """Drain the child's merged stdout/stderr; NEVER block or die early.
+
+    Must start right after Popen: the OS pipe buffer is small, and uvicorn
+    logs continuously, so a pipe nobody drains blocks the child's event loop
+    (the server then stops answering HTTP). This thread therefore only reads
+    lines, appends them to the bounded `tail` and hands them to the display
+    thread through a bounded queue (lines are dropped when it is full).
+    Printing is done elsewhere (_display_child_output), so a broken or
+    blocked parent stdout can never stall draining. Per-line errors are
+    logged (once per distinct error type) and reading continues.
     """
-    try:
-        assert process.stdout is not None
-        for line in process.stdout:
-            print(line, end="")
+    if process.stdout is None:
+        return
+    stream = process.stdout
+    seen_errors = set()
+    consecutive_errors = 0
+
+    def _report(exc: BaseException) -> None:
+        key = type(exc).__name__
+        if key not in seen_errors:
+            seen_errors.add(key)
+            _safe_log(f"[launcher] output reader error ({key}): {exc}")
+
+    while True:
+        try:
+            line = stream.readline()
+        except UnicodeError as exc:  # decode problem: keep draining
+            _report(exc)
+            consecutive_errors += 1
+            if consecutive_errors > 1000:
+                break
+            continue
+        except (ValueError, OSError):
+            # Pipe closed underneath us (process ended / handle closed).
+            break
+        except Exception as exc:
+            _report(exc)
+            consecutive_errors += 1
+            if consecutive_errors > 1000:
+                break
+            continue
+        consecutive_errors = 0
+        if not line:
+            break  # EOF
+        try:
             tail.append(line)
+            if display_queue is not None:
+                try:
+                    display_queue.put_nowait(line)
+                except queue.Full:
+                    try:
+                        display_queue.get_nowait()  # drop oldest
+                        display_queue.put_nowait(line)
+                    except (queue.Empty, queue.Full):
+                        pass
+        except Exception as exc:
+            _report(exc)
+
+
+def _safe_log(message: str) -> None:
+    """Print a launcher diagnostic without ever raising."""
+    try:
+        print(message, file=sys.stderr, flush=True)
     except Exception:
         pass
+
+
+def _display_child_output(display_queue, stop_event=None) -> None:
+    """Print queued child output lines; tolerate any stdout failure.
+
+    A failing print is logged once, then retried per line; after repeated
+    failures the lines are discarded silently (draining is unaffected).
+    """
+    failures = 0
+    reported = False
+    while True:
+        try:
+            line = display_queue.get(timeout=0.5)
+        except queue.Empty:
+            if stop_event is not None and stop_event.is_set():
+                return
+            continue
+        if line is None:  # sentinel: reader finished
+            return
+        if failures >= 20:
+            continue  # display permanently broken: discard silently
+        try:
+            print(line, end="", flush=True)
+            failures = 0
+        except Exception as exc:
+            failures += 1
+            if not reported:
+                reported = True
+                _safe_log(f"[launcher] cannot display server output ({type(exc).__name__}: {exc}); "
+                          "continuing to drain it silently if this persists")
+
+
+def _start_output_threads(process, tail):
+    """Start reader + display threads. Returns (reader_thread, display_thread)."""
+    display_queue = queue.Queue(maxsize=_DISPLAY_QUEUE_MAX)
+
+    def _reader():
+        try:
+            _stream_child_output(process, tail, display_queue)
+        finally:
+            try:
+                display_queue.put(None, timeout=1)
+            except Exception:
+                pass
+
+    reader = threading.Thread(target=_reader, name="child-output-reader", daemon=True)
+    display = threading.Thread(target=_display_child_output, args=(display_queue,),
+                               name="child-output-display", daemon=True)
+    reader.start()
+    display.start()
+    return reader, display
 
 
 def _print_captured_output(tail: "collections.deque[str]") -> None:
@@ -413,16 +523,17 @@ def start_backend():
             env=_child_env(HOST, PORT, ANALYTICS_TOKEN),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
             **kwargs,
         )
 
         output_tail = collections.deque(maxlen=200)
-        output_thread = threading.Thread(
-            target=_stream_child_output, args=(process, output_tail), daemon=True
-        )
-        output_thread.start()
+        output_thread, _display_thread = _start_output_threads(process, output_tail)
+        _output_threads.append(output_thread)
 
         # Wait for startup
         print(f"Waiting for backend to start on port {PORT}...")
@@ -456,12 +567,16 @@ def start_backend():
         print(f"ERROR Error starting backend: {e}")
         return None
 
+_output_threads = []  # reader threads started by start_backend
+
+
 def monitor_process_health(process, status_queue):
     """
     Countermeasure 3: Process Monitoring - Monitor process health in background
     KeyboardInterrupt compatible version: Use interruptible sleep
     """
     global shutdown_requested
+    reader_warned = False
     
     while not shutdown_requested:
         try:
@@ -469,6 +584,14 @@ def monitor_process_health(process, status_queue):
             if process.poll() is not None:
                 status_queue.put(("process_died", f"Process terminated unexpectedly (exit code: {process.returncode})"))
                 break
+
+            # The output reader must stay alive while the child runs, otherwise
+            # the child's pipe fills up and the server hangs.
+            if (not reader_warned and _output_threads
+                    and not any(t.is_alive() for t in _output_threads)):
+                reader_warned = True
+                status_queue.put(("health_check_failed",
+                                  "Server output reader thread is no longer running; the server may hang on a full pipe"))
             
             # Run health check
             try:

@@ -272,3 +272,139 @@ def test_check_firewall_rule_is_read_only():
     ps_snippet = sx._FIREWALL_CHECK_PS
     for forbidden in ("New-", "Set-", "Remove-", "add rule", "delete rule"):
         assert forbidden not in ps_snippet
+
+
+# ---------------------------------------------------------------------------
+# Child output draining (launcher hang regression)
+# ---------------------------------------------------------------------------
+
+import collections
+import io
+import queue
+import subprocess
+import sys
+import threading
+
+
+def _fake_proc(raw: bytes):
+    """Fake process whose stdout is a utf-8/replace text stream over raw bytes."""
+    stream = io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8", errors="replace")
+    return SimpleNamespace(stdout=stream)
+
+
+def test_child_env_forces_utf8(monkeypatch):
+    env = sx._child_env("127.0.0.1", 8090, None)
+    assert env["PYTHONIOENCODING"] == "utf-8"
+    assert env["PYTHONUTF8"] == "1"
+
+
+def test_reader_survives_invalid_bytes():
+    proc = _fake_proc(b"ok\n\x81\xff bad\n\xe3\x81\x82 good\nlast\n")
+    tail = collections.deque(maxlen=10)
+    sx._stream_child_output(proc, tail, queue.Queue())
+    assert len(tail) == 4
+    assert tail[-1] == "last\n"
+
+
+def test_reader_survives_per_line_decode_exception():
+    class Flaky:
+        def __init__(self):
+            self.lines = ["a\n", UnicodeDecodeError("cp932", b"\xff", 0, 1, "bad"), "b\n", ""]
+
+        def readline(self):
+            item = self.lines.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+    tail = collections.deque(maxlen=10)
+    sx._stream_child_output(SimpleNamespace(stdout=Flaky()), tail, queue.Queue())
+    assert list(tail) == ["a\n", "b\n"]
+
+
+def test_reader_does_not_block_when_display_queue_full():
+    n = 5000
+    proc = _fake_proc(b"".join(b"line %d\n" % i for i in range(n)))
+    tail = collections.deque(maxlen=200)
+    q = queue.Queue(maxsize=10)  # nobody consumes
+    t = threading.Thread(target=sx._stream_child_output, args=(proc, tail, q), daemon=True)
+    t.start()
+    t.join(timeout=10)
+    assert not t.is_alive()
+    assert tail[-1] == f"line {n - 1}\n"
+    assert q.qsize() <= 10
+
+
+def test_display_failure_does_not_stop_draining(monkeypatch):
+    def broken_print(*a, **k):
+        raise UnicodeEncodeError("cp932", "x", 0, 1, "boom")
+
+    monkeypatch.setattr("builtins.print", broken_print)
+    n = 3000
+    proc = _fake_proc(b"".join(b"line %d\n" % i for i in range(n)))
+    tail = collections.deque(maxlen=200)
+    q = queue.Queue(maxsize=sx._DISPLAY_QUEUE_MAX)
+    disp = threading.Thread(target=sx._display_child_output, args=(q,), daemon=True)
+    disp.start()
+    sx._stream_child_output(proc, tail, q)
+    q.put(None)
+    disp.join(timeout=10)
+    assert not disp.is_alive()
+    assert tail[-1] == f"line {n - 1}\n"
+
+
+def test_display_oserror_is_tolerated(monkeypatch):
+    def broken_print(*a, **k):
+        raise OSError("closed")
+
+    monkeypatch.setattr("builtins.print", broken_print)
+    q = queue.Queue()
+    for i in range(50):
+        q.put(f"l{i}\n")
+    q.put(None)
+    sx._display_child_output(q)  # must return without raising
+
+
+def test_real_subprocess_with_invalid_bytes_and_volume(tmp_path):
+    script = tmp_path / "child.py"
+    script.write_text(
+        "import sys\n"
+        "sys.stdout.buffer.write(b'start\\n\\x81\\xff bad\\n'); sys.stdout.flush()\n"
+        "for i in range(100000): print('line', i)\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.Popen(
+        [sys.executable, str(script)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", bufsize=1,
+    )
+    tail = collections.deque(maxlen=50)
+    t = threading.Thread(target=sx._stream_child_output, args=(proc, tail, queue.Queue(maxsize=5)), daemon=True)
+    t.start()
+    t.join(timeout=60)
+    assert not t.is_alive()
+    assert proc.wait(timeout=10) == 0, "".join(tail)
+    assert tail[-1] == "line 99999\n"
+
+
+def test_monitor_warns_when_reader_dead(monkeypatch):
+    dead = threading.Thread(target=lambda: None)
+    dead.start()
+    dead.join()
+    monkeypatch.setattr(sx, "_output_threads", [dead])
+    monkeypatch.setattr(sx, "shutdown_requested", False)
+    monkeypatch.setattr(sx.requests, "get", lambda *a, **k: SimpleNamespace(status_code=200))
+    calls = {"n": 0}
+
+    def fake_sleep(_):
+        calls["n"] += 1
+        if calls["n"] >= 1:
+            monkeypatch.setattr(sx, "shutdown_requested", True)
+
+    monkeypatch.setattr(sx.time, "sleep", fake_sleep)
+    q = queue.Queue()
+    proc = SimpleNamespace(poll=lambda: None, returncode=None)
+    sx.monitor_process_health(proc, q)
+    msgs = []
+    while not q.empty():
+        msgs.append(q.get())
+    assert any("reader thread" in m[1] for m in msgs)
