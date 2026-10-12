@@ -412,11 +412,8 @@
                 <div id="mlip-content">
                     <div class="mlip-controls">
                         <div class="mlip-model-group" id="mlip-model-group">
-                            <label for="mlip-model-select">Model:</label>
-                            <select id="mlip-model-select" title="Select the ML potential used for all calculations">
-                                <option value="">Loading models...</option>
-                            </select>
-                            <div class="mlip-model-hint" id="mlip-model-hint"></div>
+                            <div class="mlip-model-current">Model: <strong id="mlip-model-current">not selected</strong></div>
+                            <div class="mlip-model-hint">To change the model, load the structure again (New CIF).</div>
                         </div>
                         <button class="button" id="analyze-btn" disabled>Analyze Structure</button>
 
@@ -540,6 +537,20 @@
 
             <div class="modal-main" style="grid-area: main;">
                 <div class="file-selection-container" style="display: flex; flex-direction: column; gap: 20px;">
+                    <!-- ML potential: chosen here and fixed for the loaded structure -->
+                    <div class="mlip-model-group mlip-model-group-modal" id="mlip-model-group-modal">
+                        <label for="mlip-model-select">ML potential:
+                            <span class="info-icon" onclick="showMlipInfo()"
+                                title="Click for more information about the ML potential model">ℹ️</span>
+                        </label>
+                        <select id="mlip-model-select" class="full-width-select"
+                            title="Select the ML potential used for all calculations on this structure">
+                            <option value="">Loading models...</option>
+                        </select>
+                        <div class="mlip-model-hint" id="mlip-model-hint"></div>
+                        <div class="mlip-model-error" id="modelLoadError" role="alert" style="display: none;"></div>
+                    </div>
+
                     <!-- Sample File Section -->
                     <div class="file-selection-group">
                         <div class="selection-header" style="margin-bottom: 8px; font-weight: 500;">Use sample CIF file:
@@ -659,7 +670,19 @@
         window.mlipModels = [];
         const MLIP_MODEL_STORAGE_KEY = 'crystalnexus.mlipModel';
 
+        // Model of the loaded structure (set from the create-supercell
+        // response). Fixed until the structure is loaded again (New CIF).
+        window.sessionModelId = null;
+
+        // Session model once a structure is loaded; before that, the value
+        // chosen in the load dialog.
         function getSelectedModelId() {
+            if (window.sessionModelId) return window.sessionModelId;
+            return getModalModelId();
+        }
+
+        // Value of the load-dialog model select.
+        function getModalModelId() {
             const sel = document.getElementById('mlip-model-select');
             return sel && sel.value ? sel.value : null;
         }
@@ -692,7 +715,7 @@
             if (!hint) return;
             const info = getSelectedModelInfo();
             if (!info) { hint.textContent = ''; return; }
-            let text = 'Energies from different models are not comparable; do not mix models within one analysis.';
+            let text = 'The model is fixed for the loaded structure; to change it, load the structure again. Energies from different models are not comparable.';
             if (info.id !== 'chgnet') {
                 text = 'The first use downloads the model weights (needs internet once). ' + text;
             }
@@ -721,62 +744,54 @@
                 window.mlipModels = [];
                 if (sel) sel.innerHTML = '<option value="">Server default</option>';
             }
-            lastMlipModelId = getSelectedModelId();
             updateModelHint();
             applyModelCapabilityUI();
-            await loadMlipElements();
-            refreshElementDropdownsForModel();
+            updateSessionModelDisplay();
         }
 
-        // Model whose results are currently shown (set once models are loaded).
-        let lastMlipModelId = null;
-
-        // Drop the previous model's analysis so it cannot be shown, exported or
-        // mixed with results of the newly selected model.
-        function resetResultsForModelChange() {
-            const resultsDiv = document.getElementById('mlip-results');
-            const hadResults = isStructureAnalyzed || window.currentAnalysisData
-                || (resultsDiv && resultsDiv.style.display !== 'none');
-            if (!hadResults) return;
-            resetPhysicalProperties();   // also hides #analysisActions (relaxed CIF / export)
-            hideRelaxCharts();
-            window.currentAnalysisData = null;
-            window.currentStructureInfo = null;
-            window.energyAnalysisData = null;
-            if (resultsDiv) resultsDiv.style.display = 'none';
-            const magneticItem = document.getElementById('magnetic-item');
-            if (magneticItem) magneticItem.style.display = '';
-            applyModelCapabilityUI();
-            updateAnalyzeButtonState();
-        }
-
-        async function onMlipModelChange() {
-            const id = getSelectedModelId();
+        // Persist the dialog selection and refresh the hint / info modal. The
+        // model only takes effect when the structure is loaded; it cannot be
+        // changed afterwards.
+        function onMlipModelChange() {
+            const id = getModalModelId();
             try { if (id) localStorage.setItem(MLIP_MODEL_STORAGE_KEY, id); } catch (e) { /* storage unavailable */ }
             updateModelHint();
-            applyModelCapabilityUI();
-            // Results of another model must not be mixed with this one.
-            if (id !== lastMlipModelId) {
-                lastMlipModelId = id;
-                resetResultsForModelChange();
-            }
-            await loadMlipElements();
-            refreshElementDropdownsForModel();
+            clearModelLoadError();
+        }
+
+        function showModelLoadError(message) {
+            const el = document.getElementById('modelLoadError');
+            if (!el) return;
+            el.textContent = message;
+            el.style.display = 'block';
+        }
+
+        function clearModelLoadError() {
+            const el = document.getElementById('modelLoadError');
+            if (!el) return;
+            el.textContent = '';
+            el.style.display = 'none';
+        }
+
+        // Read-only "Model: <name> v<version>" line in the right panel.
+        function updateSessionModelDisplay() {
+            const el = document.getElementById('mlip-model-current');
+            if (!el) return;
+            if (!window.sessionModelId) { el.textContent = 'not selected'; return; }
+            const info = getSelectedModelInfo();
+            el.textContent = info
+                ? info.display_name + (info.version ? ' v' + info.version : '')
+                : window.sessionModelId;
         }
 
         // Hide UI that the selected model cannot provide (e.g. magnetic moments).
         function applyModelCapabilityUI() {
             const magneticItem = document.getElementById('magnetic-item');
-            if (magneticItem && !selectedModelSupports('magmom')) {
-                magneticItem.style.display = 'none';
+            if (magneticItem) {
+                magneticItem.style.display = selectedModelSupports('magmom') ? '' : 'none';
             }
         }
 
-        // Re-render element dropdowns after the supported element set changed.
-        function refreshElementDropdownsForModel() {
-            if (typeof filterSubstituteOptions === 'function') filterSubstituteOptions();
-            window.dispatchEvent(new CustomEvent('mlip-model-changed'));
-        }
         // Shared controller to abort an in-flight CIF analysis when a new file is selected
         let analysisAbortController = null;
 
@@ -3276,7 +3291,8 @@ Crystal system: ${data.crystal_system}`;
                     body: JSON.stringify({
                         crystal_data: window.currentCrystalData,
                         supercell_size: [parseInt(aSize), parseInt(bSize), parseInt(cSize)],
-                        session_id: window.sessionId
+                        session_id: window.sessionId,
+                        ...(getModalModelId() ? { model: getModalModelId() } : {})
                     })
                 });
 
@@ -3288,9 +3304,16 @@ Crystal system: ${data.crystal_system}`;
                     } catch (e) {
                         // response body wasn't JSON; keep the generic message
                     }
-                    alert(errorMessage);
+                    if (response.status === 422) {
+                        // Elements not supported by the chosen model: keep the
+                        // dialog open so another model can be chosen.
+                        showModelLoadError(errorMessage);
+                    } else {
+                        alert(errorMessage);
+                    }
                     return;
                 }
+                clearModelLoadError();
 
                 const result = await response.json();
 
@@ -3302,6 +3325,12 @@ Crystal system: ${data.crystal_system}`;
                     window.sessionId = result.session_id;
                     dlog('Session ID assigned:', window.sessionId);
                 }
+
+                // Fix the model for this structure (until it is loaded again).
+                window.sessionModelId = result.model || getModalModelId();
+                updateSessionModelDisplay();
+                applyModelCapabilityUI();
+                await loadMlipElements();
 
                 // Store supercell data
                 supercellData = result;
@@ -4206,14 +4235,6 @@ Crystal system: ${data.crystal_system}`;
             operationSelect.disabled = !elementTypeDropdown.value;
 
             let insertableElementsLoaded = false;
-            // Element sets differ per model: reload the insertion list.
-            window.addEventListener('mlip-model-changed', async () => {
-                insertableElementsLoaded = false;
-                if (window.currentOperationMode === 'insert' && window.sessionId) {
-                    await loadInsertableElements();
-                    insertableElementsLoaded = true;
-                }
-            });
 
             async function switchTab(mode) {
                 if (window.viewer3D && typeof clearGhostAtom === 'function') clearGhostAtom(); // Clear preview
@@ -6700,6 +6721,13 @@ Crystal system: ${data.crystal_system}`;
             currentStructureCif = null;
             structureGeneration++;
             hideRelaxCharts();
+
+            // The model is chosen again in the load dialog for the next structure.
+            window.sessionModelId = null;
+            mlipElements = [];
+            clearModelLoadError();
+            updateSessionModelDisplay();
+            applyModelCapabilityUI();
 
             // Clear global variables
             window.currentFilename = null;

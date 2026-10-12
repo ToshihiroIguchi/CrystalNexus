@@ -1325,6 +1325,35 @@ body {
     background-color: #fff;
 }
 
+.mlip-model-current {
+    font-size: 13px;
+    color: #2c3e50;
+}
+
+.mlip-model-group-modal {
+    margin-bottom: 0;
+}
+
+.mlip-model-group-modal label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    margin-bottom: 8px;
+}
+
+.mlip-model-error {
+    margin-top: 8px;
+    padding: 8px 10px;
+    background-color: #fdecea;
+    border: 1px solid #e74c3c;
+    border-radius: 4px;
+    color: #c0392b;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
 .mlip-model-hint {
     font-size: 11px;
     color: #7f8c8d;

@@ -252,3 +252,159 @@ def test_relaxed_cif_unknown_or_bad_model_400(client, fake_backends):
     url = "/api/generate-relaxed-structure-cif"
     assert client.post(url, json={"session_id": sid, "model": "nope"}).status_code == 400
     assert client.post(url, json={"session_id": sid, "model": 123}).status_code == 400
+
+
+# -- model chosen at load time (create-supercell) and fixed per session --
+
+def _crystal(client, name="Cu"):
+    r = client.post("/api/analyze-cif-sample", json={"filename": f"Metals/{name}.cif"})
+    assert r.status_code == 200
+    return r.json()
+
+
+def _load(client, name="Cu", **extra):
+    return client.post("/api/create-supercell", json={
+        "crystal_data": _crystal(client, name), "supercell_size": [2, 2, 2], **extra})
+
+
+def _loaded_sid(client, model=None, name="Cu"):
+    extra = {"model": model} if model else {}
+    r = _load(client, name, **extra)
+    assert r.status_code == 200, r.text
+    return r.json()["session_id"]
+
+
+def test_create_supercell_stores_and_echoes_model(client, fake_backends):
+    r = _load(client, model="fake-narrow")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["model"] == "fake-narrow"
+    assert session_manager.sessions[body["session_id"]]["model"] == "fake-narrow"
+
+
+def test_create_supercell_defaults_to_registry_default(client, fake_backends):
+    body = _load(client).json()
+    assert body["model"] == "fake-emt"
+    assert session_manager.sessions[body["session_id"]]["model"] == "fake-emt"
+
+
+def test_create_supercell_unknown_400_unavailable_503(client, fake_backends, monkeypatch):
+    assert _load(client, model="nope").status_code == 400
+    monkeypatch.setattr(MACEBackend, "is_available", classmethod(lambda cls: False))
+    assert _load(client, model="mace-mp-0-medium").status_code == 503
+
+
+def test_create_supercell_unsupported_element_422(client, fake_backends):
+    # fake-narrow supports Cu only; Ni.cif is rejected up front
+    r = _load(client, "Ni", model="fake-narrow")
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert "Ni" in detail and "fake-narrow" in detail
+    assert _load(client, "Ni", model="fake-emt").status_code == 200
+
+
+def test_create_supercell_reuse_session_id_new_model_wins(client, fake_backends):
+    first = _load(client, model="fake-narrow").json()
+    again = _load(client, model="fake-emt", session_id=first["session_id"]).json()
+    assert again["session_id"] == first["session_id"]
+    assert session_manager.sessions[first["session_id"]]["model"] == "fake-emt"
+
+
+def test_session_model_used_when_request_omits_model(client, fake_backends):
+    sid = _loaded_sid(client, "fake-narrow")
+    rel = _relax(client, sid)
+    assert rel.status_code == 200 and rel.json()["model_info"]["id"] == "fake-narrow"
+    pred = client.post("/api/predict", json={
+        "session_id": sid, "filename": "Metals/Cu.cif", "supercell_size": [2, 2, 2]})
+    assert pred.status_code == 200 and pred.json()["model_info"]["id"] == "fake-narrow"
+    one = client.post("/api/evaluate-insertion-energy", json={
+        "session_id": sid, "element": "Cu", "frac_coords": [0.25, 0.25, 0.25]})
+    assert one.status_code == 200 and one.json()["model"] == "fake-narrow"
+    many = client.post("/api/evaluate-insertion-energies", json={
+        "session_id": sid, "element": "Cu",
+        "sites": [{"id": 0, "frac_coords": [0.25, 0.25, 0.25]}]})
+    assert many.status_code == 200 and many.json()["model"] == "fake-narrow"
+    cand = client.post("/api/evaluate-candidate-energies", json={
+        "session_id": sid, "candidates": [{"id": 1, "action": "delete", "index": 0}]})
+    assert cand.status_code == 200 and cand.json()["model"] == "fake-narrow"
+    ins = client.post("/api/get-insertable-elements", json={"session_id": sid})
+    assert ins.json()["model"] == "fake-narrow" and ins.json()["insertable_elements"] == ["Cu"]
+
+
+def test_different_model_than_session_409(client, fake_backends):
+    sid = _loaded_sid(client, "fake-narrow")
+    other = {"model": "fake-emt"}
+    base = {"session_id": sid}
+    calls = [
+        ("/api/relax", {**base, **other}),
+        ("/api/predict", {**base, **other, "filename": "Metals/Cu.cif"}),
+        ("/api/evaluate-insertion-energy",
+         {**base, **other, "element": "Cu", "frac_coords": [0.25, 0.25, 0.25]}),
+        ("/api/evaluate-insertion-energies",
+         {**base, **other, "element": "Cu",
+          "sites": [{"id": 0, "frac_coords": [0.25, 0.25, 0.25]}]}),
+        ("/api/evaluate-candidate-energies",
+         {**base, **other, "candidates": [{"id": 1, "action": "delete", "index": 0}]}),
+        ("/api/get-insertable-elements", {**base, **other}),
+        ("/api/generate-relaxed-structure-cif", {**base, **other}),
+    ]
+    for url, body in calls:
+        r = client.post(url, json=body)
+        assert r.status_code == 409, (url, r.status_code, r.text)
+        assert "fake-narrow" in r.json()["detail"] and "fake-emt" in r.json()["detail"]
+    # Matching model explicitly is fine
+    assert _relax(client, sid, model="fake-narrow").status_code == 200
+
+
+def test_session_without_model_keeps_legacy_behavior(client, fake_backends):
+    sid = _session()
+    assert "model" not in session_manager.sessions[sid]
+    assert _relax(client, sid).json()["model_info"]["id"] == "fake-emt"
+    assert _relax(client, sid, model="fake-narrow").json()["model_info"]["id"] == "fake-narrow"
+
+
+def test_helper_session_model_id():
+    assert main._session_model_id({}, None) is None
+    assert main._session_model_id({}, "x") == "x"
+    assert main._session_model_id({"model": "a"}, None) == "a"
+    assert main._session_model_id({"model": "a"}, "a") == "a"
+    with pytest.raises(main.HTTPException) as exc:
+        main._session_model_id({"model": "a"}, "b")
+    assert exc.value.status_code == 409
+
+
+def test_edit_validation_uses_session_model(client, fake_backends):
+    sid = _loaded_sid(client, "fake-narrow")
+    ops = [{"action": "substitute", "index": 0, "to": "Al"}]
+    r = client.post("/api/apply-atomic-operations", json={"session_id": sid, "operations": ops})
+    assert r.status_code == 400 and "Al" in r.json()["detail"]
+    ins = [{"action": "insert", "to": "Al", "coords": [0.25, 0.25, 0.25]}]
+    r = client.post("/api/apply-atomic-operations", json={"session_id": sid, "operations": ins})
+    assert r.status_code == 400
+    # Cu is supported by fake-narrow
+    ok = [{"action": "insert", "to": "Cu", "coords": [0.25, 0.25, 0.25]}]
+    assert client.post("/api/apply-atomic-operations",
+                       json={"session_id": sid, "operations": ok}).status_code == 200
+    # evaluate endpoints validate the target element against the session model
+    r = client.post("/api/evaluate-candidate-energies", json={
+        "session_id": sid, "candidates": [{"id": 1, "action": "substitute", "index": 0, "to": "Al"}]})
+    assert r.status_code == 400
+    r = client.post("/api/evaluate-insertion-energies", json={
+        "session_id": sid, "element": "Al",
+        "sites": [{"id": 0, "frac_coords": [0.25, 0.25, 0.25]}]})
+    assert r.status_code == 400
+
+
+def test_edit_validation_default_model_session_allows_substitution(client, fake_backends):
+    sid = _loaded_sid(client)  # fake-emt supports Al
+    ops = [{"action": "substitute", "index": 0, "to": "Al"}]
+    r = client.post("/api/apply-atomic-operations", json={"session_id": sid, "operations": ops})
+    assert r.status_code == 200
+
+
+def test_reset_session_structure_keeps_model(client, fake_backends):
+    sid = _loaded_sid(client, "fake-narrow")
+    r = client.post("/api/reset-session-structure", json={"session_id": sid})
+    assert r.status_code == 200
+    assert session_manager.sessions[sid]["model"] == "fake-narrow"
+    assert _relax(client, sid).json()["model_info"]["id"] == "fake-narrow"
