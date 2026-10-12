@@ -76,12 +76,12 @@ def _run_model(model_id, structure_paths, sizes, optimizers, fmax, max_steps):
             size_str = "x".join(str(s) for s in size)
 
             for optimizer_name in optimizers:
-                deadline = time.monotonic() + 3600  # effectively unbounded for a bench run
                 start = time.monotonic()
                 result = main.run_relaxation(
                     calculator, structure,
                     fmax=fmax, steps=max_steps, optimizer_name=optimizer_name,
-                    deadline=deadline, relax_cell=True, progress_slot=None,
+                    timeout_s=3600,  # effectively unbounded for a bench run
+                    relax_cell=True, progress_slot=None,
                 )
                 wall_s = time.monotonic() - start
 
