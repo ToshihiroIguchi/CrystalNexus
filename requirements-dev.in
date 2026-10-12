@@ -6,3 +6,4 @@ pytest
 httpx
 pip-tools
 psutil
+pip-audit
