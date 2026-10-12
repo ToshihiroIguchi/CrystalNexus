@@ -434,7 +434,7 @@ tomli==2.5.0
     # via pip-audit
 tomli-w==1.2.0
     # via pip-audit
-torch==2.9.0
+torch==2.14.1
     # via
     #   -c requirements.txt
     #   -r requirements.in

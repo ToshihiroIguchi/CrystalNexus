@@ -223,7 +223,7 @@ tabulate==0.10.0
     # via pymatgen-core
 tifffile==2026.9.9
     # via scikit-image
-torch==2.9.0
+torch==2.14.1
     # via
     #   -r requirements.in
     #   chgnet
