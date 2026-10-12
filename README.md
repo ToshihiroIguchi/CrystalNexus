@@ -11,7 +11,7 @@ CrystalNexus is a comprehensive web-based application for crystal structure anal
 *   **Materials Project Integration**: Quickly search for and download structures from the Materials Project database via a direct integrated link.
 
 ###  Machine Learning Integration (CHGNet and MACE-MP-0)
-*   **Selectable Models**: Choose the ML potential in the **ML potential** dropdown of the CIF loading dialog (default: CHGNet v0.4.0). The model is fixed for the loaded structure; to change it, load the structure again (**New CIF**). See [ML potential models](#ml-potential-models).
+*   **Selectable Models**: Choose the ML potential in the **ML potential** dropdown of the CIF loading dialog (default: CHGNet v0.4.2). The model is fixed for the loaded structure; to change it, load the structure again (**New CIF**). See [ML potential models](#ml-potential-models).
 *   **One-Click Relaxation**: Automatically optimizes atomic positions and lattice parameters to find the ground-state structure.
 *   **Property Prediction**: Instantly calculates:
     *   **Total Energy** (eV/atom)
@@ -39,14 +39,18 @@ CrystalNexus/
 +--- static/               # Static assets (js/utils.js, js/analytics.js, js/auto_mode_chart.js)
 +--- tests/                # Pytest test suite (conftest.py, test_main.py, test_security.py, test_endpoints.py)
 +--- pytest.ini             # Pytest configuration
-+--- requirements.txt        # Detailed Python dependencies list
++--- requirements.in         # Direct runtime dependencies (edit this)
++--- requirements.txt        # Locked runtime dependencies (pip-compile output)
++--- requirements-dev.in     # Test/dev tools (pytest, pip-tools, pip-audit, ...)
++--- requirements-dev.txt    # Locked runtime + dev dependencies (pip-compile output)
++--- scripts/               # Manual tools (bench_relax.py relaxation benchmark)
 +--- CLAUDE.md               # Claude Code project instructions
 ```
 
 ## Installation
 
 ### Prerequisites
-*   **Python**: Version 3.8 to 3.12 is required.
+*   **Python**: Version 3.12 (the lock files are compiled on Windows / Python 3.12 with the CPU build of PyTorch).
 *   **Git**: For version control and cloning the repository.
 *   **Visual C++ Build Tools (Windows Only)**: Required for compiling some Python dependencies (like `pymatgen` and `numpy`). You can download them from [Microsoft's website](https://visualstudio.microsoft.com/visual-cpp-build-tools/).
 
@@ -60,7 +64,7 @@ cd CrystalNexus
 ```
 
 #### 2. Create a Virtual Environment
-It is highly recommended to use a virtual environment to avoid conflicts with other Python projects.
+Use a single virtual environment named `venv` in the repository root (both CHGNet and MACE-MP-0 run in it, and `start_crystalnexus.py` looks for it there).
 
 **For Windows (PowerShell):**
 ```powershell
@@ -85,8 +89,9 @@ source venv/bin/activate
 Install all required libraries using `pip`. This step may take a few minutes as it installs large machine learning libraries (PyTorch, CHGNet).
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
+`requirements-dev.txt` is the locked set of runtime plus test/dev tools (pytest, pip-tools, pip-audit). For a runtime-only install use `pip install -r requirements.txt`.
 
 #### 4. Verify Installation
 Check if the installation was successful by listing the installed packages:
@@ -94,6 +99,37 @@ Check if the installation was successful by listing the installed packages:
 pip list
 ```
 Ensure `chgnet`, `mace-torch`, `pymatgen`, `fastapi`, and `torch` are present. If `mace-torch` is missing the app still starts and shows MACE as "not installed".
+
+### Updating dependencies
+
+Dependencies are locked with [pip-tools](https://pip-tools.readthedocs.io/). Edit the direct dependencies in `requirements.in` (runtime) or `requirements-dev.in` (dev tools), then:
+
+```bash
+pip-compile --strip-extras requirements.in -o requirements.txt
+pip-compile --strip-extras requirements-dev.in -o requirements-dev.txt
+# or bump a single package (and what it pulls in):
+pip-compile --strip-extras --upgrade-package urllib3 requirements.in -o requirements.txt
+pip-sync requirements-dev.txt
+```
+
+Then run the fast and slow tests (the slow ones include the CHGNet and MACE golden regression tests) and the vulnerability audit:
+
+```bash
+python -m pytest tests/ -m "not slow"
+python -m pytest tests/ -m slow
+python -m pip_audit -r requirements.txt --no-deps --disable-pip
+```
+
+Rules for the ML layer (torch, numpy, scipy, pymatgen, chgnet, mace-torch, e3nn), which Dependabot deliberately ignores so it is only bumped by hand:
+*   `mace-torch` pins `e3nn==0.4.4`; do not upgrade `e3nn` independently.
+*   Benchmark every torch bump with `venv\Scripts\python.exe scripts/bench_relax.py` (see its docstring). torch 2.9.1 and later made MACE relaxations about 1.5x slower than 2.8.0/2.9.0; torch 2.9.0 has known security advisories, so the slowdown is accepted and torch 2.14.1 is used.
+*   The golden regression tests compare against fixed values. Energies must match tightly (1e-6 eV/atom for predictions), but forces, stress, magnetic moments and site energies use a looser tolerance (`DERIVED_ABS_TOL = 5e-4`) because CHGNet's float32 autograd results differ by up to about 1e-4 between torch versions. Do not regenerate golden files without understanding the difference.
+*   `pip-sync` can leave a broken pymatgen install after the pymatgen / pymatgen-core split (`from pymatgen.core import Structure` fails with "unknown location"), because uninstalling the old `pymatgen` deletes files that `pymatgen-core` shares. Fix it with:
+    ```bash
+    python -m pip install --force-reinstall --no-deps pymatgen-core==<version> pymatgen==<version> pymatgen-analysis-defects==<version>
+    ```
+    (versions as in `requirements.txt`).
+*   The test suite prints a deprecation warning about `httpx2` from starlette's `TestClient`. It is intentionally ignored for now (`httpx` is kept).
 
 ---
 
@@ -217,7 +253,7 @@ The HTTP endpoints were renamed likewise: `/api/chgnet-predict` -> `/api/predict
 
 ## Running Tests
 
-The test suite lives in the `tests/` directory and uses **pytest** (included in `requirements.txt`).
+The test suite lives in the `tests/` directory and uses **pytest** (included in `requirements-dev.txt`).
 
 Run the full suite from the repository root:
 
@@ -244,7 +280,7 @@ python -m pytest tests/ -m "not slow"
 *   **Solution**: The `start_crystalnexus.py` script automatically detects and stops any existing process using port 8090. Simply running `python start_crystalnexus.py` again should resolve the issue. Manual intervention is only necessary in rare cases where the script lacks permission to terminate the process.
 
 ### Q: "Module not found: chgnet"
-*   **Correction**: Ensure you activated your virtual environment (`venv`) before running the server. Re-run `pip install -r requirements.txt`.
+*   **Correction**: Ensure you activated your virtual environment (`venv`) before running the server. Re-run `pip install -r requirements-dev.txt` (or `requirements.txt` for runtime only).
 
 ### Q: "DLL load failed" on Windows
 *   **Correction**: This usually means a missing system dependency. Install the [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170).

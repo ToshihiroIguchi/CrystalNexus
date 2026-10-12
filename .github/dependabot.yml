@@ -1,0 +1,28 @@
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      # Web layer: bumped together in one PR.
+      web-layer:
+        patterns:
+          - "fastapi"
+          - "uvicorn"
+          - "starlette"
+          - "python-multipart"
+          - "jinja2"
+          - "requests"
+    # ML / scientific layer: bumped manually only. These packages are tightly
+    # coupled (mace-torch pins e3nn==0.4.4; torch versions change MACE speed and
+    # CHGNet/MACE golden values), so every bump must be benchmarked with
+    # scripts/bench_relax.py and checked against the golden regression tests.
+    ignore:
+      - dependency-name: "torch"
+      - dependency-name: "numpy"
+      - dependency-name: "scipy"
+      - dependency-name: "pymatgen*"
+      - dependency-name: "chgnet"
+      - dependency-name: "mace-torch"
+      - dependency-name: "e3nn"

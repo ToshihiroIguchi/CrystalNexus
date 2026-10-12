@@ -27,7 +27,8 @@ MANIFEST
 
 # Virtual environments
 venv/
-venv_*/
+venv*/
+venv.old/
 env/
 ENV/
 
@@ -75,6 +76,7 @@ analytics.db
 # Output and temporary log files
 *.txt
 !requirements.txt
+!requirements-dev.txt
 *.cif
 !sample_cif/**
 
@@ -91,4 +93,3 @@ implementation_plan_*.md
 
 # Playwright MCP browser-testing artifacts
 .playwright-mcp/
-venv-mace/

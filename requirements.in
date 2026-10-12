@@ -1,0 +1,24 @@
+# Direct dependencies of CrystalNexus (production).
+# Compile with:  pip-compile requirements.in -o requirements.txt
+# The lock (requirements.txt) is compiled on Windows / Python 3.12 with the
+# CPU build of torch (the PyPI Windows wheel is CPU-only; no extra index needed).
+
+# Web layer
+fastapi==0.143.0
+uvicorn==0.54.0
+python-multipart==0.0.32
+jinja2==3.1.6
+requests==2.34.2                      # startup script health checks
+
+# Scientific stack
+numpy==2.5.4
+scipy==1.18.1
+torch==2.14.1                         # CPU build on Windows; 2.9.1+ slows MACE ~1.5x but 2.9.0 has known advisories, so accepted
+pymatgen==2026.9.24
+pymatgen-analysis-defects==2026.3.20
+
+# ML interatomic potentials
+chgnet==0.4.2                         # requires torch>=2.4.0, numpy>=1.26
+# MACE-MP-0 (medium); MIT licensed, weights downloaded to ~/.cache/mace on first use.
+mace-torch==0.3.16
+e3nn==0.4.4                           # pinned by mace-torch; do not upgrade independently
