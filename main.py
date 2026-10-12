@@ -111,7 +111,7 @@ _relax_semaphore = asyncio.Semaphore(1)
 # executor thread and polled/streamed by GET /api/relax-progress/{id}.
 _relax_progress: Dict[str, dict] = {}
 
-def validate_atomic_operation(operation, structure_size, operation_index=None):
+def validate_atomic_operation(operation, structure_size, operation_index=None, allowed=None):
     """
     Validate a single atomic operation
     Returns: (is_valid, error_message)
@@ -151,7 +151,7 @@ def validate_atomic_operation(operation, structure_size, operation_index=None):
             if "to" not in operation:
                 return False, "missing 'to' element"
             try:
-                validate_element(operation["to"])
+                validate_element(operation["to"], allowed)
             except ValueError as e:
                 return False, str(e)
         
@@ -245,7 +245,8 @@ def substitute_site(structure: Structure, site_index: int, new_element: str) -> 
 
 
 def apply_operations_to_structure(structure: Structure, operations: List[dict],
-                                   strict_mode: bool = False) -> "tuple[int, List[str], List[str]]":
+                                   strict_mode: bool = False,
+                                   allowed: Optional[Set[str]] = None) -> "tuple[int, List[str], List[str]]":
     """
     Apply atomic operations to `structure` in place, in the exact order given.
 
@@ -268,6 +269,8 @@ def apply_operations_to_structure(structure: Structure, operations: List[dict],
             operation (fail-fast; used for the authoritative session
             endpoint). If False, skip invalid operations and keep going,
             returning a description of each one skipped.
+        allowed: Element whitelist for substitute/insert targets (the
+            session model's supported elements). None -> ALLOWED_ELEMENTS.
 
     Returns:
         (operations_applied, skipped_messages, property_warnings)
@@ -277,7 +280,7 @@ def apply_operations_to_structure(structure: Structure, operations: List[dict],
     property_warnings: List[str] = []
 
     for i, operation in enumerate(operations):
-        is_valid, error_msg = validate_atomic_operation(operation, len(structure))
+        is_valid, error_msg = validate_atomic_operation(operation, len(structure), allowed=allowed)
         if not is_valid:
             message = f"Operation {i + 1}: {error_msg}"
             if strict_mode:
@@ -294,7 +297,7 @@ def apply_operations_to_structure(structure: Structure, operations: List[dict],
             # symbol with leading/trailing whitespace (e.g. " Fe") doesn't
             # reach pymatgen's Element() unstripped and raise an unhandled
             # ValueError (500).
-            new_element = validate_element(operation["to"])
+            new_element = validate_element(operation["to"], allowed)
             old_element = structure[site_index].specie
             old_symbol = _site_element_symbol(old_element)
             # validate_atomic_operation has no access to `structure`, so it
@@ -319,7 +322,7 @@ def apply_operations_to_structure(structure: Structure, operations: List[dict],
             structure.remove_sites([site_index])
             logger.info(f"Deleted site {site_index} ({deleted_element})")
         elif action == "insert":
-            new_element = validate_element(operation["to"])
+            new_element = validate_element(operation["to"], allowed)
             frac_coords = [float(c) % 1.0 for c in operation["coords"]]
             # Defense in depth: the UI only sends vetted candidates, but a
             # direct API call could drop an atom on top of an existing one.
@@ -595,13 +598,16 @@ def check_supercell_site_limit(base_num_sites: int, supercell_size: List[int]) -
             )
         )
 
-def validate_element(element: str) -> str:
-    """Element validation (injection protection)"""
+def validate_element(element: str, allowed: Optional[Set[str]] = None) -> str:
+    """Element validation (injection protection).
+
+    ``allowed`` is the session model's supported-element set; when omitted the
+    union whitelist ALLOWED_ELEMENTS is used."""
     if not isinstance(element, str):
         raise ValueError("Element must be a string")
     
     element = element.strip()
-    if element not in ALLOWED_ELEMENTS:
+    if element not in (ALLOWED_ELEMENTS if allowed is None else allowed):
         raise ValueError(f"Element '{element}' is not supported by the ML potential")
     
     return element
@@ -1135,7 +1141,8 @@ def _get_session_lock(session_info: Dict) -> asyncio.Lock:
 
 
 def _apply_atomic_operations_sync(original_structure: Structure, supercell_size: List[int],
-                                   operations: List[dict]) -> "Tuple[Structure, int]":
+                                   operations: List[dict],
+                                   allowed: Optional[Set[str]] = None) -> "Tuple[Structure, int]":
     """
     CPU-bound: rebuild the supercell from `original_structure` and replay
     `operations` against it in strict mode (fail-fast on the first invalid
@@ -1158,7 +1165,7 @@ def _apply_atomic_operations_sync(original_structure: Structure, supercell_size:
     # apply_operations_to_structure docstring).
     logger.info(f" OPERATIONS: Applying {len(operations)} operations in recorded order")
     operations_applied, _, property_warnings = apply_operations_to_structure(
-        structure, operations, strict_mode=True
+        structure, operations, strict_mode=True, allowed=allowed
     )
     if property_warnings:
         logger.warning(f"Property loss during atomic operations: {property_warnings}")
@@ -1227,7 +1234,8 @@ async def apply_atomic_operations(request: dict):
             supercell_size = session_info['supercell_size']
             try:
                 structure, operations_applied = await asyncio.to_thread(
-                    _apply_atomic_operations_sync, original_structure, supercell_size, operations
+                    _apply_atomic_operations_sync, original_structure, supercell_size, operations,
+                    _session_allowed_elements(session_info)
                 )
             except ValueError as e:
                 logger.error(f"❌ OPERATIONS: Validation failed - Rejecting {len(operations)} operations: {e}")
@@ -1791,6 +1799,10 @@ async def create_supercell(request: Request, data: dict):
         # Validate supercell size
         supercell_size = validate_supercell_size(supercell_size_raw)
 
+        # The model is chosen at load time and then fixed for this structure.
+        # Unknown -> 400, unavailable -> 503 (the model is not loaded here).
+        backend = _resolve_backend(_request_model_id(data))
+
         # Calculate supercell information
         a_mult, b_mult, c_mult = supercell_size
         scaling_factor = a_mult * b_mult * c_mult
@@ -1837,6 +1849,10 @@ async def create_supercell(request: Request, data: dict):
             # "supercell_created" success with session_id: null.
             raise HTTPException(status_code=400, detail="Failed to create supercell structure")
 
+        # Reject elements the chosen model cannot handle up front (422), so
+        # an unsupported structure is never loaded into a session.
+        _ensure_elements_supported(backend, _structure_symbols(supercell_structure))
+
         # Create or update session with structures. server_session_id is
         # the id actually stored under (see create_session's docstring);
         # it may differ from the request's session_id.
@@ -1844,6 +1860,9 @@ async def create_supercell(request: Request, data: dict):
                                                              owner_ip=client_host)
         session_manager.update_structure(server_session_id, supercell_structure,
                                        operations=[], supercell_size=supercell_size)
+        # create_session always builds a fresh dict (also when reusing an
+        # existing id), so the model from THIS request is the one stored.
+        session_manager.sessions[server_session_id]['model'] = backend.id
 
         # Get structure dictionary for CIF generation (CPU-bound — offload)
         structure_dict = await asyncio.to_thread(supercell_structure.as_dict)
@@ -1871,6 +1890,7 @@ async def create_supercell(request: Request, data: dict):
             # see SessionManager.create_session) for every subsequent
             # session-scoped call.
             "session_id": server_session_id,
+            "model": backend.id,
             "original_data": crystal_data,
             "supercell_info": supercell_info,
             "structure_dict": structure_dict,  # Add structure_dict for 3D visualization
@@ -1962,7 +1982,8 @@ async def get_elements(model: Optional[str] = None):
         raise HTTPException(status_code=500, detail="Failed to get supported elements")
 
 def _generate_modified_structure_cif_sync(session_id: Optional[str], filename: str,
-                                           supercell_size: List[int], operations: List[dict]
+                                           supercell_size: List[int], operations: List[dict],
+                                           allowed: Optional[Set[str]] = None
                                            ) -> "Tuple[Structure, int, List[str], List[str], str]":
     """
     CPU-bound: resolve the base supercell, replay `operations` against it
@@ -1980,7 +2001,7 @@ def _generate_modified_structure_cif_sync(session_id: Optional[str], filename: s
     # Apply atomic operations with partial success tolerance (for CIF
     # generation), in the exact order the client recorded them.
     operations_applied, skipped_operations, property_warnings = apply_operations_to_structure(
-        structure, operations, strict_mode=False
+        structure, operations, strict_mode=False, allowed=allowed
     )
 
     if skipped_operations:
@@ -2023,7 +2044,9 @@ async def generate_modified_structure_cif(request: dict):
         logger.info(f"Operations to apply: {len(operations)}")
 
         structure, operations_applied, skipped_operations, property_warnings, cif_content = await asyncio.to_thread(
-            _generate_modified_structure_cif_sync, session_id, filename, supercell_size, operations
+            _generate_modified_structure_cif_sync, session_id, filename, supercell_size, operations,
+            _session_allowed_elements(
+                session_manager.sessions.get(session_id) if isinstance(session_id, str) else None)
         )
 
         # Add metadata header
@@ -2271,6 +2294,32 @@ def _ensure_elements_supported(backend, symbols) -> None:
 
 def _structure_symbols(structure) -> Set[str]:
     return {_site_element_symbol(site.specie) for site in structure}
+
+
+def _session_model_id(session_info, requested_id=None) -> Optional[str]:
+    """Model id to use for a session-scoped request.
+
+    The model chosen when the structure was loaded is authoritative: a request
+    that omits ``model`` uses it, a request naming a different one -> 409. A
+    session without a stored model (e.g. created directly in tests) keeps the
+    legacy behavior: the requested id, or None (= registry default)."""
+    session_model = session_info.get('model') if isinstance(session_info, dict) else None
+    if not session_model:
+        return requested_id
+    if requested_id is None or requested_id == session_model:
+        return session_model
+    raise HTTPException(
+        status_code=409,
+        detail=f"This structure was loaded with model '{session_model}'. To use "
+               f"'{requested_id}', load the structure again.")
+
+
+def _session_allowed_elements(session_info) -> Optional[Set[str]]:
+    """Supported-element set of the session's model (None -> ALLOWED_ELEMENTS)."""
+    session_model = session_info.get('model') if isinstance(session_info, dict) else None
+    if not session_model or session_model not in MODEL_REGISTRY:
+        return None
+    return set(MODEL_REGISTRY[session_model]().supported_elements())
 
 
 async def _load_or_503(backend) -> None:
@@ -2575,7 +2624,8 @@ def _validate_relax_params(request: dict) -> Tuple[float, int, str]:
 
 
 def _load_structure_for_predict(session_id: Optional[str], filename: str,
-                                        supercell_size: List[int], operations: List[dict]
+                                        supercell_size: List[int], operations: List[dict],
+                                        allowed: Optional[Set[str]] = None
                                         ) -> "Tuple[Structure, int, List[str], List[str]]":
     """
     CPU-bound: resolve the base supercell (session or sample file), enforce
@@ -2597,7 +2647,7 @@ def _load_structure_for_predict(session_id: Optional[str], filename: str,
     # Apply operations for MLIP prediction (skip invalid ones), in the
     # exact order the client recorded them.
     operations_applied, skipped_operations, property_warnings = apply_operations_to_structure(
-        structure, operations, strict_mode=False
+        structure, operations, strict_mode=False, allowed=allowed
     )
     if property_warnings:
         logger.warning(f"Property loss during MLIP prediction operations: {property_warnings}")
@@ -2626,7 +2676,9 @@ async def predict_structure(request: dict):
         filename = request.get("filename")
         operations = request.get("operations", [])
         supercell_size = request.get("supercell_size", [1, 1, 1])
-        model_id = _request_model_id(request)
+        predict_session = (session_manager.sessions.get(session_id)
+                           if isinstance(session_id, str) else None)
+        model_id = _session_model_id(predict_session, _request_model_id(request))
 
         if not filename:
             raise HTTPException(status_code=400, detail="Filename is required")
@@ -2637,7 +2689,8 @@ async def predict_structure(request: dict):
         # Resolve the base supercell (session or sample file) and replay
         # operations against it -- CPU-bound pymatgen work, offloaded.
         structure, operations_applied, skipped_operations, property_warnings = await asyncio.to_thread(
-            _load_structure_for_predict, session_id, filename, supercell_size, operations
+            _load_structure_for_predict, session_id, filename, supercell_size, operations,
+            _session_allowed_elements(predict_session)
         )
 
         # Resolve the requested model, reject unsupported elements (422)
@@ -2700,12 +2753,14 @@ async def relax_structure(request: dict):
         # Validated and clamped before any model loading, so malformed or
         # out-of-range requests never touch the slow, serialized MLIP model.
         fmax, max_steps, optimizer_name = _validate_relax_params(request)
-        model_id = _request_model_id(request)
+        requested_model_id = _request_model_id(request)
 
         # Get the current structure from session (already has supercell + operations applied)
         structure = session_manager.get_current_structure(session_id)
         if structure is None:
             raise HTTPException(status_code=404, detail=f"No structure found for session {session_id}")
+        # The session's model (chosen at load time) is authoritative.
+        model_id = _session_model_id(session_manager.sessions.get(session_id), requested_model_id)
 
         if len(structure) > MAX_RELAX_ATOMS:
             raise HTTPException(
@@ -3184,6 +3239,8 @@ async def generate_relaxed_structure_cif(request: dict):
         # Optional model guard: reject a request naming a model other than the
         # one that produced the stored relaxation (omitted -> no check).
         requested_model_id = _request_model_id(request)
+        # A request naming a model other than the session's -> 409.
+        _session_model_id(session_info, requested_model_id)
         requested_backend = None
         if requested_model_id is not None:
             # Registry lookup only (no model load); unknown id -> 400.
@@ -3388,7 +3445,10 @@ async def get_insertable_elements(data: dict):
         # Just return the sorted list of allowed elements.
         
         # Optional model: restrict to that model's elements (default: union).
-        model_id = _request_model_id(data)
+        sid = data.get("session_id")
+        model_id = _session_model_id(
+            session_manager.sessions.get(sid) if isinstance(sid, str) else None,
+            _request_model_id(data))
         echoed_model = None
         if model_id is not None:
             backend = _resolve_backend(model_id)
@@ -3493,8 +3553,10 @@ async def evaluate_insertion_energy(data: dict):
         
         if not session_id or not isinstance(session_id, str) or not element_symbol or frac_coords is None:
             raise HTTPException(status_code=400, detail="Session ID, element, and coords are required")
+        eval_session = session_manager.sessions.get(session_id)
+        model_id = _session_model_id(eval_session, _request_model_id(data))
         try:
-            element_symbol = validate_element(element_symbol)
+            element_symbol = validate_element(element_symbol, _session_allowed_elements(eval_session))
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         try:
@@ -3519,7 +3581,7 @@ async def evaluate_insertion_energy(data: dict):
         # Predict energy. task="e" skips force/stress/magmom autograd, which are
         # unused for site screening and account for most of the per-site cost
         # (~5x speedup measured: 2.0s -> 0.4s per site on a 109-atom structure).
-        backend = _resolve_backend(_request_model_id(data))
+        backend = _resolve_backend(model_id)
         _ensure_elements_supported(backend, _structure_symbols(structure) | {element_symbol})
         await _load_or_503(backend)
         try:
@@ -3562,8 +3624,10 @@ async def evaluate_insertion_energies(data: dict):
 
         if not session_id or not isinstance(session_id, str) or not element_symbol or not sites:
             raise HTTPException(status_code=400, detail="Session ID, element, and sites are required")
+        eval_session = session_manager.sessions.get(session_id)
+        model_id = _session_model_id(eval_session, _request_model_id(data))
         try:
-            element_symbol = validate_element(element_symbol)
+            element_symbol = validate_element(element_symbol, _session_allowed_elements(eval_session))
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         if not isinstance(sites, list):
@@ -3601,7 +3665,7 @@ async def evaluate_insertion_energies(data: dict):
             site_ids.append(site_id)
 
         num_atoms = len(structure) + 1
-        backend = _resolve_backend(_request_model_id(data))
+        backend = _resolve_backend(model_id)
         _ensure_elements_supported(backend, _structure_symbols(structure) | {element_symbol})
         await _load_or_503(backend)
         pred_results = await backend.predict(cand_structures, _PROPS_ENERGY)
@@ -3666,6 +3730,9 @@ async def evaluate_candidate_energies(data: dict):
         structure = session_manager.get_current_structure(session_id)
         if not structure:
             raise HTTPException(status_code=404, detail="Structure not found")
+        cand_session = session_manager.sessions.get(session_id)
+        model_id = _session_model_id(cand_session, _request_model_id(data))
+        allowed_elements = _session_allowed_elements(cand_session)
 
         if len(structure) > MAX_PREDICT_ATOMS:
             raise HTTPException(
@@ -3704,7 +3771,7 @@ async def evaluate_candidate_energies(data: dict):
                     # Use the stripped value validate_element() returns, so a
                     # symbol with leading/trailing whitespace doesn't reach
                     # pymatgen's Element() unstripped and raise ValueError (500).
-                    new_element = validate_element(new_element)
+                    new_element = validate_element(new_element, allowed_elements)
                 except ValueError as e:
                     raise HTTPException(status_code=400, detail=f"candidate {cand_id}: {e}")
 
@@ -3725,7 +3792,7 @@ async def evaluate_candidate_energies(data: dict):
             cand_num_atoms.append(len(cand_structure))
             cand_result_slots.append(slot)
 
-        backend = _resolve_backend(_request_model_id(data))
+        backend = _resolve_backend(model_id)
         _ensure_elements_supported(
             backend, _structure_symbols(structure) | {c.get("to") for c in candidates
                                                       if c.get("action") == "substitute"
@@ -3796,7 +3863,8 @@ async def equivalent_sites(data: dict):
             raise HTTPException(status_code=404, detail="Structure not found")
 
         try:
-            element = validate_element(element)
+            element = validate_element(element, _session_allowed_elements(
+                session_manager.sessions.get(session_id)))
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 

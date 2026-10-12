@@ -11,7 +11,7 @@ CrystalNexus is a comprehensive web-based application for crystal structure anal
 *   **Materials Project Integration**: Quickly search for and download structures from the Materials Project database via a direct integrated link.
 
 ###  Machine Learning Integration (CHGNet and MACE-MP-0)
-*   **Selectable Models**: Choose the ML potential per calculation in the **Model** dropdown (default: CHGNet v0.4.0). See [ML potential models](#ml-potential-models).
+*   **Selectable Models**: Choose the ML potential in the **ML potential** dropdown of the CIF loading dialog (default: CHGNet v0.4.0). The model is fixed for the loaded structure; to change it, load the structure again (**New CIF**). See [ML potential models](#ml-potential-models).
 *   **One-Click Relaxation**: Automatically optimizes atomic positions and lattice parameters to find the ground-state structure.
 *   **Property Prediction**: Instantly calculates:
     *   **Total Energy** (eV/atom)
@@ -172,11 +172,11 @@ The HTTP endpoints were renamed likewise: `/api/chgnet-predict` -> `/api/predict
 | `chgnet` (default) | CHGNet | yes | yes | 86 (H-U, no noble gases) | Berkeley Lab BSD-style |
 | `mace-mp-0-medium` | MACE-MP-0 (medium) | no | no | 89 (Z = 1-83, 89-94) | MIT |
 
-*   **Selecting a model**: use the **Model** dropdown in the ML Potential panel (saved in your browser), or pass `"model": "<id>"` in the JSON body of `/api/predict`, `/api/relax`, `/api/evaluate-insertion-energy`, `/api/evaluate-insertion-energies` and `/api/evaluate-candidate-energies`. Omitted means the server default (`CRYSTALNEXUS_DEFAULT_MODEL`, default `chgnet`). Unknown ids return 400; a model that is not installed returns 503; a structure containing elements the model does not support returns 422 listing them (checked before any calculation).
+*   **Selecting a model**: choose it in the **ML potential** dropdown of the CIF loading dialog (your last choice is remembered in the browser). The model is chosen when the structure is loaded and stays fixed for it; the right panel shows it read-only. To use another model, load the structure again (**New CIF**). Over the API, pass `"model": "<id>"` to `POST /api/create-supercell`; the id is stored in the session and echoed in the response, and later calls (`/api/predict`, `/api/relax`, `/api/evaluate-insertion-energy`, `/api/evaluate-insertion-energies`, `/api/evaluate-candidate-energies`, `/api/get-insertable-elements`, `/api/generate-relaxed-structure-cif`) use the session's model when `model` is omitted and return 409 if they name a different one. Omitted at load time means the server default (`CRYSTALNEXUS_DEFAULT_MODEL`, default `chgnet`). Unknown ids return 400; a model that is not installed returns 503; a structure containing elements the model does not support returns 422 listing them (checked when the structure is loaded, and again before any calculation). Element substitution and insertion are validated against the session model's element list.
 *   **Endpoints**: `GET /api/models` lists `id`, `display_name`, `available`, `capabilities`, `version`, `is_default`. `GET /api/elements?model=<id>` returns that model's elements (unknown id: 400; not installed: 200 with `available: false` and an empty list).
 *   **First MACE use downloads weights** (about 45 MB) to `~/.cache/mace`, so an internet connection is needed once; offline without cached weights the API returns 503 with an explanatory message.
 *   **MACE precision**: `MACE_DTYPE` (`float64` default, or `float32` for speed/memory).
-*   **Do not mix models in one analysis.** Both models are trained on MPtrj, but absolute energies are not interchangeable between them. Results, relaxed CIF headers and text/CSV exports state which model produced them. Relaxation concurrency is global: a second relaxation returns 429 regardless of the model.
+*   **Models are never mixed within one structure.** Both models are trained on MPtrj, but absolute energies are not interchangeable between them. Results, relaxed CIF headers and text/CSV exports state which model produced them. Relaxation concurrency is global: a second relaxation returns 429 regardless of the model.
 
 ### Workflow Guide
 
@@ -192,7 +192,7 @@ The HTTP endpoints were renamed likewise: `/api/chgnet-predict` -> `/api/predict
 *   **Inspect**: Hover over atoms to see their element and coordinates.
 
 #### 3. Structure Analysis (ML potential)
-*   **Analyze & Relax**: Click **"Analyze Structure"**. The ML potential selected in the **Model** dropdown (CHGNet by default) relaxes the geometry (optimizing atomic positions and the cell) and reports the energy of the resulting structure. The 3D view updates to show the relaxed structure.
+*   **Analyze & Relax**: Click **"Analyze Structure"**. The ML potential chosen when the structure was loaded (shown as **Model** in the right panel; CHGNet by default) relaxes the geometry (optimizing atomic positions and the cell) and reports the energy of the resulting structure. The 3D view updates to show the relaxed structure.
 *   **Advanced Settings**: Expand **"⚙️ Advanced Settings"** to tune the force tolerance, max steps, and optimizer (LBFGS/FIRE/BFGS) before analyzing.
 
 #### 4. Advanced Editing

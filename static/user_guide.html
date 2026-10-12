@@ -277,14 +277,16 @@
 
     <h3>4.2 Model Selection</h3>
 
-    <p>The ML potential is chosen per request with the <strong>Model</strong> dropdown in the ML Potential panel.
+    <p>The ML potential is chosen in the <strong>ML potential</strong> dropdown of the CIF loading dialog, before the
+        structure is loaded, and stays fixed for that structure. The right-hand ML Potential panel shows the model
+        read-only; to use another model, load the structure again (<strong>New CIF</strong>).
         Two models are available: CHGNet<sup><a href="#ref3" class="citation">[3]</a></sup> (default; provides magnetic
         moments and site energies) and MACE-MP-0 (medium)<sup><a href="#ref9" class="citation">[9]</a></sup> (MIT license;
-        energy, forces and stress only, so magnetic-moment and site-energy fields are hidden). The element list is
-        updated for the selected model, and a structure containing elements the model does not support is rejected
-        before any calculation. The first MACE calculation downloads the model weights once (internet access is
+        energy, forces and stress only, so magnetic-moment and site-energy fields are hidden). The element lists for substitution
+        and insertion follow the chosen model, and a structure containing elements the model does not support is
+        rejected at load time (the dialog stays open so another model can be chosen). The first MACE calculation downloads the model weights once (internet access is
         required). Both models are trained on the MPtrj dataset, but their absolute energies are <strong>not
-            interchangeable</strong>: do not mix models within one analysis. Results and exports name the model that
+            interchangeable</strong>: a loaded structure is never analyzed with more than one model. Results and exports name the model that
         produced them.</p>
 
     <h2>5. Advanced Structure Modification Algorithms</h2>
