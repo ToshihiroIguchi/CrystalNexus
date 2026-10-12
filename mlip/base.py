@@ -52,8 +52,12 @@ class UnknownModelError(MLIPError):
     """The requested model id is not registered (endpoints map this to 400)."""
 
 
-class ModelUnavailableError(MLIPError):
-    """The model's dependencies cannot be imported (endpoints map this to 503)."""
+class ModelUnavailableError(MLIPError, RuntimeError):
+    """The model cannot be used: dependencies missing or weights unobtainable.
+
+    Endpoints map this to 503. It is also a RuntimeError so that the existing
+    ``except RuntimeError`` load guards produce the same 503.
+    """
 
 
 def ase_stress_to_gpa(stress):

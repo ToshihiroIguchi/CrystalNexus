@@ -40,7 +40,8 @@ WINDOWS_PLATFORM = platform.system() == "Windows"
 from mlip import (MODEL_REGISTRY, MLIPError, ModelUnavailableError,
                   UnknownModelError, get_backend)
 from mlip.chgnet_backend import CHGNetBackend
-from mlip.registry import is_available as _model_is_available, default_model_id
+from mlip.registry import (is_available as _model_is_available, default_model_id,
+                           list_models)
 from mlip.executor import inference_executor as _inference_executor
 
 # Configuration constants - must be defined before use
@@ -80,13 +81,18 @@ MIN_INSERT_DISTANCE = 0.5
 RELAX_TIMEOUT_SECONDS = float(os.getenv('RELAX_TIMEOUT_SECONDS', '600'))
 # Initialize once as global variable
 def _initial_allowed_elements() -> Set[str]:
-    """Element whitelist from the default backend (falls back to CHGNet's
-    own list, which has its own fallback, if the default is unavailable)."""
-    try:
-        backend = get_backend()
-    except MLIPError:
-        backend = CHGNetBackend()
-    return set(backend.supported_elements())
+    """Structure-edit element whitelist: the union of every AVAILABLE model's
+    supported elements. Model-specific limits are enforced at prediction/
+    relaxation time (422). No model is loaded here: CHGNet's list is derived
+    from a fixed atomic-number range and MACE's is a static set until loaded.
+    Falls back to CHGNet's own list if no model is available."""
+    elements: Set[str] = set()
+    for model_id, cls in MODEL_REGISTRY.items():
+        if cls.is_available():
+            elements.update(cls().supported_elements())
+    if not elements:
+        elements = set(CHGNetBackend().supported_elements())
+    return elements
 
 
 ALLOWED_ELEMENTS: Set[str] = _initial_allowed_elements()
@@ -1915,23 +1921,40 @@ async def get_element_labels(data: dict):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@app.get("/api/models")
+async def get_models():
+    """List registered ML potentials (no model is loaded)."""
+    return {"status": "success", "default": default_model_id(), "models": list_models()}
+
+
 @app.get("/api/elements")
-async def get_elements():
+async def get_elements(model: Optional[str] = None):
     """
-    ML-potential supported elements API (dynamic detection version)
-    Returns elements sorted by atomic number
+    Elements supported by a model, sorted by atomic number.
+
+    ``model`` is a model id (default: the registry default). Unknown id -> 400.
+    A registered but unavailable model (e.g. mace-torch not installed) returns
+    200 with ``available: false`` and an empty list so the UI can render a
+    disabled option. Does not load the model.
     """
+    model_id = (model or "").strip() or default_model_id()
+    if model_id not in MODEL_REGISTRY:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown model '{model_id}'. Available models: {sorted(MODEL_REGISTRY)}")
     try:
-        available = _model_is_available(default_model_id())
-        elements = list(ALLOWED_ELEMENTS)
-        # Sort by atomic number for consistent UI ordering
-        elements.sort(key=lambda el: Element(el).Z)
+        available = _model_is_available(model_id)
+        elements = []
+        if available:
+            elements = sorted(MODEL_REGISTRY[model_id]().supported_elements(),
+                              key=lambda el: Element(el).Z)
         return {
             "status": "success",
+            "model": model_id,
             "available": available,
             "elements": elements,
             "total_elements": len(elements),
-            "source": "dynamic_detection" if available else "fallback"
+            "source": "dynamic_detection" if available else "unavailable"
         }
     except Exception as e:
         logger.error(f"Error getting supported elements: {e}")
@@ -2212,6 +2235,16 @@ def _get_device_info(backend=None):
     return (backend or get_backend()).device or "cpu"
 
 
+def _request_model_id(data) -> Optional[str]:
+    """Optional ``model`` field of a request body (None -> registry default)."""
+    model_id = data.get("model") if isinstance(data, dict) else None
+    if model_id is None or model_id == "":
+        return None
+    if not isinstance(model_id, str):
+        raise HTTPException(status_code=400, detail="model must be a string")
+    return model_id.strip()
+
+
 def _resolve_backend(model_id=None):
     """Registry lookup mapped to HTTP errors (unknown -> 400, unavailable -> 503)."""
     try:
@@ -2219,6 +2252,31 @@ def _resolve_backend(model_id=None):
     except UnknownModelError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except ModelUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+def _ensure_elements_supported(backend, symbols) -> None:
+    """422 listing the elements ``backend`` cannot handle (before any inference)."""
+    supported = set(backend.supported_elements())
+    unsupported = sorted({sym for sym in symbols if sym not in supported},
+                         key=lambda sym: Element(sym).Z)
+    if unsupported:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Element(s) {', '.join(unsupported)} not supported by model "
+                   f"'{backend.id}' ({backend.display_name}). Choose a different "
+                   f"model or remove these elements.")
+
+
+def _structure_symbols(structure) -> Set[str]:
+    return {_site_element_symbol(site.specie) for site in structure}
+
+
+async def _load_or_503(backend) -> None:
+    """Load the backend, mapping load failures to HTTP 503."""
+    try:
+        await backend.load()
+    except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
 
@@ -2567,6 +2625,7 @@ async def predict_structure(request: dict):
         filename = request.get("filename")
         operations = request.get("operations", [])
         supercell_size = request.get("supercell_size", [1, 1, 1])
+        model_id = _request_model_id(request)
 
         if not filename:
             raise HTTPException(status_code=400, detail="Filename is required")
@@ -2580,12 +2639,11 @@ async def predict_structure(request: dict):
             _load_structure_for_predict, session_id, filename, supercell_size, operations
         )
 
-        # Load the model (singleton per backend)
-        backend = _resolve_backend()
-        try:
-            await backend.load()
-        except RuntimeError as e:
-            raise HTTPException(status_code=503, detail=str(e))
+        # Resolve the requested model, reject unsupported elements (422)
+        # before any inference, then load it (singleton per backend).
+        backend = _resolve_backend(model_id)
+        _ensure_elements_supported(backend, _structure_symbols(structure))
+        await _load_or_503(backend)
 
         # Predict structure properties (normalized by the backend)
         pred = await backend.predict_one(structure, _PROPS_PREDICT)
@@ -2641,6 +2699,7 @@ async def relax_structure(request: dict):
         # Validated and clamped before any model loading, so malformed or
         # out-of-range requests never touch the slow, serialized MLIP model.
         fmax, max_steps, optimizer_name = _validate_relax_params(request)
+        model_id = _request_model_id(request)
 
         # Get the current structure from session (already has supercell + operations applied)
         structure = session_manager.get_current_structure(session_id)
@@ -2652,6 +2711,12 @@ async def relax_structure(request: dict):
                 status_code=413,
                 detail=f"Structure has {len(structure)} atoms; the relaxation limit is "
                        f"{MAX_RELAX_ATOMS}. Reduce the supercell size.")
+
+        # Model selection and element support are checked before taking the
+        # semaphore or doing any inference (unknown -> 400, unavailable ->
+        # 503, unsupported elements -> 422).
+        backend = _resolve_backend(model_id)
+        _ensure_elements_supported(backend, _structure_symbols(structure))
 
         session_info = session_manager.get_session_info(session_id)
         filename = session_info.get('filename', 'unknown') if session_info else 'unknown'
@@ -2684,7 +2749,6 @@ async def relax_structure(request: dict):
             _relax_progress[session_id] = {}
 
             # Load MLIP model/calculator (using singleton pattern)
-            backend = _resolve_backend()
             try:
                 calculator = await backend.get_calculator()
             except RuntimeError as e:
@@ -2925,7 +2989,8 @@ async def relax_structure(request: dict):
                     "id": backend.id,
                     "display_name": backend.display_name,
                     "version": backend.version(),
-                    "device": _get_device_info(backend)
+                    "device": _get_device_info(backend),
+                    "parameters": backend.parameters()
                 }
             })
         finally:
@@ -3307,8 +3372,14 @@ async def get_insertable_elements(data: dict):
         # We no longer need Voronoi analysis here as it's slow.
         # Just return the sorted list of allowed elements.
         
+        # Optional model: restrict to that model's elements (default: union).
+        model_id = _request_model_id(data)
+        if model_id is not None:
+            allowed = set(_resolve_backend(model_id).supported_elements())
+        else:
+            allowed = ALLOWED_ELEMENTS
         insertable_elements = []
-        for symbol in ALLOWED_ELEMENTS:
+        for symbol in allowed:
             insertable_elements.append(symbol)
             
         # Sort by atomic number
@@ -3427,7 +3498,9 @@ async def evaluate_insertion_energy(data: dict):
         # Predict energy. task="e" skips force/stress/magmom autograd, which are
         # unused for site screening and account for most of the per-site cost
         # (~5x speedup measured: 2.0s -> 0.4s per site on a 109-atom structure).
-        backend = _resolve_backend()
+        backend = _resolve_backend(_request_model_id(data))
+        _ensure_elements_supported(backend, _structure_symbols(structure) | {element_symbol})
+        await _load_or_503(backend)
         try:
             results = _prediction_payload(
                 await backend.predict_one(cand_structure, _PROPS_ENERGY))
@@ -3443,6 +3516,7 @@ async def evaluate_insertion_energy(data: dict):
             "status": "success",
             "energy": total_energy_eV,           # total energy of the candidate structure in eV
             "energy_eV_per_atom": per_atom_energy,
+            "model": backend.id,
         }
     except HTTPException:
         # Re-raise HTTPExceptions without modification
@@ -3506,7 +3580,10 @@ async def evaluate_insertion_energies(data: dict):
             site_ids.append(site_id)
 
         num_atoms = len(structure) + 1
-        pred_results = await _resolve_backend().predict(cand_structures, _PROPS_ENERGY)
+        backend = _resolve_backend(_request_model_id(data))
+        _ensure_elements_supported(backend, _structure_symbols(structure) | {element_symbol})
+        await _load_or_503(backend)
+        pred_results = await backend.predict(cand_structures, _PROPS_ENERGY)
 
         results = []
         for site_id, pred_result in zip(site_ids, pred_results):
@@ -3529,7 +3606,8 @@ async def evaluate_insertion_energies(data: dict):
                 logger.warning(f"Failed to parse prediction for site {site_id}: {e}")
                 results.append({"id": site_id, "energy": None, "energy_eV_per_atom": None, "error": str(e)})
 
-        return {"status": "success", "element": element_symbol, "results": results}
+        return {"status": "success", "element": element_symbol, "model": backend.id,
+                "results": results}
     except HTTPException:
         # Re-raise HTTPExceptions without modification
         raise
@@ -3626,8 +3704,15 @@ async def evaluate_candidate_energies(data: dict):
             cand_num_atoms.append(len(cand_structure))
             cand_result_slots.append(slot)
 
-        pred_results = await _resolve_backend().predict(cand_structures, _PROPS_ENERGY) \
-            if cand_structures else []
+        backend = _resolve_backend(_request_model_id(data))
+        _ensure_elements_supported(
+            backend, _structure_symbols(structure) | {c.get("to") for c in candidates
+                                                      if c.get("action") == "substitute"
+                                                      and isinstance(c.get("to"), str)})
+        pred_results = []
+        if cand_structures:
+            await _load_or_503(backend)
+            pred_results = await backend.predict(cand_structures, _PROPS_ENERGY)
 
         for slot, cand_id, num_atoms, pred_result in zip(cand_result_slots, cand_ids, cand_num_atoms, pred_results):
             if pred_result is None:
@@ -3649,7 +3734,7 @@ async def evaluate_candidate_energies(data: dict):
                 logger.warning(f"Failed to parse prediction for candidate {cand_id}: {e}")
                 results[slot] = {"id": cand_id, "energy": None, "energy_eV_per_atom": None, "error": str(e)}
 
-        return {"status": "success", "results": results}
+        return {"status": "success", "model": backend.id, "results": results}
     except HTTPException:
         # Re-raise HTTPExceptions without modification
         raise

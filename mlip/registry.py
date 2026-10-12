@@ -4,11 +4,13 @@ from typing import Dict, List, Optional, Type
 
 from .base import MLIPBackend, ModelUnavailableError, UnknownModelError
 from .chgnet_backend import CHGNetBackend
+from .mace_backend import MACEBackend
 
 DEFAULT_MODEL_FALLBACK = "chgnet"
 
 MODEL_REGISTRY: Dict[str, Type[MLIPBackend]] = {
     "chgnet": CHGNetBackend,
+    "mace-mp-0-medium": MACEBackend,
 }
 
 
