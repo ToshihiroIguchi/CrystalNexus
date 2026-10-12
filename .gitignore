@@ -91,3 +91,6 @@ implementation_plan_*.md
 
 # Playwright MCP browser-testing artifacts
 .playwright-mcp/
+
+# ML model weights (fetched by scripts/download_dos_model.py)
+models/

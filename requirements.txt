@@ -22,3 +22,11 @@ pymatgen-analysis-defects>=2024.1.1,<2026
 
 # Testing
 pytest>=9,<10
+
+# ML electronic DOS prediction (PET-MAD-DOS); imported lazily. Weights are NOT downloaded by the app:
+# run `python scripts/download_dos_model.py` once at setup.
+upet==0.3.1
+metatrain==2026.4.1
+metatomic-torch==0.1.19
+metatomic-ase==0.1.4
+metatensor-torch==0.10.7
