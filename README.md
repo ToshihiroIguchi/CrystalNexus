@@ -141,7 +141,7 @@ This binds `0.0.0.0` and:
 
 **Security implications of LAN mode** — this is a genuinely unauthenticated app, so only expose it on a network you trust:
 *   There is no authentication on `/` or on any `/api/*` endpoint; anyone who can reach the machine on that port can use the full application.
-*   Any LAN device can upload CIF files and trigger CHGNet relaxations, consuming this machine's CPU and RAM. `POST /api/*` requests are rate-limited per client IP (60 requests/min, burst 20), but this only throttles abuse, it doesn't prevent it.
+*   Any LAN device can upload CIF files and trigger ML-potential relaxations, consuming this machine's CPU and RAM. `POST /api/*` requests are rate-limited per client IP (60 requests/min, burst 20), but this only throttles abuse, it doesn't prevent it.
 *   Sessions are shared globally across all clients (`MAX_SESSIONS=100`, least-recently-used eviction). Each client IP is further capped at `MAX_SESSIONS_PER_IP=10` concurrent sessions of its own, so one device can no longer evict *other* LAN users' sessions just by opening enough tabs -- but multiple browser tabs/devices sharing the same IP (e.g. behind the same NAT) still compete for that one IP's 10-session budget.
 *   Every visitor's IP address and User-Agent is logged to `analytics.db`, retained for `ANALYTICS_RETENTION_DAYS` (default 90) days.
 
@@ -154,6 +154,17 @@ netsh advfirewall firewall add rule name="CrystalNexus 8090" dir=in action=allow
 (`profile=private` keeps the rule off public/untrusted networks.) The script also prints the matching `delete rule` command so you can remove it later.
 
 LAN IP detection is best-effort: it may list several candidate addresses if your machine has VPN/WSL/Hyper-V virtual adapters, and it may occasionally fail to detect anything, in which case run `ipconfig` and look for your Wi-Fi/Ethernet adapter's IPv4 address.
+
+### Configuration notes (renamed variables)
+
+The model-specific environment variables were renamed with the move to a model-neutral API (the old names are no longer read):
+
+| Old | New |
+|---|---|
+| `CHGNET_BATCH_SIZE` | `MLIP_BATCH_SIZE` |
+| `CHGNET_RELAX_OPTIMIZER` | `RELAX_OPTIMIZER` |
+
+The HTTP endpoints were renamed likewise: `/api/chgnet-predict` -> `/api/predict`, `/api/chgnet-relax` -> `/api/relax`, `/api/chgnet-elements` -> `/api/elements` (the `chgnet_available` response key is now `available`).
 
 ### Workflow Guide
 
@@ -168,8 +179,8 @@ LAN IP detection is best-effort: it may list several candidate addresses if your
 *   **Pan**: Right-click (or Ctrl+Left-click) and drag.
 *   **Inspect**: Hover over atoms to see their element and coordinates.
 
-#### 3. Structure Analysis (CHGNet)
-*   **Analyze & Relax**: Click **"Analyze Structure"**. CHGNet relaxes the geometry (optimizing atomic positions and the cell) and reports the energy of the resulting structure. The 3D view updates to show the relaxed structure.
+#### 3. Structure Analysis (ML potential)
+*   **Analyze & Relax**: Click **"Analyze Structure"**. The ML potential (CHGNet by default) relaxes the geometry (optimizing atomic positions and the cell) and reports the energy of the resulting structure. The 3D view updates to show the relaxed structure.
 *   **Advanced Settings**: Expand **"⚙️ Advanced Settings"** to tune the force tolerance, max steps, and optimizer (LBFGS/FIRE/BFGS) before analyzing.
 
 #### 4. Advanced Editing

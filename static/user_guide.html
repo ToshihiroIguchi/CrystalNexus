@@ -257,7 +257,7 @@
                 count)</li>
             <li><strong>Structure Modification:</strong> Element substitution, atom deletion, and element insertion
                 capabilities</li>
-            <li><strong>Property Prediction:</strong> CHGNet-based calculation of energies and magnetic moments</li>
+            <li><strong>Property Prediction:</strong> ML-potential (CHGNet by default) calculation of energies and magnetic moments</li>
             <li><strong>Results Analysis:</strong> Visualization of optimized structures and quantitative property data
             </li>
         </ol>
@@ -294,9 +294,9 @@
             <div class="equation">
                 $$i^* = \text{arg min}_i \{ E(\text{Operation applied at site } i) \}$$
             </div>
-            Energy predictions are performed using the CHGNet universal potential<sup><a href="#ref3"
+            Energy predictions are performed using the ML potential (CHGNet by default)<sup><a href="#ref3"
                     class="citation">[3]</a></sup>. Candidate sites are screened in batches of up to 8 per request
-            (one native batched CHGNet call per batch, rather than one request per site), which keeps large sweeps
+            (one native batched model call per batch, rather than one request per site), which keeps large sweeps
             responsive to cancellation: the search can be stopped mid-sweep with no partial operation applied, and a
             sweep is automatically aborted if it runs pathologically long.
         </li>
@@ -320,7 +320,7 @@
                     impractically slow on larger supercells; the fingerprint approach scales linearly and returns the
                     same sites.</li>
                 <li><strong>Energetic Stability Evaluation:</strong> Each candidate interstitial site is evaluated for
-                    thermodynamic stability using CHGNet energy predictions. The site yielding the lowest total energy
+                    thermodynamic stability using ML-potential energy predictions. The site yielding the lowest total energy
                     is recommended as the optimal insertion point<sup><a href="#ref3" class="citation">[3]</a></sup>.
                 </li>
             </ol>

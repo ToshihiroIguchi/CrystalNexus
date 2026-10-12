@@ -1300,7 +1300,7 @@ body {
     cursor: not-allowed;
 }
 
-.chgnet-controls {
+.mlip-controls {
     margin-bottom: 20px;
 }
 
@@ -1332,7 +1332,7 @@ body {
     font-size: 13px;
 }
 
-.chgnet-status {
+.mlip-status {
     background-color: #f8f9fa;
     border: 1px solid #e0e0e0;
     border-radius: 6px;
@@ -1379,7 +1379,7 @@ body {
 }
 
 
-.chgnet-results {
+.mlip-results {
     border-top: 1px solid #e0e0e0;
     padding-top: 15px;
 }
