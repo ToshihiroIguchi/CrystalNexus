@@ -5,3 +5,4 @@
 pytest
 httpx
 pip-tools
+psutil

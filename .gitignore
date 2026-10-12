@@ -27,7 +27,7 @@ MANIFEST
 
 # Virtual environments
 venv/
-venv_*/
+venv*/
 venv.old/
 env/
 ENV/
