@@ -1,4 +1,5 @@
 """Shared pytest fixtures for the CrystalNexus test suite."""
+import os
 import sys
 from pathlib import Path
 
@@ -8,6 +9,10 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+# Never preload the real DOS model implicitly (lifespan runs under TestClient
+# context managers); tests of the preload logic call it explicitly.
+os.environ["CRYSTALNEXUS_DOS_PRELOAD"] = "0"
 
 from fastapi.testclient import TestClient  # noqa: E402
 

@@ -19,6 +19,7 @@ CrystalNexus is a comprehensive web-based application for crystal structure anal
     *   **Site-Specific Energies**
 *   **Auto Mode Optimization**: An advanced AI-driven feature that iteratively substitutes, deletes, or inserts atoms to discover the most energetically favorable configuration.
 *   **Real-time Feedback**: Watch energy minimization progress live via dynamic sparkline charts.
+*   **Electronic DOS Prediction (PET-MAD-DOS)**: After a relaxation, predict the electronic density of states of the relaxed structure with an ML model in well under a second. See [Electronic DOS Prediction](#electronic-dos-prediction-pet-mad-dos).
 
 ###  Comprehensive Analysis Tools
 *   **Local Analytics Dashboard**: A built-in SQLite database tracks your usage history and calculation statistics. **Data privacy is paramount**: all analytics are stored locally on your machine and are never uploaded to the cloud.
@@ -35,6 +36,8 @@ CrystalNexus/
 +--- main.py                 # Core FastAPI backend application
 +--- start_crystalnexus.py   # robust server startup script with auto-recovery and health monitoring
 +--- analytics_db.py         # Local analytics database manager (SQLite)
++--- scripts/               # Setup helpers (download_dos_model.py: one-time model pre-fetch)
++--- models/                # Local ML model weights (git-ignored; created by download_dos_model.py)
 +--- sample_cif/            # Curated library of sample crystal structures (Gases, Metals, Oxides)
 +--- templates/             # Jinja2 HTML templates (index.html, analytics.html)
 +--- static/               # Static assets (js/utils.js, js/analytics.js, js/auto_mode_chart.js)
@@ -89,7 +92,16 @@ Install all required libraries using `pip`. This step may take a few minutes as 
 pip install -r requirements.txt
 ```
 
-#### 4. Verify Installation
+#### 4. Download the DOS Model (one-time)
+The optional **Predict DOS** feature needs the PET-MAD-DOS weights (~145 MB). The running server never downloads anything, so fetch them once at setup (this is the only step that needs internet access):
+
+```bash
+python scripts/download_dos_model.py
+```
+
+See [Electronic DOS Prediction](#electronic-dos-prediction-pet-mad-dos) for details. Skipping this step only disables the DOS button; everything else works.
+
+#### 5. Verify Installation
 Check if the installation was successful by listing the installed packages:
 ```bash
 pip list
@@ -183,12 +195,59 @@ LAN IP detection is best-effort: it may list several candidate addresses if your
 *   After an analysis is complete, click the **"Detailed Analysis"** button.
 *   In the modal, click **"Download All Data (ZIP)"** to save your work.
 
-#### 6. View Analytics
+#### 6. Predict the Electronic DOS
+*   After **Analyze Structure** has finished, click **"Predict DOS"** in the result panel. A modal shows the ML-predicted total DOS versus E - E_F, the band gap and the computation time. Toggle **per cell / per atom**, hover over the chart for values, and use **Download CSV** to export (columns: `E-EF_eV`, `E_eV_grid`, `DOS_states_per_eV_per_cell`, `integrated_DOS_electrons_per_cell`; in per atom mode the columns are `DOS_states_per_eV_per_atom` and `integrated_DOS_electrons_per_atom`, with the integrated value divided by the number of atoms).
+*   The button is only available for the relaxed structure; editing the structure, resetting, or loading a new CIF invalidates it. See the dedicated section below for setup and limitations.
+
+#### 7. View Analytics
 *   Access the local analytics dashboard at `http://localhost:8090/analytics` to monitor:
     *   Daily usage trends
     *   Most analyzed structures
     *   Recent calculation logs
 *   By default the dashboard is loopback-only: no token is needed when accessing it from `127.0.0.1`/`localhost`. Once `CRYSTALNEXUS_ANALYTICS_TOKEN` is set — including automatically when you run `python start_crystalnexus.py --lan` — access from anywhere, including localhost, requires that token, either as a `?token=...` query parameter or an `X-Analytics-Token` header. When `--lan` auto-generates a token, it prints ready-to-use `?token=...` URLs for both `127.0.0.1` and your LAN IP.
+
+---
+
+## Electronic DOS Prediction (PET-MAD-DOS)
+
+The **Predict DOS** button estimates the electronic density of states (DOS) of the CHGNet-relaxed structure with [PET-MAD-DOS](https://arxiv.org/abs/2508.17418), a universal ML model (package `upet`) that maps a structure directly to its DOS, Fermi level and band gap. No DFT calculation is run.
+
+### Initial setup (once, needs internet)
+```bash
+python scripts/download_dos_model.py          # download (~145 MB) + verify
+python scripts/download_dos_model.py --check  # verify only, no network
+```
+*   The script downloads three files (`pet-mad-dos-v1.0.ckpt`, `bandgap-model.pt`, `fermi-model.pt`) from the Hugging Face repository `lab-cosmo/pet-mad-dos`, pinned to an exact commit, and checks their size and SHA256. It is idempotent (valid files are skipped), prints progress, and exits non-zero on any failure (offline, corrupted download, mismatch).
+*   Files go to `models/pet-mad-dos/` in the project (git-ignored). Override the location with the environment variable `CRYSTALNEXUS_DOS_MODEL_DIR` (see `.env.example`); the server and the script both honor it.
+*   **The running app never downloads anything and does not use the Hugging Face cache** (`~/.cache/huggingface`). It loads only the files above, with Hugging Face offline mode forced, so it is safe on servers without internet access and independent of which user ran the download.
+*   **Air-gapped deployment**: run the script on a connected machine, copy the whole `models/pet-mad-dos/` directory to the target (or any path set via `CRYSTALNEXUS_DOS_MODEL_DIR`), then run `--check` there.
+*   **Docker / CI**: run `python scripts/download_dos_model.py` once at image build time (after `pip install -r requirements.txt`) so containers start fully offline.
+
+### Performance and resources
+*   **Startup preload**: by default the server loads PET-MAD-DOS in a background task right after startup and runs one tiny warm-up inference, so the first "Predict DOS" click takes only about 0.1-0.3 s. Server startup and `/health` are not delayed, but about 0.8 GB of RSS is used from startup on. Set `CRYSTALNEXUS_DOS_PRELOAD=0` (also `false`/`no`/`off`) to keep lazy loading (the first prediction then takes a few seconds). If the model files or `upet` are missing, or preloading fails, a warning is logged and lazy loading remains the fallback. `/api/dos-status` additionally reports `loaded` and `preloading`.
+*   Model load without preload (first prediction after server start): a few seconds. Inference: under 1 s warm (about 0.02-0.25 s for 1-216 atoms).
+*   Memory: about 0.8 GB resident after loading, up to roughly 1.4 GB for ~200-atom cells. Structures above `MAX_DOS_ATOMS` (default 500) are rejected; predictions time out after `DOS_TIMEOUT_SECONDS` (default 60). Only one prediction runs at a time.
+
+### Limitations (the result is ML-predicted and qualitative)
+*   **Total DOS only**: no element/orbital-projected DOS (PDOS) and no spin-resolved DOS.
+*   The model was trained on **non-spin-polarized PBEsol** DFT data, while the structure was relaxed with CHGNet (Materials Project PBE/PBE+U-based), so the levels of theory differ.
+*   **Magnetic systems are not handled**: e.g. Fe2O3 and other magnetic oxides are predicted metallic.
+*   The DOS is Gaussian-smoothed (sigma = 0.3 eV); the band gap is a separate ML output of the model (trained on PBEsol DFT gaps), shown as "Band gap (model)". Because the DOS is smoothed, the edge-to-edge spacing visible on the curve can look narrower than the reported gap.
+
+### Troubleshooting
+*   **HTTP 503 "PET-MAD-DOS model files are missing or invalid ..."** (shown in the modal; the button is also disabled with a tooltip): run `python scripts/download_dos_model.py` with the project virtual environment, or `--check` to see which file is missing or corrupted. Make sure `CRYSTALNEXUS_DOS_MODEL_DIR` is the same for the script and the server.
+*   **HTTP 503 "requires the 'upet' package"**: `pip install -r requirements.txt` (pins `upet==0.3.1`).
+*   **HTTP 400**: the structure has not been relaxed yet (click Analyze Structure first). **HTTP 409**: the structure changed during prediction; run again.
+
+### Dependencies and licensing
+*   `upet` pulls in `metatrain`, `metatensor-torch`, `metatomic-torch`, `metatomic-ase` and other packages (pinned in `requirements.txt`); it is compatible with the torch 2.8 / numpy 2.3 versions used here.
+*   Licensing facts (no legal conclusion is drawn here):
+    *   The `upet` code is released under the BSD-3-Clause license.
+    *   The Hugging Face repository `lab-cosmo/pet-mad-dos` (the source of the weights downloaded by the script) shows no license tag, README or LICENSE file.
+    *   The sibling Hugging Face repository `lab-cosmo/upet` is tagged `bsd-3-clause`.
+    *   The Materials Cloud record for the paper (https://archive.materialscloud.org/records/8ee9k-b7865, which includes `PETMADDOS.tar.gz`) is licensed CC BY 4.0 (attribution required).
+    *   When you use results, cite arXiv:2508.17418.
+*   Before redistributing the weights (for example inside a Docker image you publish) or using them commercially, check with the authors, e.g. by opening an issue at https://github.com/lab-cosmo/upet.
 
 ---
 
@@ -223,6 +282,9 @@ python -m pytest tests/ -m "not slow"
 ### Q: "Module not found: chgnet"
 *   **Correction**: Ensure you activated your virtual environment (`venv`) before running the server. Re-run `pip install -r requirements.txt`.
 
+### Q: "Predict DOS" is disabled or returns 503
+*   **Correction**: The DOS model files have not been installed. Run `python scripts/download_dos_model.py` (see [Electronic DOS Prediction](#electronic-dos-prediction-pet-mad-dos)).
+
 ### Q: "DLL load failed" on Windows
 *   **Correction**: This usually means a missing system dependency. Install the [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170).
 
@@ -233,7 +295,7 @@ python -m pytest tests/ -m "not slow"
 ## Technology Stack
 
 *   **Backend**: FastAPI, Uvicorn, Python 3.8+
-*   **Machine Learning**: CHGNet, PyTorch, Pymatgen
+*   **Machine Learning**: CHGNet, PyTorch, Pymatgen, PET-MAD-DOS (`upet`)
 *   **Frontend**: HTML5, Vanilla JS, Jinja2, 3Dmol.js
 *   **Database**: SQLite (for local analytics)
 
