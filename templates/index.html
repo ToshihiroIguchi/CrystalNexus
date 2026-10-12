@@ -16,7 +16,6 @@
     <script src="{{ static_url('js/utils.js') }}"></script>
     <script src="{{ static_url('js/auto_mode_chart.js') }}"></script>
     <script src="{{ static_url('js/relax_chart.js') }}"></script>
-    <script src="{{ static_url('js/dos_chart.js') }}"></script>
     <style>
         .info-icon {
             font-size: 14px;
@@ -507,11 +506,6 @@
                                     style="flex: 1; padding: 6px 10px; font-size: 12px; font-weight: 500; background: #3498db !important; border: none !important;">
                                     📊 Details
                                 </button>
-                                <button class="secondary-action" id="predictDosBtn" onclick="openDOSModal()"
-                                    title="Predict the electronic density of states of the relaxed structure (ML, qualitative)"
-                                    style="flex: 1; padding: 6px 10px; font-size: 12px; font-weight: 500; background: #8e44ad !important; border: none !important;">
-                                    📈 Predict DOS
-                                </button>
                                 <button class="secondary-action" id="downloadAnalysisBtn"
                                     onclick="downloadAnalysisData()"
                                     style="flex: 1; padding: 6px 10px; font-size: 12px; font-weight: 500; background: #3498db !important; border: none !important;">
@@ -856,204 +850,6 @@
             if (el) el.style.display = 'none';
             if (window.relaxEnergyChart) window.relaxEnergyChart.reset();
             if (window.relaxForceChart) window.relaxForceChart.reset();
-            resetDOSState();
-        }
-
-        // ---------------------------------------------------------------
-        // Electronic DOS prediction (PET-MAD-DOS) modal
-        // ---------------------------------------------------------------
-        window.dosState = { data: null, perAtom: false, running: false, timer: null, requestId: 0 };
-
-        // Disable the button (with an explanatory tooltip) when the model
-        // files were never installed by scripts/download_dos_model.py.
-        async function refreshDOSAvailability() {
-            const btn = document.getElementById('predictDosBtn');
-            const defaultTitle = 'Predict the electronic density of states of the relaxed structure (ML, qualitative)';
-            try {
-                const response = await fetch('/api/dos-status');
-                const status = await response.json();
-                btn.disabled = !status.available;
-                btn.title = status.available
-                    ? defaultTitle
-                    : `DOS model files not installed. ${status.hint || 'Run: python scripts/download_dos_model.py'}`;
-            } catch (e) {
-                btn.disabled = false;  // fall back to the error shown in the modal
-                btn.title = defaultTitle;
-            }
-        }
-
-        function setDOSElapsedTimer(start) {
-            clearInterval(window.dosState.timer);
-            const el = document.getElementById('dos-elapsed');
-            const tick = () => { el.textContent = `${((performance.now() - start) / 1000).toFixed(0)} s`; };
-            tick();
-            window.dosState.timer = setInterval(tick, 500);
-        }
-
-        function stopDOSElapsedTimer() {
-            clearInterval(window.dosState.timer);
-            window.dosState.timer = null;
-        }
-
-        function showDOSPanel(which) {
-            document.getElementById('dos-loading').style.display = which === 'loading' ? 'flex' : 'none';
-            document.getElementById('dos-error').style.display = which === 'error' ? 'block' : 'none';
-            document.getElementById('dos-result').style.display = which === 'result' ? 'block' : 'none';
-        }
-
-        function openDOSModal() {
-            const modal = document.getElementById('dosModal');
-            modal.style.display = 'block';
-            document.addEventListener('keydown', handleModalKeydown);
-            // Reopening after a completed prediction for the same structure
-            // shows the cached result instead of recomputing.
-            if (window.dosState.data) {
-                renderDOSResult();
-            } else if (!window.dosState.running) {
-                runDOSPrediction();
-            }
-        }
-
-        function closeDOSModal() {
-            document.getElementById('dosModal').style.display = 'none';
-            document.removeEventListener('keydown', handleModalKeydown);
-        }
-
-        function retryDOSPrediction() {
-            runDOSPrediction();
-        }
-
-        async function runDOSPrediction() {
-            const state = window.dosState;
-            if (state.running) return;
-            if (!window.sessionId) {
-                showDOSError('No active session. Load and relax a structure first.');
-                return;
-            }
-            const generationAtStart = structureGeneration;
-            const requestId = ++state.requestId;
-            state.running = true;
-            state.data = null;
-            showDOSPanel('loading');
-            setDOSElapsedTimer(performance.now());
-            try {
-                const response = await fetch('/api/predict-dos', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ session_id: window.sessionId })
-                });
-                if (!response.ok) {
-                    let message = `DOS prediction failed (HTTP ${response.status}).`;
-                    try {
-                        const err = await response.json();
-                        if (err.detail) message = String(err.detail);
-                    } catch (e) { /* keep generic message */ }
-                    throw new Error(message);
-                }
-                const data = await response.json();
-                // Superseded by a reset/new request, or the structure changed
-                // while the prediction was running: drop the stale result.
-                if (requestId !== state.requestId || structureGeneration !== generationAtStart) {
-                    return;
-                }
-                state.data = data;
-                renderDOSResult();
-            } catch (error) {
-                if (requestId === state.requestId) {
-                    showDOSError(error.message || 'DOS prediction failed.');
-                }
-            } finally {
-                if (requestId === state.requestId) {
-                    state.running = false;
-                    stopDOSElapsedTimer();
-                }
-            }
-        }
-
-        function showDOSError(message) {
-            document.getElementById('dos-error-text').textContent = message;
-            showDOSPanel('error');
-        }
-
-        function dosSeries() {
-            const d = window.dosState.data;
-            return window.dosState.perAtom ? d.dos_per_atom : d.dos;
-        }
-
-        function renderDOSResult() {
-            const state = window.dosState;
-            const d = state.data;
-            if (!d) return;
-            showDOSPanel('result');
-            const gap = d.band_gap;
-            const gapText = (typeof gap === 'number') ? (gap > 0 ? `${gap.toFixed(2)} eV` : 'metallic (0 eV)') : 'n/a';
-            const parts = [
-                `Formula: ${d.formula}`,
-                `${d.n_atoms} atoms`,
-                'E_F = 0 eV',
-                `Band gap (model): ${gapText}`,
-                `Computed in ${Number(d.elapsed_seconds).toFixed(2)} s`
-            ];
-            document.getElementById('dos-summary').textContent = parts.join('  |  ');
-            document.getElementById('dos-mode-per-atom').checked = state.perAtom;
-            const yLabel = state.perAtom ? 'DOS (states/eV/atom)' : 'DOS (states/eV/cell)';
-            if (!window.dosChart) {
-                window.dosChart = new DOSChart('dos-chart', { yLabel });
-            }
-            window.dosChart.setYLabel(yLabel);
-            window.dosChart.setData(d.energies_rel_ef, dosSeries());
-        }
-
-        function setDOSPerAtom(perAtom) {
-            const state = window.dosState;
-            state.perAtom = !!perAtom;
-            if (state.data) renderDOSResult();
-        }
-
-        function downloadDOSCsv() {
-            const d = window.dosState.data;
-            if (!d) return;
-            const series = dosSeries();
-            const perAtom = window.dosState.perAtom;
-            const unit = perAtom ? 'atom' : 'cell';
-            const scale = perAtom ? 1 / Number(d.n_atoms) : 1;
-            const lines = [`E-EF_eV,E_eV_grid,DOS_states_per_eV_per_${unit},integrated_DOS_electrons_per_${unit}`];
-            for (let i = 0; i < d.energies_rel_ef.length; i++) {
-                const integ = (d.integrated_dos[i] === null || d.integrated_dos[i] === undefined)
-                    ? null : d.integrated_dos[i] * scale;
-                lines.push([d.energies_rel_ef[i], d.energy_grid[i], series[i], integ]
-                    .map(v => (v === null || v === undefined) ? '' : v).join(','));
-            }
-            const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/csv;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `${String(d.formula).replace(/[^A-Za-z0-9_.-]/g, '_')}_DOS.csv`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-        }
-
-        // Invalidate the DOS UI whenever the structure/relax state is reset
-        // (called from hideRelaxCharts): closes the modal, drops the cached
-        // result, ignores any in-flight request and hides the button.
-        function resetDOSState() {
-            const state = window.dosState;
-            if (!state) return;
-            state.requestId++;
-            state.running = false;
-            state.data = null;
-            state.perAtom = false;
-            const perCellRadio = document.getElementById('dos-mode-per-cell');
-            const perAtomRadio = document.getElementById('dos-mode-per-atom');
-            if (perCellRadio) perCellRadio.checked = true;
-            if (perAtomRadio) perAtomRadio.checked = false;
-            stopDOSElapsedTimer();
-            const modal = document.getElementById('dosModal');
-            if (modal && modal.style.display !== 'none') closeDOSModal();
-            const btn = document.getElementById('predictDosBtn');
-            if (btn) btn.style.display = 'none';
         }
 
         function applyServerStructureState(result) {
@@ -1825,10 +1621,6 @@
                 window.currentAnalysisData = data;
                 dlog('currentAnalysisData set to:', window.currentAnalysisData);
                 document.getElementById('analysisActions').style.display = 'flex';
-                // A fresh relaxation result: allow DOS prediction for it.
-                resetDOSState();
-                document.getElementById('predictDosBtn').style.display = '';
-                refreshDOSAvailability();
                 dlog('Analysis actions displayed');
             } else {
                 dlog('Not a relaxation, skipping analysis data storage');
@@ -6741,11 +6533,6 @@ Crystal system: ${data.crystal_system}`;
                 }
             }
 
-            // Close any stale DOS result immediately; the full state reset
-            // below is delayed and the DOS modal would otherwise stay on
-            // screen above the CIF modal.
-            resetDOSState();
-
             // First show the modal, then safely reset state
             const modal = document.getElementById('cifModal');
             modal.style.display = 'block';
@@ -6926,8 +6713,6 @@ Crystal system: ${data.crystal_system}`;
 
         function handleModalKeydown(event) {
             if (event.key === 'Escape') {
-                const dosModal = document.getElementById('dosModal');
-                if (dosModal && dosModal.style.display === 'block') closeDOSModal();
                 closeAnalysisModal();
             }
         }
@@ -7630,48 +7415,6 @@ Crystal system: ${data.crystal_system}`;
 
 
     </script>
-
-    <!-- Electronic DOS (ML prediction) Modal -->
-    <div id="dosModal" class="analysis-modal" onclick="if (event.target === this) closeDOSModal()">
-        <div class="analysis-modal-content dos-modal-content">
-            <div class="analysis-modal-header">
-                <h2 class="modal-title">Electronic DOS (ML prediction)</h2>
-                <button class="modal-close" onclick="closeDOSModal()" aria-label="Close">&times;</button>
-            </div>
-            <div class="dos-body">
-                <div id="dos-loading" class="dos-loading" style="display: none;">
-                    <span class="dos-spinner"></span>
-                    <span>Predicting DOS... <span id="dos-elapsed">0 s</span>
-</span>
-                </div>
-                <div id="dos-error" class="dos-error" style="display: none;">
-                    <div id="dos-error-text"></div>
-                    <button class="secondary-action" onclick="retryDOSPrediction()"
-                        style="margin-top: 10px; padding: 6px 14px; font-size: 12px;">Retry</button>
-                </div>
-                <div id="dos-result" style="display: none;">
-                    <div id="dos-summary" class="dos-summary"></div>
-                    <div class="dos-controls">
-                        <label><input type="radio" name="dos-mode" id="dos-mode-per-cell" checked
-                                onchange="setDOSPerAtom(false)"> per cell</label>
-                        <label><input type="radio" name="dos-mode" id="dos-mode-per-atom"
-                                onchange="setDOSPerAtom(true)"> per atom</label>
-                        <button class="secondary-action" onclick="downloadDOSCsv()"
-                            style="margin-left: auto; padding: 6px 14px; font-size: 12px;">Download CSV</button>
-                    </div>
-                    <canvas id="dos-chart" class="dos-canvas"></canvas>
-                </div>
-                <div class="dos-caveat">
-                    ML-predicted, qualitative. PET-MAD-DOS gives the <strong>total</strong> DOS only (no element/orbital
-                    projections, no spin polarization) and was trained on non-spin-polarized PBEsol data, whereas the
-                    structure was relaxed with CHGNet. Magnetic oxides (e.g. Fe<sub>2</sub>O<sub>3</sub>) may be
-                    predicted metallic. The band-gap value is a separate ML output of the model (trained on PBEsol DFT
-                    gaps). The DOS is Gaussian-smoothed (sigma 0.3 eV), so the edge-to-edge spacing visible on the
-                    curve can look narrower than the reported gap.
-                </div>
-            </div>
-        </div>
-    </div>
 
     <!-- Detailed Analysis Modal -->
     <div id="analysisModal" class="analysis-modal">
