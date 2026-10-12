@@ -3180,6 +3180,14 @@ async def generate_relaxed_structure_cif(request: dict):
         
         filename = sanitize_display_filename(session_info.get('filename', 'unknown'))
         logger.info(f"Generating relaxed structure CIF for {filename}")
+
+        # Optional model guard: reject a request naming a model other than the
+        # one that produced the stored relaxation (omitted -> no check).
+        requested_model_id = _request_model_id(request)
+        requested_backend = None
+        if requested_model_id is not None:
+            # Registry lookup only (no model load); unknown id -> 400.
+            requested_backend = _resolve_backend(requested_model_id)
         
         # Check if relaxed structure exists in session. No fallback to the
         # unrelaxed current structure: silently downloading the pre-relaxation
@@ -3216,6 +3224,12 @@ async def generate_relaxed_structure_cif(request: dict):
         model_id = relax_result.get('model', 'chgnet')
         model_cls = MODEL_REGISTRY.get(model_id)
         model_display_name = model_cls.display_name if model_cls else model_id
+
+        if requested_backend is not None and requested_backend.id != model_id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Relaxed structure was produced by '{model_display_name}'; "
+                       f"re-run the relaxation with '{requested_backend.display_name}' first.")
 
         # Generate CIF using pymatgen CifWriter (CPU-bound -- offload)
         final_structure, cif_content = await asyncio.to_thread(
@@ -3375,8 +3389,11 @@ async def get_insertable_elements(data: dict):
         
         # Optional model: restrict to that model's elements (default: union).
         model_id = _request_model_id(data)
+        echoed_model = None
         if model_id is not None:
-            allowed = set(_resolve_backend(model_id).supported_elements())
+            backend = _resolve_backend(model_id)
+            allowed = set(backend.supported_elements())
+            echoed_model = backend.id
         else:
             allowed = ALLOWED_ELEMENTS
         insertable_elements = []
@@ -3389,8 +3406,11 @@ async def get_insertable_elements(data: dict):
         return {
             "status": "success",
             "insertable_elements": insertable_elements,
-            "max_void_radius": None  # No longer calculated for speed
+            "max_void_radius": None,  # No longer calculated for speed
+            "model": echoed_model,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting insertable elements: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
