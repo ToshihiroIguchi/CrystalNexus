@@ -4,6 +4,10 @@
 #
 #    pip-compile --output-file=requirements-dev.txt --strip-extras requirements-dev.in
 #
+annotated-doc==0.0.5
+    # via
+    #   -c requirements.txt
+    #   fastapi
 annotated-types==0.8.0
     # via
     #   -c requirements.txt
@@ -75,7 +79,7 @@ e3nn==0.4.4
     #   -c requirements.txt
     #   -r requirements.in
     #   mace-torch
-fastapi==0.115.5
+fastapi==0.143.0
     # via
     #   -c requirements.txt
     #   -r requirements.in
@@ -214,6 +218,10 @@ nvidia-ml-py3==7.352.0
     # via
     #   -c requirements.txt
     #   chgnet
+opentelemetry-api==1.45.1
+    # via
+    #   -c requirements.txt
+    #   fastapi
 opt-einsum==3.4.0
     # via
     #   -c requirements.txt
@@ -315,7 +323,7 @@ python-hostlist==2.3.0
     # via
     #   -c requirements.txt
     #   mace-torch
-python-multipart==0.0.12
+python-multipart==0.0.32
     # via
     #   -c requirements.txt
     #   -r requirements.in
@@ -358,7 +366,7 @@ spglib==2.7.0
     # via
     #   -c requirements.txt
     #   pymatgen
-starlette==0.41.3
+starlette==1.7.0
     # via
     #   -c requirements.txt
     #   fastapi
@@ -407,14 +415,17 @@ typing-extensions==4.16.0
     #   chgnet
     #   fastapi
     #   lightning-utilities
+    #   opentelemetry-api
     #   pydantic
     #   pydantic-core
     #   spglib
+    #   starlette
     #   torch
     #   typing-inspection
 typing-inspection==0.4.4
     # via
     #   -c requirements.txt
+    #   fastapi
     #   pydantic
 tzdata==2026.4
     # via
@@ -428,7 +439,7 @@ urllib3==2.7.0
     # via
     #   -c requirements.txt
     #   requests
-uvicorn==0.35.0
+uvicorn==0.54.0
     # via
     #   -c requirements.txt
     #   -r requirements.in
