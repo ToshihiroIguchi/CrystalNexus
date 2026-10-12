@@ -846,7 +846,7 @@ def test_rate_limit_is_per_client_and_only_applies_to_post_api(client, monkeypat
     assert limited.status_code == 429
 
     # GET requests (even under /api/) are not gated by this middleware.
-    response = client.get("/api/chgnet-elements")
+    response = client.get("/api/elements")
     assert response.status_code != 429
 
     # A different client IP gets its own bucket.

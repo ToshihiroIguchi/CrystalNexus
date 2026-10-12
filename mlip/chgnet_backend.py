@@ -43,7 +43,7 @@ except Exception as e:
         logger.error(f"CHGNet loading error: {e}")
 
 # Configurable batch size for CPU processing (env name kept for now)
-CHGNET_BATCH_SIZE = int(os.getenv('CHGNET_BATCH_SIZE', '4'))
+MLIP_BATCH_SIZE = int(os.getenv('MLIP_BATCH_SIZE', '4'))
 
 # CHGNet model settings
 MAX_ATOMIC_NUMBER = int(os.getenv('MAX_ATOMIC_NUMBER', '94'))
@@ -252,7 +252,7 @@ class CHGNetBackend(MLIPBackend):
     capabilities = frozenset({CAP_ENERGY, CAP_FORCES, CAP_STRESS, CAP_MAGMOM,
                               CAP_SITE_ENERGIES, CAP_FEATURES, CAP_BATCH})
     unavailable_message = "CHGNet not available"
-    batch_size = CHGNET_BATCH_SIZE
+    batch_size = MLIP_BATCH_SIZE
 
     def _init_state(self):
         super()._init_state()

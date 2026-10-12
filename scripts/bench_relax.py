@@ -1,11 +1,11 @@
 """Manual benchmark for main.run_relaxation() across structures/optimizers.
 
-Not a test: it loads CHGNet and takes minutes. Run manually and paste the
+Not a test: it loads the selected ML potentials and takes minutes. Run manually and paste the
 markdown table into the PR description so speedups stay auditable.
 
 Usage:
     venv\\Scripts\\python.exe scripts/bench_relax.py \
-        [--sizes 2x2x2] [--optimizers LBFGS,FIRE] [--fmax 0.1] [--max-steps 100]
+        [--models chgnet] [--sizes 2x2x2] [--optimizers LBFGS,FIRE] [--fmax 0.1] [--max-steps 100]
 """
 import argparse
 import asyncio
@@ -20,6 +20,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import main  # noqa: E402
+from mlip.registry import default_model_id, get_backend  # noqa: E402
 from pymatgen.core import Structure  # noqa: E402
 
 DEFAULT_STRUCTURES = [
@@ -49,8 +50,15 @@ def _final_energy(trajectory):
     return float(trajectory.energies[-1])
 
 
-def run_benchmark(structure_paths, sizes, optimizers, fmax, max_steps):
-    calculator = asyncio.run(main.chgnet_manager.get_calculator())
+def run_benchmark(models, structure_paths, sizes, optimizers, fmax, max_steps):
+    rows = []
+    for model_id in models:
+        rows.extend(_run_model(model_id, structure_paths, sizes, optimizers, fmax, max_steps))
+    return rows
+
+
+def _run_model(model_id, structure_paths, sizes, optimizers, fmax, max_steps):
+    calculator = asyncio.run(get_backend(model_id).get_calculator())
 
     rows = []
     for rel_path in structure_paths:
@@ -79,6 +87,7 @@ def run_benchmark(structure_paths, sizes, optimizers, fmax, max_steps):
 
                 trajectory = result.get("trajectory")
                 rows.append({
+                    "model": model_id,
                     "structure": f"{rel_path} ({size_str})",
                     "n_atoms": n_atoms,
                     "optimizer": optimizer_name,
@@ -89,7 +98,7 @@ def run_benchmark(structure_paths, sizes, optimizers, fmax, max_steps):
                     "final_maxF": _final_max_force(trajectory),
                 })
                 print(
-                    f"# done: {rel_path} {size_str} {optimizer_name} "
+                    f"# done: {model_id} {rel_path} {size_str} {optimizer_name} "
                     f"({wall_s:.1f}s, {result.get('optimizer_steps', 0)} steps)",
                     file=sys.stderr,
                 )
@@ -97,7 +106,7 @@ def run_benchmark(structure_paths, sizes, optimizers, fmax, max_steps):
 
 
 def print_markdown_table(rows):
-    header = ["structure", "n_atoms", "optimizer", "frames", "opt_steps",
+    header = ["model", "structure", "n_atoms", "optimizer", "frames", "opt_steps",
               "wall_s", "final_E_eV", "final_maxF"]
     print("| " + " | ".join(header) + " |")
     print("|" + "|".join(["---"] * len(header)) + "|")
@@ -105,7 +114,7 @@ def print_markdown_table(rows):
         final_e = f"{row['final_E_eV']:.4f}" if row["final_E_eV"] is not None else "N/A"
         final_f = f"{row['final_maxF']:.4f}" if row["final_maxF"] is not None else "N/A"
         print(
-            f"| {row['structure']} | {row['n_atoms']} | {row['optimizer']} | "
+            f"| {row['model']} | {row['structure']} | {row['n_atoms']} | {row['optimizer']} | "
             f"{row['frames']} | {row['opt_steps']} | {row['wall_s']:.1f} | "
             f"{final_e} | {final_f} |"
         )
@@ -114,6 +123,9 @@ def print_markdown_table(rows):
 def main_cli():
     parser = argparse.ArgumentParser(
         description="Benchmark main.run_relaxation() across structures/optimizers/sizes.")
+    parser.add_argument("--models", default=default_model_id(),
+                         help="Comma-separated model ids from the registry "
+                              "(default: the default model)")
     parser.add_argument("--sizes", default="2x2x2",
                          help="Comma-separated supercell sizes, e.g. '2x2x2,1x1x1'")
     parser.add_argument("--optimizers", default="LBFGS,FIRE",
@@ -126,11 +138,12 @@ def main_cli():
                          help="Comma-separated sample_cif-relative paths")
     args = parser.parse_args()
 
+    models = [m.strip() for m in args.models.split(",")]
     sizes = [_parse_size(s) for s in args.sizes.split(",")]
     optimizers = [o.strip() for o in args.optimizers.split(",")]
     structure_paths = [s.strip() for s in args.structures.split(",")]
 
-    rows = run_benchmark(structure_paths, sizes, optimizers, args.fmax, args.max_steps)
+    rows = run_benchmark(models, structure_paths, sizes, optimizers, args.fmax, args.max_steps)
     print_markdown_table(rows)
 
 

@@ -17,6 +17,12 @@ def default_model_id() -> str:
     return os.getenv("CRYSTALNEXUS_DEFAULT_MODEL", "").strip() or DEFAULT_MODEL_FALLBACK
 
 
+def is_available(model_id: str) -> bool:
+    """True if ``model_id`` is registered and its dependencies import."""
+    cls = MODEL_REGISTRY.get(model_id)
+    return cls is not None and cls.is_available()
+
+
 def get_backend(model_id: Optional[str] = None) -> MLIPBackend:
     """Return the singleton backend for ``model_id`` (default model if None).
 

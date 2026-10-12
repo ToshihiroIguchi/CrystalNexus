@@ -565,11 +565,11 @@ def test_apply_atomic_operations_rejects_non_string_session_id(client):
     assert response.status_code == 400
 
 
-def test_chgnet_predict_rejects_unknown_session_id_instead_of_sample_fallback(client):
+def test_predict_rejects_unknown_session_id_instead_of_sample_fallback(client):
     """Regression (B9): an explicit but expired/unknown session_id must not
     silently fall back to loading a sample file by filename and applying
     this request's operations to an unrelated structure -- it must 404."""
-    response = client.post("/api/chgnet-predict", json={
+    response = client.post("/api/predict", json={
         "session_id": str(uuid.uuid4()),
         "filename": "Metals/Cu.cif",
         "operations": [],
@@ -591,13 +591,13 @@ def test_update_structure_clears_relaxed_structure():
     session_id = session_manager.create_session(session_id, "Cu.cif", structure)
     session_info = session_manager.get_session_info(session_id)
     session_info['relaxed_structure'] = structure.copy()
-    session_info['chgnet_result'] = {'fmax': 0.1, 'converged': True, 'steps': 5}
+    session_info['relax_result'] = {'fmax': 0.1, 'converged': True, 'steps': 5}
 
     session_manager.update_structure(session_id, structure.copy())
 
     session_info = session_manager.get_session_info(session_id)
     assert 'relaxed_structure' not in session_info
-    assert 'chgnet_result' not in session_info
+    assert 'relax_result' not in session_info
 
 
 def test_cleanup_old_sessions_uses_last_accessed_not_created_at():
@@ -1663,3 +1663,34 @@ def test_apply_operations_insert_at_safe_distance_accepted():
     assert applied == 1
     assert skipped == []
     assert len(lone) == 2
+
+
+def test_relaxed_cif_header_names_model_from_session(client):
+    """The relaxed-CIF header uses the stored model's display name and id."""
+    from main import session_manager
+
+    structure = Structure.from_file(Path("sample_cif") / "Metals" / "Cu.cif")
+    session_id = session_manager.create_session(str(uuid.uuid4()), "Cu.cif", structure)
+    session_info = session_manager.get_session_info(session_id)
+    session_info['relaxed_structure'] = structure.copy()
+    session_info['relax_result'] = {
+        'model': 'chgnet', 'fmax': 0.1, 'converged': True, 'steps': 5,
+        'optimizer': 'LBFGS',
+    }
+
+    response = client.post("/api/generate-relaxed-structure-cif",
+                           json={"session_id": session_id})
+    assert response.status_code == 200
+    assert ("# CHGNet relaxation: model=chgnet, fmax=0.1, steps=5, "
+            "converged=True, optimizer=LBFGS") in response.text.splitlines()
+
+
+def test_relaxed_cif_without_relaxation_error_is_model_neutral(client):
+    from main import session_manager
+
+    structure = Structure.from_file(Path("sample_cif") / "Metals" / "Cu.cif")
+    session_id = session_manager.create_session(str(uuid.uuid4()), "Cu.cif", structure)
+    response = client.post("/api/generate-relaxed-structure-cif",
+                           json={"session_id": session_id})
+    assert response.status_code == 404
+    assert "CHGNet" not in response.json()["detail"]
