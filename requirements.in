@@ -13,7 +13,7 @@ requests==2.34.2                      # startup script health checks
 # Scientific stack
 numpy==2.5.4
 scipy==1.18.1
-torch==2.14.1                         # CPU build on Windows
+torch==2.9.0                           # CPU build on Windows; capped: MACE relaxations ~50% slower in 2.9.1+ (2.9.0 within noise of 2.8.0)
 pymatgen==2026.9.24
 pymatgen-analysis-defects==2026.3.20
 

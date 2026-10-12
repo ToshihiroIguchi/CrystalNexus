@@ -434,7 +434,7 @@ tomli==2.5.0
     # via pip-audit
 tomli-w==1.2.0
     # via pip-audit
-torch==2.14.1
+torch==2.9.0
     # via
     #   -c requirements.txt
     #   -r requirements.in
@@ -486,7 +486,7 @@ uncertainties==3.2.3
     # via
     #   -c requirements.txt
     #   pymatgen-core
-urllib3==2.7.0
+urllib3==2.8.0
     # via
     #   -c requirements.txt
     #   requests
