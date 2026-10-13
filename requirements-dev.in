@@ -1,9 +1,0 @@
-# Development / test dependencies, constrained by the production lock.
-# Compile with:  pip-compile requirements-dev.in -o requirements-dev.txt
--c requirements.txt
--r requirements.in
-pytest
-httpx
-pip-tools
-psutil
-pip-audit
