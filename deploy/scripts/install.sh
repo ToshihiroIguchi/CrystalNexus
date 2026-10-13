@@ -99,7 +99,8 @@ if [[ ! -f "$ENV_FILE" ]]; then
   cat > "$ENV_FILE" <<ENVEOF
 # CrystalNexus environment overrides (read by systemd). Restart after editing:
 #   sudo systemctl restart crystalnexus
-# Token required to open /analytics (send as ?token=... or X-Analytics-Token header).
+# Token the app requires for /analytics. Nginx adds it automatically for Basic-auth users
+# (rendered into /etc/nginx/sites-available/crystalnexus.conf). To rotate, see docs/deployment-nutanix.md.
 CRYSTALNEXUS_ANALYTICS_TOKEN=${ANALYTICS_TOKEN}
 # Other optional settings (defaults shown in main.py):
 #MAX_FILE_SIZE=52428800
@@ -152,7 +153,18 @@ chown root:www-data "$HTPASSWD_FILE"
 chmod 640 "$HTPASSWD_FILE"
 
 echo "==> [8/9] Installing the Nginx site"
-install -m 644 "${APP_DIR}/deploy/nginx/crystalnexus.conf" /etc/nginx/sites-available/crystalnexus.conf
+mkdir -p /etc/nginx/snippets
+install -m 644 "${APP_DIR}/deploy/nginx/crystalnexus-proxy.conf" /etc/nginx/snippets/crystalnexus-proxy.conf
+# Reuse the analytics token from the env file (generated in step 5) and render it into
+# the Nginx site so Basic-auth users can open /analytics without a token.
+ANALYTICS_TOKEN="$(sed -n 's/^CRYSTALNEXUS_ANALYTICS_TOKEN=//p' "$ENV_FILE" | head -n1)"
+if [[ -z "$ANALYTICS_TOKEN" ]]; then
+  echo "ERROR: CRYSTALNEXUS_ANALYTICS_TOKEN is empty or missing in ${ENV_FILE}; set it and re-run" >&2
+  exit 1
+fi
+NGINX_SITE=/etc/nginx/sites-available/crystalnexus.conf
+install -m 640 -o root -g www-data "${APP_DIR}/deploy/nginx/crystalnexus.conf" "$NGINX_SITE"
+sed -i "s|__ANALYTICS_TOKEN__|${ANALYTICS_TOKEN}|g" "$NGINX_SITE"
 ln -sf /etc/nginx/sites-available/crystalnexus.conf /etc/nginx/sites-enabled/crystalnexus.conf
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
@@ -169,7 +181,7 @@ echo
 echo "Done."
 echo "  URL:            https://${SERVER_NAME}/   (browser warns about the self-signed certificate)"
 echo "  Login:          ${AUTH_USER} / (the password you entered)"
-echo "  Analytics page: https://${SERVER_NAME}/analytics?token=<see CRYSTALNEXUS_ANALYTICS_TOKEN in ${ENV_FILE}>"
+echo "  Analytics page: https://${SERVER_NAME}/analytics   (same Basic auth login, no token needed)"
 echo "  Verify:         systemctl status crystalnexus --no-pager"
 echo "                  curl -k -u ${AUTH_USER} https://127.0.0.1/health"
 echo "  Logs:           journalctl -u crystalnexus -f"

@@ -32,7 +32,8 @@ Files used (all in this repository):
 | `deploy/nutanix/cloud-init/user-data.yaml` | First-boot setup of the VM (packages, firewall, SSH key) |
 | `deploy/scripts/install.sh` | Installs the app, systemd service, Nginx, certificate, Basic auth |
 | `deploy/systemd/crystalnexus.service` | systemd unit (auto-restart on failure) |
-| `deploy/nginx/crystalnexus.conf` | Nginx reverse proxy site |
+| `deploy/nginx/crystalnexus.conf` | Nginx reverse proxy site (the analytics token placeholder is filled in by `install.sh`) |
+| `deploy/nginx/crystalnexus-proxy.conf` | Shared proxy settings (timeouts aside, headers and SSE buffering) included by the site |
 
 ## 2. Prerequisites checklist
 
@@ -106,7 +107,7 @@ Optional flags: `-r REPO_URL` (use a fork/mirror), `-b BRANCH`, `-s SERVER_NAME_
 
 The installation step for Python packages takes a while (10+ minutes) because PyTorch is large. When it finishes it prints the URL. The script is safe to run again; it reuses the existing user, venv and certificate, and updates the password.
 
-What it does, in order: installs OS packages, creates the `crystalnexus` system user, clones the app to `/opt/crystalnexus/app`, creates the venv in `/opt/crystalnexus/venv`, installs the CPU-only build of PyTorch (see below) and runs `pip install -r requirements.txt`, writes `/etc/crystalnexus/crystalnexus.env` (including a random `CRYSTALNEXUS_ANALYTICS_TOKEN`), installs the systemd unit, generates a self-signed certificate, creates the Basic-auth user, installs the Nginx site, opens ufw for 22 and 443, and starts everything.
+What it does, in order: installs OS packages, creates the `crystalnexus` system user, clones the app to `/opt/crystalnexus/app`, creates the venv in `/opt/crystalnexus/venv`, installs the CPU-only build of PyTorch (see below) and runs `pip install -r requirements.txt`, writes `/etc/crystalnexus/crystalnexus.env` (including a random `CRYSTALNEXUS_ANALYTICS_TOKEN`, reused on re-runs), installs the systemd unit, generates a self-signed certificate, creates the Basic-auth user, installs the Nginx site, opens ufw for 22 and 443, and starts everything.
 
 #### About CPU-only PyTorch
 
@@ -143,7 +144,7 @@ Expected results, in order: `active (running)`; `{"status":"healthy","service":"
 
 From your PC's browser: open `https://VM_IP/`. The browser warns that the certificate is not trusted (it is self-signed): choose *Advanced > Proceed*. Enter the username and password. You should see the CrystalNexus page; try loading a sample CIF.
 
-The analytics dashboard needs the token as well. Show it with `sudo grep ANALYTICS /etc/crystalnexus/crystalnexus.env` and open `https://VM_IP/analytics?token=THE_TOKEN`.
+The analytics dashboard needs no extra step: open `https://VM_IP/analytics` after the same Basic-auth login. (The app itself requires a token for analytics; Nginx adds it automatically for logged-in users and strips any token a browser sends on other URLs.)
 
 About the certificate: a self-signed certificate is acceptable for internal use, but every user sees a warning. A certificate issued by your organization's internal CA (installed as trusted on client PCs) is better: put its files at `/etc/nginx/ssl/crystalnexus.crt` and `/etc/nginx/ssl/crystalnexus.key`, then run `sudo nginx -t && sudo systemctl reload nginx`.
 
@@ -186,7 +187,7 @@ Take a snapshot first if you want an easy rollback. Dependency versions are lock
 | Nginx config problem | `sudo nginx -t`, then `sudo systemctl reload nginx` |
 | Cannot reach from browser | On the VM, `curl -ks -o /dev/null -w '%{http_code}\n' https://127.0.0.1/` should print 401. If it does, the problem is the network: check `sudo ufw status` (443 allowed, and your PC inside any CIDR you restricted to), the VM's subnet/VLAN and any network firewall. Use `https://`, not `http://`. |
 | Browser keeps asking for a password | Wrong credentials. Reset with `sudo htpasswd -B /etc/nginx/.htpasswd-crystalnexus myuser` |
-| Analytics page says 401 | Add `?token=` with the value from `/etc/crystalnexus/crystalnexus.env` |
+| Analytics page says 401 | The token in `/etc/crystalnexus/crystalnexus.env` and in `/etc/nginx/sites-available/crystalnexus.conf` no longer match (or the site file was replaced without rendering the token). Re-run `install.sh` (it reuses the token from the env file), or follow the token rotation steps in section H. |
 | Relaxation stops with a timeout | Default limit is 600 s (`RELAX_TIMEOUT_SECONDS`). Set a larger value in `/etc/crystalnexus/crystalnexus.env` and restart. Nginx allows 900 s per request. |
 | Upload rejected as too large | App limit `MAX_FILE_SIZE` (default 50 MB); Nginx `client_max_body_size` is 55 MB. Raise both together. |
 | Out of memory (process killed) | `free -h`; `sudo journalctl -k \| grep -i "out of memory"`. Add RAM to the VM (power off, change memory in Prism Central), or lower `MAX_SESSIONS` / `MAX_TOTAL_SITES` in the env file. |
@@ -204,6 +205,16 @@ After editing the env file: `sudo systemctl restart crystalnexus`.
   sudo ufw allow from 192.168.0.0/16 to any port 443 proto tcp   # replace with your internal CIDR
   ```
 - The app listens only on `127.0.0.1:8090`; do not set `CRYSTALNEXUS_HOST` to `0.0.0.0` here (that is the "LAN mode" from the README, which would bypass Nginx).
-- Behind Nginx the app sees the real client address through `X-Forwarded-For` (uvicorn trusts it from 127.0.0.1 only). Because requests then come from a non-loopback address, `/analytics` requires the `CRYSTALNEXUS_ANALYTICS_TOKEN` generated in the env file. Keep that token private.
+- Behind Nginx the app sees the real client address through `X-Forwarded-For` (uvicorn trusts it from 127.0.0.1 only). Because requests then come from a non-loopback address, the app requires `CRYSTALNEXUS_ANALYTICS_TOKEN` for `/analytics` and `/api/analytics/*`. `install.sh` generates it once, stores it in `/etc/crystalnexus/crystalnexus.env`, and renders it into the Nginx site (`/etc/nginx/sites-available/crystalnexus.conf`, mode 640 root:www-data, so it is a secret file). Nginx sends the token only on those two locations and clears any client-supplied `X-Analytics-Token` elsewhere.
+- **Anyone who has a Basic-auth account can open the analytics dashboard**, which shows visitor IP addresses, User-Agents, and uploaded file names and formulas. Share the Basic-auth login accordingly.
+- **Rotating the token** (for example after someone leaves):
+  ```bash
+  OLD=$(sudo sed -n 's/^CRYSTALNEXUS_ANALYTICS_TOKEN=//p' /etc/crystalnexus/crystalnexus.env)
+  NEW=$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-40)
+  sudo sed -i "s|$OLD|$NEW|" /etc/crystalnexus/crystalnexus.env /etc/nginx/sites-available/crystalnexus.conf
+  sudo nginx -t && sudo systemctl reload nginx
+  sudo systemctl restart crystalnexus
+  ```
+  To change Basic-auth passwords instead, use `sudo htpasswd -B /etc/nginx/.htpasswd-crystalnexus USER`.
 - The Windows Firewall instructions in the README do **not** apply on Linux; `ufw` is configured by cloud-init and `install.sh` instead.
 - Keep the OS patched (`apt upgrade`) and limit who has SSH access (key only; password login is disabled by the cloud-init template).
