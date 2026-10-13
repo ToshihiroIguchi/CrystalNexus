@@ -1,7 +1,12 @@
-# Direct dependencies of CrystalNexus (production).
-# Compile with:  pip-compile requirements.in -o requirements.txt
+# Direct dependencies of CrystalNexus: runtime plus test and maintenance tools,
+# locked together in a single requirements.txt.
+# Compile with:  pip-compile --strip-extras requirements.in -o requirements.txt
+# When a Docker image is added, a runtime-only file (e.g. requirements-runtime.in)
+# can be split out again from the "Runtime" section below.
 # The lock (requirements.txt) is compiled on Windows / Python 3.12 with the
 # CPU build of torch (the PyPI Windows wheel is CPU-only; no extra index needed).
+
+# ===== Runtime =====
 
 # Web layer
 fastapi==0.143.0
@@ -22,3 +27,10 @@ chgnet==0.4.2                         # requires torch>=2.4.0, numpy>=1.26
 # MACE-MP-0 (medium); MIT licensed, weights downloaded to ~/.cache/mace on first use.
 mace-torch==0.3.16
 e3nn==0.4.4                           # pinned by mace-torch; do not upgrade independently
+
+# ===== Test and maintenance tools =====
+pytest
+httpx
+psutil
+pip-tools
+pip-audit

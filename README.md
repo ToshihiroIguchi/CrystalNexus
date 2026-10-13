@@ -39,10 +39,8 @@ CrystalNexus/
 +--- static/               # Static assets (js/utils.js, js/analytics.js, js/auto_mode_chart.js)
 +--- tests/                # Pytest test suite (conftest.py, test_main.py, test_security.py, test_endpoints.py)
 +--- pytest.ini             # Pytest configuration
-+--- requirements.in         # Direct runtime dependencies (edit this)
-+--- requirements.txt        # Locked runtime dependencies (pip-compile output)
-+--- requirements-dev.in     # Test/dev tools (pytest, pip-tools, pip-audit, ...)
-+--- requirements-dev.txt    # Locked runtime + dev dependencies (pip-compile output)
++--- requirements.in         # Direct dependencies: runtime + test/maintenance tools (edit this)
++--- requirements.txt        # Locked dependencies (pip-compile output)
 +--- scripts/               # Manual tools (bench_relax.py relaxation benchmark)
 +--- CLAUDE.md               # Claude Code project instructions
 ```
@@ -89,9 +87,9 @@ source venv/bin/activate
 Install all required libraries using `pip`. This step may take a few minutes as it installs large machine learning libraries (PyTorch, CHGNet).
 
 ```bash
-pip install -r requirements-dev.txt
+pip install -r requirements.txt
 ```
-`requirements-dev.txt` is the locked set of runtime plus test/dev tools (pytest, pip-tools, pip-audit). For a runtime-only install use `pip install -r requirements.txt`.
+`requirements.txt` is the single locked set of runtime dependencies plus test/maintenance tools (pytest, httpx, psutil, pip-tools, pip-audit). If a runtime-only file is needed later (e.g. for a Docker image), it can be split out of `requirements.in` again.
 
 #### 4. Verify Installation
 Check if the installation was successful by listing the installed packages:
@@ -102,14 +100,13 @@ Ensure `chgnet`, `mace-torch`, `pymatgen`, `fastapi`, and `torch` are present. I
 
 ### Updating dependencies
 
-Dependencies are locked with [pip-tools](https://pip-tools.readthedocs.io/). Edit the direct dependencies in `requirements.in` (runtime) or `requirements-dev.in` (dev tools), then:
+Dependencies are locked with [pip-tools](https://pip-tools.readthedocs.io/). Edit the direct dependencies in `requirements.in` (runtime and tools are in separate sections of the same file), then:
 
 ```bash
 pip-compile --strip-extras requirements.in -o requirements.txt
-pip-compile --strip-extras requirements-dev.in -o requirements-dev.txt
 # or bump a single package (and what it pulls in):
 pip-compile --strip-extras --upgrade-package urllib3 requirements.in -o requirements.txt
-pip-sync requirements-dev.txt
+pip-sync requirements.txt
 ```
 
 Then run the fast and slow tests (the slow ones include the CHGNet and MACE golden regression tests) and the vulnerability audit:
@@ -253,7 +250,7 @@ The HTTP endpoints were renamed likewise: `/api/chgnet-predict` -> `/api/predict
 
 ## Running Tests
 
-The test suite lives in the `tests/` directory and uses **pytest** (included in `requirements-dev.txt`).
+The test suite lives in the `tests/` directory and uses **pytest** (included in `requirements.txt`).
 
 Run the full suite from the repository root:
 
@@ -280,7 +277,7 @@ python -m pytest tests/ -m "not slow"
 *   **Solution**: The `start_crystalnexus.py` script automatically detects and stops any existing process using port 8090. Simply running `python start_crystalnexus.py` again should resolve the issue. Manual intervention is only necessary in rare cases where the script lacks permission to terminate the process.
 
 ### Q: "Module not found: chgnet"
-*   **Correction**: Ensure you activated your virtual environment (`venv`) before running the server. Re-run `pip install -r requirements-dev.txt` (or `requirements.txt` for runtime only).
+*   **Correction**: Ensure you activated your virtual environment (`venv`) before running the server. Re-run `pip install -r requirements.txt`.
 
 ### Q: "DLL load failed" on Windows
 *   **Correction**: This usually means a missing system dependency. Install the [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170).

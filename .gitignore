@@ -76,7 +76,6 @@ analytics.db
 # Output and temporary log files
 *.txt
 !requirements.txt
-!requirements-dev.txt
 *.cif
 !sample_cif/**
 
