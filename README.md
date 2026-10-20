@@ -226,7 +226,8 @@ The HTTP endpoints were renamed likewise: `/api/chgnet-predict` -> `/api/predict
 
 #### 3. Structure Analysis (ML potential)
 *   **Analyze & Relax**: Click **"Analyze Structure"**. The ML potential chosen when the structure was loaded (shown as **Model** in the right panel; CHGNet by default) relaxes the geometry (optimizing atomic positions and the cell) and reports the energy of the resulting structure. The 3D view updates to show the relaxed structure.
-*   **Advanced Settings**: Expand **"⚙️ Advanced Settings"** to tune the force tolerance, max steps, and optimizer (LBFGS/FIRE/BFGS) before analyzing.
+*   **Advanced Settings**: Expand **"⚙️ Advanced Settings"** to tune the force tolerance, max steps, and optimizer (LBFGS/FIRE/BFGS) before analyzing. The force tolerance defaults to 0.01 eV/Å.
+*   **Elastic properties**: Turn on **"Calculate elastic properties"** to compute the 6×6 elastic tensor (GPa) and Voigt/Reuss/Hill bulk, shear, and Young's moduli and Poisson's ratio after relaxation (±strain finite differences, strain set by **Elastic strain (%)** in Advanced Settings). Works with both CHGNet and MACE-MP-0; values from universal MLIPs tend to be underestimated, so treat them as estimates. Use small/primitive bulk cells.
 
 #### 4. Advanced Editing
 *   **Supercell**: Open the **"Structure Operations"** menu. Enter dimensions (e.g., 2 2 2) and click **"Create Supercell"**.

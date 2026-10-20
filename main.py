@@ -41,6 +41,7 @@ WINDOWS_PLATFORM = platform.system() == "Windows"
 from mlip import (MODEL_REGISTRY, MLIPError, ModelUnavailableError,
                   UnknownModelError, get_backend)
 from mlip.chgnet_backend import CHGNetBackend
+from mlip.base import CAP_STRESS
 from mlip.registry import (is_available as _model_is_available, default_model_id,
                            list_models)
 from mlip.executor import inference_executor as _inference_executor
@@ -80,6 +81,11 @@ MAX_PREDICT_ATOMS = MAX_RELAX_ATOMS
 # atom. Below the candidate generator's min_dist=0.9 so UI candidates pass.
 MIN_INSERT_DISTANCE = 0.5
 RELAX_TIMEOUT_SECONDS = float(os.getenv('RELAX_TIMEOUT_SECONDS', '600'))
+# Wall-clock limit for the optional elastic-constants step that follows a relaxation.
+ELASTIC_TIMEOUT_SECONDS = float(os.getenv('ELASTIC_TIMEOUT_SECONDS', '600'))
+ELASTIC_STRAIN_MIN_PCT = 0.1
+ELASTIC_STRAIN_MAX_PCT = 2.0
+ELASTIC_FMAX_WARN = 0.01
 # Initialize once as global variable
 def _initial_allowed_elements() -> Set[str]:
     """Structure-edit element whitelist: the union of every AVAILABLE model's
@@ -2590,14 +2596,15 @@ def run_relaxation(calculator, structure, *, fmax, steps, optimizer_name,
     }
 
 
-def _validate_relax_params(request: dict) -> Tuple[float, int, str]:
+def _validate_relax_params(request: dict) -> Tuple[float, int, str, bool, float]:
     """Validate and clamp relaxation parameters before any model loading.
 
     Raises HTTPException(400) on invalid input so bad requests are rejected
     without ever touching the (slow, singleton, serialized) MLIP model.
+    Returns (fmax, max_steps, optimizer_name, elastic, elastic_strain_percent).
     """
     try:
-        fmax = float(request.get("fmax", 0.1))
+        fmax = float(request.get("fmax", 0.01))
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="fmax must be a number")
     try:
@@ -2620,7 +2627,48 @@ def _validate_relax_params(request: dict) -> Tuple[float, int, str]:
             status_code=400,
             detail=f"optimizer must be one of {VALID_RELAX_OPTIMIZERS}")
 
-    return fmax, max_steps, optimizer_name
+    elastic = request.get("elastic", False)
+    if not isinstance(elastic, bool):
+        raise HTTPException(status_code=400, detail="elastic must be a boolean")
+    raw_strain = request.get("elastic_strain", 0.5)
+    try:
+        if isinstance(raw_strain, bool):
+            raise TypeError
+        elastic_strain = float(raw_strain)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="elastic_strain must be a number")
+    if not (ELASTIC_STRAIN_MIN_PCT <= elastic_strain <= ELASTIC_STRAIN_MAX_PCT):
+        raise HTTPException(
+            status_code=400,
+            detail=f"elastic_strain must be between {ELASTIC_STRAIN_MIN_PCT} and "
+                   f"{ELASTIC_STRAIN_MAX_PCT} (percent)")
+
+    return fmax, max_steps, optimizer_name, elastic, elastic_strain
+
+
+def _run_elastic_sync(calculator, structure, *, strain_fraction, fmax, timeout_s,
+                      progress_slot):
+    """Executor-thread worker: build Atoms from `structure` and compute elastic data."""
+    from pymatgen.io.ase import AseAtomsAdaptor
+    from mlip.elastic import compute_elastic
+
+    atoms = AseAtomsAdaptor().get_atoms(structure)
+    atoms.calc = calculator
+    deadline = time.monotonic() + timeout_s
+    started = time.monotonic()
+
+    def _progress(k, n):
+        if progress_slot is None:
+            return
+        prev = progress_slot.get("state") or {}
+        progress_slot["state"] = {
+            **prev,
+            "message": f"Elastic: strain {k}/{n}",
+            "elapsed_s": time.monotonic() - started,
+        }
+
+    return compute_elastic(atoms, calculator, strain=strain_fraction, fmax=fmax,
+                           deadline=deadline, progress_cb=_progress)
 
 
 def _load_structure_for_predict(session_id: Optional[str], filename: str,
@@ -2752,7 +2800,7 @@ async def relax_structure(request: dict):
 
         # Validated and clamped before any model loading, so malformed or
         # out-of-range requests never touch the slow, serialized MLIP model.
-        fmax, max_steps, optimizer_name = _validate_relax_params(request)
+        fmax, max_steps, optimizer_name, elastic, elastic_strain = _validate_relax_params(request)
         requested_model_id = _request_model_id(request)
 
         # Get the current structure from session (already has supercell + operations applied)
@@ -2832,7 +2880,10 @@ async def relax_structure(request: dict):
                                       relax_cell=True,
                                       progress_slot=progress_slot))
             finally:
-                _relax_progress.pop(session_id, None)
+                # With elastic=true the slot stays alive so the SSE stream can
+                # report the elastic step; the outer finally removes it.
+                if not elastic:
+                    _relax_progress.pop(session_id, None)
 
             final_structure = result.get("final_structure")
             if final_structure is None:
@@ -2851,6 +2902,49 @@ async def relax_structure(request: dict):
             except Exception as e:
                 logger.warning(f"Final prediction failed: {e}")
                 final_results = {"energy_eV_per_atom": None}
+
+            # Optional elastic constants on the relaxed structure. Failures
+            # never fail the relaxation: they are reported in elastic_info.
+            elastic_info = None
+            if elastic:
+                elastic_warnings = []
+                if CAP_STRESS not in backend.capabilities:
+                    elastic_info = {
+                        "error": f"Model '{backend.id}' does not provide stress; "
+                                 f"elastic constants are unavailable.",
+                        "warnings": elastic_warnings}
+                else:
+                    if aborted:
+                        elastic_warnings.append(
+                            "Relaxation was aborted; elastic constants were computed "
+                            "on a partially relaxed structure.")
+                    elif not evaluate_convergence(trajectory, fmax):
+                        elastic_warnings.append(
+                            "Relaxation did not converge; elastic constants may be inaccurate.")
+                    if fmax > ELASTIC_FMAX_WARN + 1e-12:
+                        elastic_warnings.append(
+                            f"Relaxation force tolerance ({fmax:g} eV/Å) is looser than "
+                            f"{ELASTIC_FMAX_WARN:g} eV/Å; elastic constants may be inaccurate.")
+                    elastic_started = time.monotonic()
+                    try:
+                        elastic_info = await asyncio.get_running_loop().run_in_executor(
+                            _inference_executor,
+                            functools.partial(_run_elastic_sync, calculator, final_structure,
+                                              strain_fraction=elastic_strain / 100.0,
+                                              fmax=ELASTIC_FMAX_WARN,
+                                              timeout_s=ELASTIC_TIMEOUT_SECONDS,
+                                              progress_slot=progress_slot))
+                        elastic_info["execution_time_s"] = round(time.monotonic() - elastic_started, 2)
+                        if not elastic_info.get("stable", True):
+                            elastic_warnings.append(
+                                "Elastic tensor is not positive definite (mechanically unstable).")
+                        elastic_info["warnings"] = elastic_warnings
+                    except Exception as e:
+                        logger.warning(f"Elastic calculation failed: {e}")
+                        elastic_info = {
+                            "error": f"Elastic calculation failed: {e}",
+                            "execution_time_s": round(time.monotonic() - elastic_started, 2),
+                            "warnings": elastic_warnings}
 
             # Calculate energy difference in total eV
             energy_diff = None
@@ -3025,16 +3119,15 @@ async def relax_structure(request: dict):
                         "energy_change_eV": energy_diff,
                         "optimizer": optimizer_name,
                         "aborted": aborted,
+                        "elastic": elastic,
+                        "elastic_strain": elastic_strain,
                     },
                     session_id=session_id
                 )
             except Exception as e:
                 logger.error(f"Failed to log relaxation event: {e}")
 
-            # Sanitize before returning: a MLIP blow-up can produce NaN/
-            # Infinity energies or forces, which json.dumps() would emit as
-            # bare (invalid-JSON) literals -- see _sanitize_json_value.
-            return _sanitize_json_value({
+            response = {
                 "status": "success",
                 "initial_prediction": initial_results,
                 "final_prediction": final_results,
@@ -3048,7 +3141,13 @@ async def relax_structure(request: dict):
                     "device": _get_device_info(backend),
                     "parameters": backend.parameters()
                 }
-            })
+            }
+            if elastic:
+                response["elastic_info"] = elastic_info
+            # Sanitize before returning: a MLIP blow-up can produce NaN/
+            # Infinity energies or forces, which json.dumps() would emit as
+            # bare (invalid-JSON) literals -- see _sanitize_json_value.
+            return _sanitize_json_value(response)
         finally:
             _relax_progress.pop(session_id, None)
             _relax_semaphore.release()
