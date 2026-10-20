@@ -14,6 +14,17 @@ from .base import ase_stress_to_gpa
 # Voigt order (same as ASE): xx, yy, zz, yz, xz, xy
 _VOIGT_PAIRS = [(0, 0), (1, 1), (2, 2), (1, 2), (0, 2), (0, 1)]
 N_STRAINED_CELLS = 12
+# Force tolerance (eV/A) for the fixed-cell ion relaxation in each strained cell.
+# It must be tight: for soft modes (e.g. ferroelectrics) the strain-induced
+# forces are often below a loose threshold such as 0.01 eV/A, which would skip
+# relaxation entirely and return a clamped-ion (overestimated) stiffness.
+ELASTIC_ION_FMAX = 0.001
+ELASTIC_ION_MAX_STEPS = 500
+DEFAULT_STRAIN = 0.0025  # fraction (0.25 %)
+# Strain-consistency criterion: diagonal C_ii at delta vs delta/2 may differ by
+# at most max(CONSISTENCY_ABS_GPA, CONSISTENCY_REL * |C_ii|).
+CONSISTENCY_ABS_GPA = 3.0
+CONSISTENCY_REL = 0.05
 
 
 class ElasticTimeout(Exception):
@@ -31,40 +42,29 @@ def _strain_matrix(component, delta):
     return eps
 
 
-def compute_elastic(atoms, calculator, strain=0.005, fmax=0.01, max_steps=200,
-                    deadline=None, progress_cb=None):
-    """Compute the 6x6 elastic tensor (GPa) of an already relaxed structure.
+def _tensor_at_strain(atoms, calculator, strain, fmax, max_steps, deadline,
+                      progress_cb, offset, total):
+    """Raw symmetrized 6x6 stiffness (GPa) from 12 strained cells of magnitude `strain`.
 
-    Args:
-        atoms: ASE Atoms (relaxed). It is not modified.
-        calculator: ASE calculator with forces and stress.
-        strain: strain magnitude (fraction, e.g. 0.005 = 0.5 %).
-        fmax: force tolerance (eV/A) for the fixed-cell ion relaxations.
-        max_steps: maximum FIRE steps per strained cell.
-        deadline: ``time.monotonic()`` value after which ElasticTimeout is raised.
-        progress_cb: called as ``progress_cb(k, 12)`` before strained cell k (1-based).
-
-    Returns a dict with C_GPa, moduli, stable, min_eigenvalue_GPa, strain,
-    n_ion_relax_steps.
+    Returns (C, n_ion_relax_steps, n_unconverged_cells). Cell numbering for
+    progress/timeout messages starts after `offset` and runs up to `total`.
     """
     from ase.optimize import FIRE
 
-    if strain <= 0:
-        raise ValueError("strain must be positive")
-
     base_cell = np.array(atoms.get_cell())
     total_steps = 0
-    counter = 0
+    n_unconverged = 0
+    counter = offset
     stress_gpa = {}  # (component, sign) -> Voigt-6 stress in GPa
 
     for j in range(6):
         for sign in (+1, -1):
             counter += 1
             if progress_cb is not None:
-                progress_cb(counter, N_STRAINED_CELLS)
+                progress_cb(counter, total)
             if deadline is not None and time.monotonic() > deadline:
                 raise ElasticTimeout(
-                    f"time limit reached before strained cell {counter}/{N_STRAINED_CELLS}")
+                    f"time limit reached before strained cell {counter}/{total}")
             eps = _strain_matrix(j, sign * strain)
             a = atoms.copy()
             a.calc = calculator
@@ -72,26 +72,97 @@ def compute_elastic(atoms, calculator, strain=0.005, fmax=0.01, max_steps=200,
 
             opt = FIRE(a, logfile=None)
 
-            def _check_deadline():
+            def _check_deadline(counter=counter):
                 if deadline is not None and time.monotonic() > deadline:
                     raise ElasticTimeout(
-                        f"time limit reached during strained cell {counter}/{N_STRAINED_CELLS}")
+                        f"time limit reached during strained cell {counter}/{total}")
 
             opt.attach(_check_deadline, interval=1)
             opt.run(fmax=fmax, steps=max_steps)
             total_steps += int(opt.get_number_of_steps())
+            max_force = float(np.linalg.norm(a.get_forces(), axis=1).max())
+            if max_force > fmax:
+                n_unconverged += 1
             stress_gpa[(j, sign)] = np.asarray(
                 ase_stress_to_gpa(a.get_stress(voigt=True)), dtype=float)
 
     C = np.zeros((6, 6))
     for j in range(6):
         C[:, j] = (stress_gpa[(j, +1)] - stress_gpa[(j, -1)]) / (2.0 * strain)
-    C = 0.5 * (C + C.T)
+    return 0.5 * (C + C.T), total_steps, n_unconverged
+
+
+def strain_consistency(C_full, C_half):
+    """Compare two stiffness matrices computed at strain delta and delta/2.
+
+    Inconsistent if any diagonal element C_ii differs by more than
+    max(CONSISTENCY_ABS_GPA, CONSISTENCY_REL * max(|C_ii|, |C_ii'|)).
+    Returns (max_abs_diff_GPa, worst_component, consistent) where the worst
+    component is the one with the largest absolute difference.
+    """
+    d_full = np.diag(np.asarray(C_full, dtype=float))
+    d_half = np.diag(np.asarray(C_half, dtype=float))
+    diff = np.abs(d_full - d_half)
+    tol = np.maximum(CONSISTENCY_ABS_GPA,
+                     CONSISTENCY_REL * np.maximum(np.abs(d_full), np.abs(d_half)))
+    k = int(np.argmax(diff))
+    return float(diff[k]), f"C{k + 1}{k + 1}", bool(np.all(diff <= tol))
+
+
+def compute_elastic(atoms, calculator, strain=DEFAULT_STRAIN, fmax=ELASTIC_ION_FMAX,
+                    max_steps=ELASTIC_ION_MAX_STEPS,
+                    deadline=None, progress_cb=None, check_consistency=True):
+    """Compute the 6x6 elastic tensor (GPa) of an already relaxed structure.
+
+    Args:
+        atoms: ASE Atoms (relaxed). It is not modified.
+        calculator: ASE calculator with forces and stress.
+        strain: strain magnitude (fraction, e.g. 0.0025 = 0.25 %).
+        fmax: force tolerance (eV/A) for the fixed-cell ion relaxations. The
+            default is deliberately tight (ELASTIC_ION_FMAX): with soft modes,
+            strain-induced forces below a loose threshold would skip the
+            relaxation and give clamped-ion values.
+        max_steps: maximum FIRE steps per strained cell.
+        deadline: ``time.monotonic()`` value after which ElasticTimeout is raised
+            (applies across both passes).
+        progress_cb: called as ``progress_cb(k, total)`` before strained cell k
+            (1-based); total is 24 with the consistency check, else 12.
+        check_consistency: also compute the tensor at strain/2 and compare.
+
+    Returns a dict with C_GPa, moduli, stable, min_eigenvalue_GPa, strain,
+    n_strained_cells, n_ion_relax_steps (summed over passes),
+    n_unconverged_cells and consistency (None when disabled). The primary
+    result is always the tensor at ``strain``.
+    """
+    if strain <= 0:
+        raise ValueError("strain must be positive")
+
+    total = 2 * N_STRAINED_CELLS if check_consistency else N_STRAINED_CELLS
+    C, steps, unconv = _tensor_at_strain(
+        atoms, calculator, strain, fmax, max_steps, deadline, progress_cb, 0, total)
+
+    consistency = None
+    if check_consistency:
+        C_half, steps2, unconv2 = _tensor_at_strain(
+            atoms, calculator, strain / 2.0, fmax, max_steps, deadline,
+            progress_cb, N_STRAINED_CELLS, total)
+        steps += steps2
+        unconv += unconv2
+        max_diff, worst, ok = strain_consistency(C, C_half)
+        consistency = {
+            "strain_half": float(strain / 2.0),
+            "max_abs_diff_GPa": max_diff,
+            "consistent": ok,
+            "worst_component": worst,
+        }
 
     result = elastic_moduli(C)
     result.update({
         "strain": float(strain),
-        "n_ion_relax_steps": total_steps,
+        "n_strained_cells": total,
+        "n_ion_relax_steps": steps,
+        "n_unconverged_cells": unconv,
+        "consistency": consistency,
     })
     return result
 

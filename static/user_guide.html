@@ -250,21 +250,22 @@
 
     <p>When the <strong>Calculate elastic properties</strong> switch under <strong>Analyze Structure</strong> is
         turned on, the elastic constants are evaluated after the relaxation, using the relaxed cell as the reference.
-        Each of the six Voigt strain components is applied as a positive and a negative strain (default 0.5%;
+        Each of the six Voigt strain components is applied as a positive and a negative strain (default 0.25%;
         adjustable from 0.1 to 2.0% as <strong>Elastic strain (%)</strong> in Advanced Settings), giving 12 strained
-        cells. In each strained cell the ions are relaxed at fixed cell (force tolerance 0.01 eV/Å, at most 200 steps),
+        cells. The whole procedure is repeated at half the strain (24 strained cells in total, two passes) as a
+        consistency check; the reported tensor is the one at the full strain. In each strained cell the ions are relaxed at fixed cell (force tolerance 0.001 eV/Å, at most 500 steps),
         and the 6&times;6 elastic tensor $C_{ij}$ (GPa) is obtained by central finite differences of the resulting
         stress with respect to strain. From $C_{ij}$, the Voigt, Reuss, and Hill averages of the bulk modulus $K$,
         shear modulus $G$, Young's modulus $E$, and Poisson's ratio $\nu$ are derived. Mechanical stability is judged
-        by whether all eigenvalues of $C_{ij}$ are positive. This works with both CHGNet and MACE-MP-0 (any model
+        by whether all eigenvalues of $C_{ij}$ are positive. The ion tolerance is deliberately tight: with soft modes the strain-induced forces can be below a loose threshold, which would skip the relaxation and give overestimated clamped-ion values. For materials with soft modes (e.g. ferroelectrics) a negative or unstable result is physically meaningful, so heed the mechanical-stability line and warning; values that change noticeably with the strain magnitude also suggest instability. The strain-consistency check compares the diagonal elements $C_{ii}$ at the two strains and warns when any differs by more than both 3 GPa and 5% of its value; this usually indicates a soft mode or an unstable material, so treat the tensor with caution. CHGNet's stress response varies with the strain magnitude for some materials, so its elastic constants are less reliable than those of MACE-MP-0. This works with both CHGNet and MACE-MP-0 (any model
         that provides stress).</p>
 
     <p><strong>Warnings</strong> are shown (and the calculation still runs) when the relaxation did not converge,
         the elastic calculation was aborted, the relaxation force tolerance is looser than 0.01 eV/Å (the strained
-        cells would then start from an insufficiently relaxed reference), or the structure is mechanically
+        cells would then start from an insufficiently relaxed reference), the ion relaxation in some strained cells did not converge, the results depend on the strain magnitude, or the structure is mechanically
         unstable.</p>
 
-    <p><strong>Cost and scope.</strong> The calculation adds 12 strained-cell relaxations on top of the structure
+    <p><strong>Cost and scope.</strong> The calculation adds 24 strained-cell relaxations on top of the structure
         relaxation, and the time grows with the number of atoms, so a primitive or otherwise small cell is
         recommended. The cell is treated as a bulk crystal; the results are not meaningful for slabs, molecules, or
         structures containing vacuum.</p>
