@@ -438,7 +438,7 @@
                                     </div>
                                     <div class="setting-group">
                                         <label for="elastic-strain-input">Elastic strain (%):</label>
-                                        <input type="number" id="elastic-strain-input" value="0.5" min="0.1" max="2.0"
+                                        <input type="number" id="elastic-strain-input" value="0.25" min="0.1" max="2.0"
                                             step="0.1">
                                     </div>
                                     <div class="setting-group">
@@ -2969,7 +2969,7 @@ Crystal system: ${data.crystal_system}`;
                 document.createTextNode(` (${eLabel})`), copyBtn);
 
             if (typeof elasticInfo.execution_time_s === 'number') {
-                const n = 12;
+                const n = Number.isFinite(elasticInfo.n_strained_cells) ? elasticInfo.n_strained_cells : 12;
                 setTime(`Elastic calculation: ${elasticInfo.execution_time_s}s (${n} strained cells)`);
             }
 
@@ -3007,6 +3007,16 @@ Crystal system: ${data.crystal_system}`;
                 stab.textContent = `Mechanically unstable (min eigenvalue ${fmtNum(elasticInfo.min_eigenvalue_GPa, 1)} GPa)`;
                 stab.className = 'elastic-stability unstable';
             }
+            const cons = elasticInfo.consistency;
+            if (cons && typeof cons.max_abs_diff_GPa === 'number') {
+                const sm = document.createElement('div');
+                sm.className = 'elastic-stability ' + (cons.consistent ? 'stable' : 'unstable');
+                const pct = (v) => parseFloat((v * 100).toPrecision(3));
+                sm.textContent = `Strain check (±${pct(elasticInfo.strain)}% vs ±${pct(cons.strain_half)}%): ` +
+                    (cons.consistent ? 'consistent' : 'inconsistent') +
+                    ` (max diff ${fmtNum(cons.max_abs_diff_GPa, 1)} GPa in ${cons.worst_component})`;
+                stab.insertAdjacentElement('afterend', sm);
+            }
             detailBtn.style.display = '';
         }
 
@@ -3042,7 +3052,7 @@ Crystal system: ${data.crystal_system}`;
                 const elasticToggle = document.getElementById('elastic-toggle');
                 const elasticOn = !!(elasticToggle && elasticToggle.checked && selectedModelSupports('stress'));
                 let elasticStrain = parseFloat(document.getElementById('elastic-strain-input').value);
-                if (!isFinite(elasticStrain)) elasticStrain = 0.5;
+                if (!isFinite(elasticStrain)) elasticStrain = 0.25;
                 elasticStrain = Math.min(2.0, Math.max(0.1, elasticStrain));
 
                 const requestData = withModel({

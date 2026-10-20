@@ -12,7 +12,13 @@ from pymatgen.core import Lattice, Structure
 
 import main
 from main import session_manager
-from mlip.elastic import elastic_moduli
+import inspect
+
+from ase.build import bulk
+from ase.calculators.emt import EMT
+
+from mlip import elastic as elastic_mod
+from mlip.elastic import ELASTIC_ION_FMAX, ELASTIC_ION_MAX_STEPS, compute_elastic, elastic_moduli
 
 # Approximate experimental-like cubic constants for Cu (GPa).
 CU_C11, CU_C12, CU_C44 = 170.0, 120.0, 75.0
@@ -90,7 +96,7 @@ def test_elastic_moduli_bad_shape():
 # -- /api/relax with the fake EMT backend --------------------------------
 
 def test_relax_elastic_emt_cu(client, fake_backends):
-    data = _relax(client, _session(), elastic=True, elastic_strain=0.5).json()
+    data = _relax(client, _session(), elastic=True, elastic_strain=0.25).json()
     info = data["elastic_info"]
     assert "error" not in info
     C = np.asarray(info["C_GPa"])
@@ -100,7 +106,13 @@ def test_relax_elastic_emt_cu(client, fake_backends):
     assert info["stable"] is True
     assert info["moduli"]["E"]["hill"] > 0
     assert 0 < info["moduli"]["nu"]["hill"] < 0.5
-    assert info["strain"] == pytest.approx(0.005)
+    assert info["strain"] == pytest.approx(0.0025)
+    assert info["n_strained_cells"] == 24
+    assert info["consistency"]["consistent"] is True
+    assert info["consistency"]["strain_half"] == pytest.approx(0.00125)
+    assert set(info["consistency"]) == {
+        "strain_half", "max_abs_diff_GPa", "consistent", "worst_component"}
+    assert not any("strain magnitude" in w for w in info["warnings"])
     assert info["execution_time_s"] >= 0
     assert info["n_ion_relax_steps"] >= 0
     assert isinstance(info["warnings"], list)
@@ -162,7 +174,143 @@ def test_relax_elastic_timeout_returns_error(client, fake_backends, monkeypatch)
 
 def test_default_fmax_is_0_01():
     fmax, steps, opt, elastic, strain = main._validate_relax_params({})
-    assert fmax == 0.01 and elastic is False and strain == 0.5
+    assert fmax == 0.01 and elastic is False and strain == 0.25
+
+
+# -- ion-relaxation tolerance ---------------------------------------------
+
+def test_compute_elastic_default_tolerances():
+    sig = inspect.signature(compute_elastic)
+    assert sig.parameters["fmax"].default == ELASTIC_ION_FMAX == 0.001
+    assert sig.parameters["max_steps"].default == ELASTIC_ION_MAX_STEPS == 500
+
+
+def test_compute_elastic_runs_fire_with_tight_fmax(monkeypatch):
+    from ase.optimize import FIRE
+    seen = []
+    orig = FIRE.run
+
+    def spy(self, fmax=0.05, steps=100000):
+        seen.append((fmax, steps))
+        return orig(self, fmax=fmax, steps=steps)
+
+    monkeypatch.setattr(FIRE, "run", spy)
+    compute_elastic(bulk("Cu", "fcc", a=3.61, cubic=True), EMT())
+    assert len(seen) == 24
+    assert all(f == ELASTIC_ION_FMAX and n == ELASTIC_ION_MAX_STEPS for f, n in seen)
+
+
+def test_compute_elastic_reports_unconverged_cells():
+    atoms = bulk("Cu", "fcc", a=3.61, cubic=True).repeat(2)
+    atoms.rattle(0.1, seed=1)
+    res = compute_elastic(atoms, EMT(), max_steps=1)
+    assert res["n_unconverged_cells"] > 0
+    ok = compute_elastic(bulk("Cu", "fcc", a=3.61, cubic=True), EMT())
+    assert ok["n_unconverged_cells"] == 0
+
+
+def test_relax_elastic_unconverged_ion_warning(client, fake_backends, monkeypatch):
+    orig = elastic_mod.compute_elastic
+
+    def fake(*a, **k):
+        res = orig(*a, **k)
+        res["n_unconverged_cells"] = 3
+        return res
+
+    monkeypatch.setattr(elastic_mod, "compute_elastic", fake)
+    data = _relax(client, _session(), elastic=True).json()
+    assert ("Ion relaxation in some strained cells did not converge; "
+            "elastic constants may be inaccurate.") in data["elastic_info"]["warnings"]
+
+
+# -- strain consistency ----------------------------------------------------
+
+def _nonlinear_calc_for(atoms, c, big):
+    """Fake calculator: stress (eV/A^3) = c*eps + big*eps^3, zero forces."""
+    from ase.calculators.calculator import Calculator, all_changes
+
+    class Calc(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            h0 = np.array(base_cell)
+            e = np.linalg.solve(h0, np.array(atoms.get_cell())) - np.eye(3)
+            e = 0.5 * (e + e.T)
+            sig = c * e + big * e ** 3
+            self.results = {
+                "energy": 0.0,
+                "forces": np.zeros((len(atoms), 3)),
+                "stress": np.array([sig[0, 0], sig[1, 1], sig[2, 2],
+                                    sig[1, 2], sig[0, 2], sig[0, 1]]),
+            }
+
+    base_cell = atoms.get_cell()[:]
+    return Calc()
+
+
+def test_compute_elastic_consistent_emt_cu():
+    res = compute_elastic(bulk("Cu", "fcc", a=3.61, cubic=True), EMT())
+    assert res["n_strained_cells"] == 24
+    assert res["consistency"]["consistent"] is True
+    assert res["consistency"]["max_abs_diff_GPa"] < 3.0
+
+
+def test_compute_elastic_without_consistency_check():
+    calls = []
+    res = compute_elastic(bulk("Cu", "fcc", a=3.61, cubic=True), EMT(),
+                          check_consistency=False,
+                          progress_cb=lambda k, n: calls.append((k, n)))
+    assert res["n_strained_cells"] == 12
+    assert res["consistency"] is None
+    assert calls[0] == (1, 12) and calls[-1] == (12, 12)
+
+
+def test_compute_elastic_progress_totals_with_check():
+    calls = []
+    compute_elastic(bulk("Cu", "fcc", a=3.61, cubic=True), EMT(),
+                    progress_cb=lambda k, n: calls.append((k, n)))
+    assert [k for k, _ in calls] == list(range(1, 25))
+    assert {n for _, n in calls} == {24}
+
+
+def test_compute_elastic_flags_strain_dependence():
+    atoms = bulk("Cu", "fcc", a=3.61, cubic=True)
+    # Large cubic term: C(delta) = c + 3*big*delta^2 depends on the strain.
+    calc = _nonlinear_calc_for(atoms, c=1.0, big=1.0e4)
+    res = compute_elastic(atoms, calc, strain=0.01)
+    assert res["consistency"]["consistent"] is False
+    assert res["consistency"]["max_abs_diff_GPa"] > 3.0
+    assert res["consistency"]["worst_component"].startswith("C")
+    # A linear response is consistent.
+    lin = compute_elastic(atoms, _nonlinear_calc_for(atoms, c=1.0, big=0.0), strain=0.01)
+    assert lin["consistency"]["consistent"] is True
+
+
+def test_strain_consistency_criterion():
+    from mlip.elastic import strain_consistency
+    C = cubic_C(170.0, 120.0, 75.0)
+    assert strain_consistency(C, C + np.diag([3.0] * 6))[2] is True
+    assert strain_consistency(np.diag([100.0] * 6), np.diag([104.0] * 6))[2] is True
+    assert strain_consistency(np.diag([100.0] * 6), np.diag([115.0] * 6))[2] is False
+    assert strain_consistency(np.diag([-214.0] * 6), np.diag([-32.0] * 6))[2] is False
+
+
+def test_relax_elastic_inconsistent_warning(client, fake_backends, monkeypatch):
+    orig = elastic_mod.compute_elastic
+
+    def fake(*a, **k):
+        res = orig(*a, **k)
+        res["consistency"] = {"strain_half": 0.00125, "max_abs_diff_GPa": 182.0,
+                              "consistent": False, "worst_component": "C44"}
+        return res
+
+    monkeypatch.setattr(elastic_mod, "compute_elastic", fake)
+    data = _relax(client, _session(), elastic=True).json()
+    warns = data["elastic_info"]["warnings"]
+    assert any(w.startswith("Elastic constants depend on the strain magnitude "
+                            "(C44 differs by 182.0 GPa between ±0.25% and ±0.125% strain)")
+               for w in warns)
 
 
 # -- real models ---------------------------------------------------------

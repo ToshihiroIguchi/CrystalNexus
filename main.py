@@ -83,9 +83,11 @@ MIN_INSERT_DISTANCE = 0.5
 RELAX_TIMEOUT_SECONDS = float(os.getenv('RELAX_TIMEOUT_SECONDS', '600'))
 # Wall-clock limit for the optional elastic-constants step that follows a relaxation.
 ELASTIC_TIMEOUT_SECONDS = float(os.getenv('ELASTIC_TIMEOUT_SECONDS', '600'))
+ELASTIC_STRAIN_DEFAULT_PCT = 0.25
 ELASTIC_STRAIN_MIN_PCT = 0.1
 ELASTIC_STRAIN_MAX_PCT = 2.0
 ELASTIC_FMAX_WARN = 0.01
+from mlip.elastic import ELASTIC_ION_FMAX, ELASTIC_ION_MAX_STEPS  # noqa: E402
 # Initialize once as global variable
 def _initial_allowed_elements() -> Set[str]:
     """Structure-edit element whitelist: the union of every AVAILABLE model's
@@ -2630,7 +2632,7 @@ def _validate_relax_params(request: dict) -> Tuple[float, int, str, bool, float]
     elastic = request.get("elastic", False)
     if not isinstance(elastic, bool):
         raise HTTPException(status_code=400, detail="elastic must be a boolean")
-    raw_strain = request.get("elastic_strain", 0.5)
+    raw_strain = request.get("elastic_strain", ELASTIC_STRAIN_DEFAULT_PCT)
     try:
         if isinstance(raw_strain, bool):
             raise TypeError
@@ -2668,6 +2670,7 @@ def _run_elastic_sync(calculator, structure, *, strain_fraction, fmax, timeout_s
         }
 
     return compute_elastic(atoms, calculator, strain=strain_fraction, fmax=fmax,
+                           max_steps=ELASTIC_ION_MAX_STEPS,
                            deadline=deadline, progress_cb=_progress)
 
 
@@ -2931,10 +2934,23 @@ async def relax_structure(request: dict):
                             _inference_executor,
                             functools.partial(_run_elastic_sync, calculator, final_structure,
                                               strain_fraction=elastic_strain / 100.0,
-                                              fmax=ELASTIC_FMAX_WARN,
+                                              fmax=ELASTIC_ION_FMAX,
                                               timeout_s=ELASTIC_TIMEOUT_SECONDS,
                                               progress_slot=progress_slot))
                         elastic_info["execution_time_s"] = round(time.monotonic() - elastic_started, 2)
+                        if elastic_info.get("n_unconverged_cells", 0) > 0:
+                            elastic_warnings.append(
+                                "Ion relaxation in some strained cells did not converge; "
+                                "elastic constants may be inaccurate.")
+                        cons = elastic_info.get("consistency")
+                        if cons and not cons.get("consistent", True):
+                            pct = elastic_strain
+                            elastic_warnings.append(
+                                f"Elastic constants depend on the strain magnitude "
+                                f"({cons['worst_component']} differs by "
+                                f"{cons['max_abs_diff_GPa']:.1f} GPa between ±{pct:g}% and "
+                                f"±{pct / 2:g}% strain); the material may be near a soft mode "
+                                f"or mechanically unstable. Treat the tensor with caution.")
                         if not elastic_info.get("stable", True):
                             elastic_warnings.append(
                                 "Elastic tensor is not positive definite (mechanically unstable).")
