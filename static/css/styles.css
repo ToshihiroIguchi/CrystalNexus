@@ -1098,6 +1098,11 @@ body {
     font-weight: 500;
 }
 
+.elastic-modulus {
+    color: #2980b9;
+    font-weight: 500;
+}
+
 .site-energy {
     color: #2ecc71;
     font-weight: 500;
@@ -1453,6 +1458,124 @@ body {
     text-align: right;
     margin-top: 10px;
     font-style: italic;
+}
+
+/* Elastic properties toggle (switch) */
+.elastic-toggle-row {
+    margin-top: 10px;
+}
+
+.switch {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    color: #2c3e50;
+    user-select: none;
+}
+
+.switch input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.switch-slider {
+    position: relative;
+    flex: 0 0 34px;
+    width: 34px;
+    height: 18px;
+    background-color: #ccc;
+    border-radius: 9px;
+    transition: background-color 0.2s;
+}
+
+.switch-slider::before {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    background-color: #fff;
+    border-radius: 50%;
+    transition: transform 0.2s;
+}
+
+.switch input:checked + .switch-slider {
+    background-color: #3498db;
+}
+
+.switch input:checked + .switch-slider::before {
+    transform: translateX(16px);
+}
+
+.switch input:focus-visible + .switch-slider {
+    outline: 2px solid #2980b9;
+    outline-offset: 2px;
+}
+
+/* Elastic results */
+.elastic-time {
+    font-size: 11px;
+    color: #888;
+    text-align: right;
+    margin-top: 4px;
+    font-style: italic;
+}
+
+.elastic-warnings {
+    font-size: 11px;
+    color: #b9770e;
+    margin-top: 4px;
+}
+
+.elastic-warnings .elastic-error {
+    color: #e74c3c;
+}
+
+.elastic-section-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #2c3e50;
+    margin: 8px 0 4px;
+}
+
+.elastic-table {
+    width: 100%;
+    font-size: 10px;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+}
+
+.elastic-table th,
+.elastic-table td {
+    padding: 3px 2px;
+    text-align: right;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.elastic-table th {
+    font-weight: 600;
+    color: #5a6c7d;
+}
+
+.elastic-stability {
+    font-size: 12px;
+    margin-top: 8px;
+}
+
+.elastic-stability.stable {
+    color: #27ae60;
+}
+
+.elastic-stability.unstable {
+    color: #e74c3c;
+    font-weight: 600;
 }
 
 .result-section {

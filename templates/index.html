@@ -413,9 +413,16 @@
                     <div class="mlip-controls">
                         <div class="mlip-model-group" id="mlip-model-group">
                             <div class="mlip-model-current">Model: <strong id="mlip-model-current">not selected</strong></div>
-                            <div class="mlip-model-hint">To change the model, load the structure again (New CIF).</div>
                         </div>
                         <button class="button" id="analyze-btn" disabled>Analyze Structure</button>
+
+                        <div class="elastic-toggle-row" id="elastic-toggle-row">
+                            <label class="switch" for="elastic-toggle">
+                                <input type="checkbox" id="elastic-toggle">
+                                <span class="switch-slider"></span>
+                                <span class="switch-label">Calculate elastic properties</span>
+                            </label>
+                        </div>
 
                         <div class="relax-settings" style="margin-top: 15px;" id="relax-settings">
                             <details style="margin-bottom: 10px;">
@@ -426,8 +433,13 @@
                                     style="margin-top: 10px; padding: 8px; background-color: #f8f9fa; border-radius: 4px;">
                                     <div class="setting-group">
                                         <label for="fmax-input">Force tolerance (eV/Å):</label>
-                                        <input type="number" id="fmax-input" value="0.1" min="0.01" max="1.0"
+                                        <input type="number" id="fmax-input" value="0.01" min="0.01" max="1.0"
                                             step="0.01">
+                                    </div>
+                                    <div class="setting-group">
+                                        <label for="elastic-strain-input">Elastic strain (%):</label>
+                                        <input type="number" id="elastic-strain-input" value="0.5" min="0.1" max="2.0"
+                                            step="0.1">
                                     </div>
                                     <div class="setting-group">
                                         <label for="max-steps-input">Max steps:</label>
@@ -496,7 +508,23 @@
                             </div>
                         </div>
 
-
+                        <!-- Elastic Properties Result Item (shown only when elastic_info is returned) -->
+                        <div class="result-item" id="elastic-item" style="display: none;">
+                            <div class="result-summary">
+                                <span id="elastic-summary">Young's modulus: - GPa</span>
+                                <button class="detail-btn" onclick="toggleDetail(event, 'elastic')" id="elastic-detail-btn"
+                                    style="display: none;">Details ▼</button>
+                            </div>
+                            <div class="elastic-time" id="elastic-time" style="display: none;"></div>
+                            <div class="elastic-warnings" id="elastic-warnings" style="display: none;"></div>
+                            <div class="detail-drawer" id="elastic-detail" style="display: none;">
+                                <div class="elastic-section-title">Elastic tensor C<sub>ij</sub> (GPa)</div>
+                                <table class="elastic-table" id="elastic-c-table"></table>
+                                <div class="elastic-section-title">Elastic moduli</div>
+                                <table class="elastic-table" id="elastic-moduli-table"></table>
+                                <div class="elastic-stability" id="elastic-stability"></div>
+                            </div>
+                        </div>
 
                         <!-- Structure Status Message -->
                         <div class="status-message" id="structure-status" style="display: none;">
@@ -789,6 +817,15 @@
             const magneticItem = document.getElementById('magnetic-item');
             if (magneticItem) {
                 magneticItem.style.display = selectedModelSupports('magmom') ? '' : 'none';
+            }
+            const elasticRow = document.getElementById('elastic-toggle-row');
+            if (elasticRow) {
+                const supportsStress = selectedModelSupports('stress');
+                elasticRow.style.display = supportsStress ? '' : 'none';
+                if (!supportsStress) {
+                    const elasticToggle = document.getElementById('elastic-toggle');
+                    if (elasticToggle) elasticToggle.checked = false;
+                }
             }
         }
 
@@ -1758,6 +1795,9 @@
             // Display Magnetic Properties
             displayMagneticResults(prediction);
 
+            // Display Elastic Properties (item is hidden when elastic_info is absent)
+            displayElasticResults(isRelaxation ? data.elastic_info : null);
+
             // Site Energies are now displayed in Energy details
 
             // Store data for analysis modal
@@ -1907,6 +1947,8 @@
             if (magneticDetailBtn) {
                 magneticDetailBtn.innerHTML = 'Details ▼';
             }
+
+            resetElasticResults();
 
             // Hide detailed analysis button
             const analysisActions = document.getElementById('analysisActions');
@@ -2422,6 +2464,21 @@
         }
 
 
+        // Copy Young's modulus (GPa, full precision)
+        async function copyYoungsModulus() {
+            const value = window.currentYoungsModulus;
+            if (value === undefined || value === null) {
+                console.warn("No Young's modulus data available");
+                return;
+            }
+
+            dlog("Copying Young's modulus (GPa):", value);
+            const result = await smartCopyToClipboard(value.toString());
+
+            const button = document.getElementById('copy-youngs-modulus');
+            showCopyFeedback(button, result.success);
+        }
+
         async function copySiteEnergy(siteIndex) {
             // Explicit undefined/null check -- a site energy of exactly 0 must
             // still be copyable (see F14).
@@ -2835,6 +2892,124 @@ Crystal system: ${data.crystal_system}`;
             }
         }
 
+        function resetElasticResults() {
+            const item = document.getElementById('elastic-item');
+            if (item) item.style.display = 'none';
+            const detail = document.getElementById('elastic-detail');
+            if (detail) detail.style.display = 'none';
+            const btn = document.getElementById('elastic-detail-btn');
+            if (btn) { btn.style.display = 'none'; btn.textContent = 'Details ▼'; }
+            const summary = document.getElementById('elastic-summary');
+            if (summary) summary.textContent = "Young's modulus: - GPa";
+            window.currentYoungsModulus = null;
+            ['elastic-time', 'elastic-warnings'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) { el.textContent = ''; el.style.display = 'none'; }
+            });
+            ['elastic-c-table', 'elastic-moduli-table'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.replaceChildren();
+            });
+            const stab = document.getElementById('elastic-stability');
+            if (stab) { stab.textContent = ''; stab.className = 'elastic-stability'; }
+        }
+
+        function displayElasticResults(elasticInfo) {
+            resetElasticResults();
+            if (!elasticInfo) return;  // elastic not requested: keep item hidden
+
+            const item = document.getElementById('elastic-item');
+            const summary = document.getElementById('elastic-summary');
+            const detailBtn = document.getElementById('elastic-detail-btn');
+            const timeDiv = document.getElementById('elastic-time');
+            const warnDiv = document.getElementById('elastic-warnings');
+            item.style.display = '';
+
+            const fmtNum = (v, d) => (typeof v === 'number' && isFinite(v)) ? v.toFixed(d) : '-';
+            const setTime = (text) => {
+                timeDiv.textContent = text;
+                timeDiv.style.display = 'block';
+            };
+            const warnings = Array.isArray(elasticInfo.warnings) ? elasticInfo.warnings : [];
+            warnings.forEach(w => {
+                const line = document.createElement('div');
+                line.textContent = '⚠ ' + String(w);
+                warnDiv.appendChild(line);
+            });
+            if (warnings.length) warnDiv.style.display = 'block';
+
+            if (elasticInfo.error) {
+                summary.textContent = "Young's modulus: failed";
+                const errLine = document.createElement('div');
+                errLine.className = 'elastic-error';
+                errLine.textContent = String(elasticInfo.error);
+                warnDiv.insertBefore(errLine, warnDiv.firstChild);
+                warnDiv.style.display = 'block';
+                if (typeof elasticInfo.execution_time_s === 'number') {
+                    setTime(`Elastic calculation: ${elasticInfo.execution_time_s}s`);
+                }
+                return;
+            }
+
+            const moduli = elasticInfo.moduli || {};
+            const E = moduli.E || {};
+            let eVal = E.hill, eLabel = 'Hill';
+            if (typeof eVal !== 'number') { eVal = E.voigt; eLabel = 'Voigt'; }
+            const eSpan = document.createElement('span');
+            eSpan.className = 'elastic-modulus';
+            eSpan.textContent = `${fmtNum(eVal, 1)} GPa`;
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'copy-btn';
+            copyBtn.id = 'copy-youngs-modulus';
+            copyBtn.title = "Copy: Young's modulus (GPa)";
+            copyBtn.textContent = '📋';
+            copyBtn.addEventListener('click', copyYoungsModulus);
+            window.currentYoungsModulus = (typeof eVal === 'number' && isFinite(eVal)) ? eVal : null;
+            summary.replaceChildren(document.createTextNode("Young's modulus: "), eSpan,
+                document.createTextNode(` (${eLabel})`), copyBtn);
+
+            if (typeof elasticInfo.execution_time_s === 'number') {
+                const n = 12;
+                setTime(`Elastic calculation: ${elasticInfo.execution_time_s}s (${n} strained cells)`);
+            }
+
+            // C_ij table
+            const labels = ['xx', 'yy', 'zz', 'yz', 'xz', 'xy'];
+            const cTable = document.getElementById('elastic-c-table');
+            const mkRow = (cells, header) => {
+                const tr = document.createElement('tr');
+                cells.forEach((c, i) => {
+                    const cell = document.createElement(header || i === 0 ? 'th' : 'td');
+                    cell.textContent = c;
+                    tr.appendChild(cell);
+                });
+                return tr;
+            };
+            cTable.appendChild(mkRow([''].concat(labels), true));
+            (elasticInfo.C_GPa || []).forEach((row, i) => {
+                cTable.appendChild(mkRow([labels[i]].concat(row.map(v => fmtNum(v, 1)))));
+            });
+
+            // Moduli table
+            const mTable = document.getElementById('elastic-moduli-table');
+            mTable.appendChild(mkRow(['', 'Voigt', 'Reuss', 'Hill'], true));
+            [['K (GPa)', 'K', 1], ['G (GPa)', 'G', 1], ['E (GPa)', 'E', 1], ['ν', 'nu', 3]].forEach(([name, key, d]) => {
+                const m = moduli[key] || {};
+                mTable.appendChild(mkRow([name, fmtNum(m.voigt, d), fmtNum(m.reuss, d), fmtNum(m.hill, d)]));
+            });
+
+            // Stability
+            const stab = document.getElementById('elastic-stability');
+            if (elasticInfo.stable) {
+                stab.textContent = 'Mechanically stable';
+                stab.className = 'elastic-stability stable';
+            } else {
+                stab.textContent = `Mechanically unstable (min eigenvalue ${fmtNum(elasticInfo.min_eigenvalue_GPa, 1)} GPa)`;
+                stab.className = 'elastic-stability unstable';
+            }
+            detailBtn.style.display = '';
+        }
+
         // displaySiteEnergiesResults function removed - Site Energies are now displayed in Energy details
 
 
@@ -2864,12 +3039,22 @@ Crystal system: ${data.crystal_system}`;
                 const maxSteps = parseInt(document.getElementById('max-steps-input').value);
                 const optimizer = document.getElementById('optimizer-input').value;
 
+                const elasticToggle = document.getElementById('elastic-toggle');
+                const elasticOn = !!(elasticToggle && elasticToggle.checked && selectedModelSupports('stress'));
+                let elasticStrain = parseFloat(document.getElementById('elastic-strain-input').value);
+                if (!isFinite(elasticStrain)) elasticStrain = 0.5;
+                elasticStrain = Math.min(2.0, Math.max(0.1, elasticStrain));
+
                 const requestData = withModel({
                     session_id: window.sessionId,
                     fmax: fmax,
                     max_steps: maxSteps,
                     optimizer: optimizer
                 });
+                if (elasticOn) {
+                    requestData.elastic = true;
+                    requestData.elastic_strain = elasticStrain;
+                }
 
                 dlog('🔬 Starting ML potential analysis:', requestData);
 
@@ -2900,6 +3085,14 @@ Crystal system: ${data.crystal_system}`;
                     try {
                         const state = JSON.parse(event.data);
                         if (state.done) {
+                            return;
+                        }
+                        if (typeof state.message === 'string' && state.message.startsWith('Elastic')) {
+                            // Elastic phase: relaxation fields are stale, so only
+                            // update the status text (indeterminate-free full bar).
+                            showMlipStatus(state.message, true);
+                            const fillEl = document.querySelector('#progress-bar .progress-fill');
+                            if (fillEl) fillEl.style.width = '100%';
                             return;
                         }
                         if (Array.isArray(state.history) && state.history.length > 0) {
@@ -7058,7 +7251,7 @@ Crystal system: ${data.crystal_system}`;
                     <div>Max Force: ${maxFinalForce.toFixed(6)} eV/Å</div>
                     <div>RMS Force: ${rmsFinalForce.toFixed(6)} eV/Å</div>
                     <div style="font-size: 14px; margin-top: 5px;">
-                        Tolerance: ${data.relaxation_info?.fmax || 0.1} eV/Å
+                        Tolerance: ${data.relaxation_info?.fmax || 0.01} eV/Å
                     </div>
                 `;
             } else {
@@ -7886,14 +8079,22 @@ Crystal system: ${data.crystal_system}`;
                     magnetic = window.currentMagneticData.totalMagnetic.toString();
                 }
 
-                dlog('Extracted values:', { formula, energy, magnetic });
+                // Young's modulus (Hill, falling back to Voigt) in GPa; the
+                // column is omitted unless elastic properties were computed.
+                const youngs = data.elastic_info?.moduli?.E;
+                const youngsVal = typeof youngs?.hill === 'number' ? youngs.hill : youngs?.voigt;
+
+                dlog('Extracted values:', { formula, energy, magnetic, youngsVal });
 
                 // Generate tab-separated values; the magnetic column is
                 // omitted for models without magnetic moments.
                 const hasMagmom = Array.isArray(data.final_prediction?.magmoms_muB);
-                const tabSeparatedData = hasMagmom
+                let tabSeparatedData = hasMagmom
                     ? `${formula}\t${energy}\t${magnetic}`
                     : `${formula}\t${energy}`;
+                if (typeof youngsVal === 'number' && isFinite(youngsVal)) {
+                    tabSeparatedData += `\t${youngsVal}`;
+                }
 
                 // Copy to clipboard
                 if (navigator.clipboard && navigator.clipboard.writeText) {

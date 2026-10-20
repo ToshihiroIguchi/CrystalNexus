@@ -237,7 +237,7 @@
     <h3>3.3 Structure Optimization Protocol</h3>
 
     <p>Structure relaxation employs the LBFGS (Limited-memory Broyden–Fletcher–Goldfarb–Shanno) algorithm with force
-        tolerance criteria of 0.1 eV/Å and maximum iteration limits of 100 steps. The FIRE (Fast Inertial Relaxation
+        tolerance criteria of 0.01 eV/Å (the default, adjustable in Advanced Settings) and maximum iteration limits of 100 steps. The FIRE (Fast Inertial Relaxation
         Engine) algorithm remains available as a configurable alternative optimizer. The optimization simultaneously
         adjusts atomic positions and lattice parameters without space group constraints, allowing for complete
         structural relaxation to the nearest local energy minimum. Two convergence criteria are evaluated: a legacy
@@ -245,6 +245,36 @@
         which also accounts for cell stress during cell relaxation and may therefore disagree with the force-only
         criterion. If a timeout (600 seconds by default) is reached before convergence, the best structure identified
         up to that point is returned.</p>
+
+    <h3>3.4 Elastic Properties (Optional)</h3>
+
+    <p>When the <strong>Calculate elastic properties</strong> switch under <strong>Analyze Structure</strong> is
+        turned on, the elastic constants are evaluated after the relaxation, using the relaxed cell as the reference.
+        Each of the six Voigt strain components is applied as a positive and a negative strain (default 0.5%;
+        adjustable from 0.1 to 2.0% as <strong>Elastic strain (%)</strong> in Advanced Settings), giving 12 strained
+        cells. In each strained cell the ions are relaxed at fixed cell (force tolerance 0.01 eV/Å, at most 200 steps),
+        and the 6&times;6 elastic tensor $C_{ij}$ (GPa) is obtained by central finite differences of the resulting
+        stress with respect to strain. From $C_{ij}$, the Voigt, Reuss, and Hill averages of the bulk modulus $K$,
+        shear modulus $G$, Young's modulus $E$, and Poisson's ratio $\nu$ are derived. Mechanical stability is judged
+        by whether all eigenvalues of $C_{ij}$ are positive. This works with both CHGNet and MACE-MP-0 (any model
+        that provides stress).</p>
+
+    <p><strong>Warnings</strong> are shown (and the calculation still runs) when the relaxation did not converge,
+        the elastic calculation was aborted, the relaxation force tolerance is looser than 0.01 eV/Å (the strained
+        cells would then start from an insufficiently relaxed reference), or the structure is mechanically
+        unstable.</p>
+
+    <p><strong>Cost and scope.</strong> The calculation adds 12 strained-cell relaxations on top of the structure
+        relaxation, and the time grows with the number of atoms, so a primitive or otherwise small cell is
+        recommended. The cell is treated as a bulk crystal; the results are not meaningful for slabs, molecules, or
+        structures containing vacuum.</p>
+
+    <p><strong>Accuracy.</strong> Universal ML potentials trained on MPtrj tend to systematically soften elastic
+        constants (underestimate them), so the values should be treated as estimates and trends rather than
+        quantitative predictions. As an illustrative quick check (not a benchmark) on fcc Cu, fcc Al, diamond Si,
+        NaCl, and bcc Fe, MACE-MP-0 came closer to experiment for Cu, Al, and NaCl (Cu within about 7%), whereas
+        CHGNet deviated more (for example, about +41% in the bulk modulus of Cu and about &minus;89% in $C_{44}$ of
+        Al). Both models were strongly softened for bcc Fe (MACE does not consider magnetic moments) and for Si.</p>
 
     <h2>4. User Interface and Workflow</h2>
 
@@ -271,6 +301,9 @@
         <li><strong>Total Energy:</strong> System energy in electron volts (eV)</li>
         <li><strong>Energy per Atom:</strong> Normalized energy values for comparative analysis</li>
         <li><strong>Magnetic Moments:</strong> Atomic and total magnetic moments in Bohr magnetons ($\mu_B$)</li>
+        <li><strong>Elastic Properties (optional):</strong> Young's modulus (Hill average) in the results, with the
+            elastic tensor $C_{ij}$ (GPa), bulk/shear/Young's moduli and Poisson's ratio (Voigt, Reuss, Hill), and
+            mechanical stability in the Details section, plus the elastic calculation time</li>
         <li><strong>Optimized Geometry:</strong> Relaxed atomic positions and lattice parameters</li>
         <li><strong>Computational Metrics:</strong> Calculation time and convergence statistics</li>
     </ul>
