@@ -366,25 +366,46 @@ body {
     margin-top: 8px;
 }
 
+/* Unified dropdown style shared by every <select> in the app */
 .file-selection-group select,
-.file-selection-group input[type="file"],
-.full-width-select {
+.full-width-select,
+.element-selector select,
+.control-group select,
+.mlip-model-group select,
+.setting-group select {
     width: 100%;
     padding: 8px 12px;
     border: 1px solid #ddd;
-    border-radius: 5px;
-    margin-bottom: 8px;
+    border-radius: 6px;
     font-size: 13px;
     background-color: white;
     appearance: auto;
-    /* Ensure standard dropdown arrow is visible but styled */
+    cursor: pointer;
     min-height: 36px;
-    /* Match button height approximately */
+    box-sizing: border-box;
+}
+
+.file-selection-group select,
+.full-width-select {
+    margin-bottom: 8px;
+}
+
+.file-selection-group input[type="file"] {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    margin-bottom: 8px;
+    font-size: 13px;
+    background-color: white;
+    min-height: 36px;
 }
 
 .file-selection-group select:focus,
 .file-selection-group input[type="file"]:focus,
-.full-width-select:focus {
+.full-width-select:focus,
+.mlip-model-group select:focus,
+.setting-group select:focus {
     outline: none;
     border-color: #3498db;
     box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
@@ -1181,17 +1202,6 @@ body {
     font-size: 14px;
 }
 
-.element-selector select,
-.control-group select {
-    width: 100%;
-    padding: 8px 12px;
-    border: 1px solid #ddd;
-    border-radius: 6px;
-    font-size: 14px;
-    background-color: white;
-    cursor: pointer;
-}
-
 .element-selector select:focus,
 .control-group select:focus {
     outline: none;
@@ -1319,15 +1329,6 @@ body {
     font-weight: 600;
     color: #2c3e50;
     margin-bottom: 5px;
-}
-
-.mlip-model-group select {
-    width: 100%;
-    padding: 6px 10px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    font-size: 13px;
-    background-color: #fff;
 }
 
 .mlip-model-current {
