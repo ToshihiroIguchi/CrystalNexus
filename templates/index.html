@@ -21,6 +21,10 @@
             font-size: 14px;
             color: #666;
             cursor: pointer;
+            background: none;
+            border: none;
+            padding: 0;
+            font-family: inherit;
             margin-left: 8px;
             opacity: 0.7;
             transition: opacity 0.2s;
@@ -189,7 +193,7 @@
         .mlip-info-modal {
             display: none;
             position: fixed;
-            z-index: 1000;
+            z-index: 1100;
             left: 0;
             top: 0;
             width: 100%;
@@ -558,18 +562,21 @@
 
     <!-- Modal Window -->
     <div id="cifModal" class="modal">
-        <div class="modal-content">
-            <div class="cif-modal-header" style="grid-area: header;">
-                Select CIF File
+        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="cifModalTitle">
+            <div class="cif-modal-header">
+                <h2 id="cifModalTitle">Select CIF File</h2>
+                <button type="button" id="cifModalClose" class="modal-close cif-modal-close"
+                    onclick="closeCifModal()" aria-label="Close" style="display: none;">&times;</button>
             </div>
 
-            <div class="modal-main" style="grid-area: main;">
-                <div class="file-selection-container" style="display: flex; flex-direction: column; gap: 20px;">
+            <div class="modal-main">
+                <div class="file-selection-container">
                     <!-- ML potential: chosen here and fixed for the loaded structure -->
                     <div class="mlip-model-group mlip-model-group-modal" id="mlip-model-group-modal">
                         <label for="mlip-model-select">ML potential:
-                            <span class="info-icon" onclick="showMlipInfo()"
-                                title="Click for more information about the ML potential model">ℹ️</span>
+                            <button type="button" class="info-icon" onclick="showMlipInfo()"
+                                aria-label="About ML potentials"
+                                title="Click for more information about the ML potential model">ℹ️</button>
                         </label>
                         <select id="mlip-model-select" class="full-width-select"
                             title="Select the ML potential used for all calculations on this structure">
@@ -581,7 +588,7 @@
 
                     <!-- Sample File Section -->
                     <div class="file-selection-group">
-                        <div class="selection-header" style="margin-bottom: 8px; font-weight: 500;">Use sample CIF file:
+                        <div class="selection-header">Use sample CIF file:
                         </div>
                         <div class="file-input-section">
                             <select id="sampleFileSelect" class="full-width-select">
@@ -590,16 +597,15 @@
                         </div>
                     </div>
 
-                    <div class="separator"
-                        style="display: flex; align-items: center; justify-content: center; color: #888; font-size: 14px;">
+                    <div class="separator">
                         <span>— OR —</span>
                     </div>
 
                     <!-- Upload File Section -->
                     <div class="file-selection-group">
-                        <div class="selection-header" style="margin-bottom: 8px; font-weight: 500;">Upload your own CIF
+                        <div class="selection-header">Upload your own CIF
                             file:</div>
-                        <div class="file-input-section drop-zone" id="uploadDropZone">
+                        <div class="file-input-section drop-zone" id="uploadDropZone" role="group" aria-label="Upload CIF file by drag and drop">
                             <div class="drop-zone-content">
                                 <p class="drop-instruction">📁 Drop CIF file here or</p>
                                 <div class="custom-file-input-wrapper">
@@ -612,7 +618,7 @@
                             <div class="drop-overlay" id="dropOverlay" style="display: none;">
                                 <div class="drop-message">📎 Drop file to upload</div>
                             </div>
-                            <div id="fileStatusArea" class="file-status-area"></div>
+                            <div id="fileStatusArea" class="file-status-area" aria-live="polite"></div>
 
                             <!-- Link to Materials Project -->
                             <div
@@ -656,7 +662,7 @@
                     </div>
 
                     <!-- Advanced Settings Panel -->
-                    <div id="advancedSettingsPanel" class="advanced-settings-panel" style="display: none;">
+                    <div id="advancedSettingsPanel" class="advanced-settings-panel hidden">
                         <div class="advanced-setting-item">
                             <label for="modal-max-atoms-limit">Max total atoms:</label>
                             <input type="number" id="modal-max-atoms-limit" value="200" min="50" max="2000" step="10">
@@ -669,7 +675,7 @@
 
             </div>
 
-            <div class="modal-sidebar" style="grid-area: sidebar;">
+            <div class="modal-sidebar">
                 <div id="crystalInfo" class="crystal-info-sidebar hidden">
                     <div class="crystal-info-header">
                         <strong style="font-size: 13px;">Crystal Information</strong>
@@ -680,7 +686,8 @@
                 </div>
             </div>
 
-            <div class="modal-confirm" style="grid-area: confirm;">
+            <div class="modal-confirm">
+                <div class="mlip-model-error" id="modalError" role="alert" style="display: none;"></div>
                 <button id="confirmButton" class="button" disabled>Confirm</button>
             </div>
         </div>
@@ -752,8 +759,10 @@
 
         async function loadMlipModels() {
             const sel = document.getElementById('mlip-model-select');
+            let modelListFailed = false;
             try {
                 const response = await fetch('/api/models');
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
                 window.mlipModels = data.models || [];
                 if (sel) {
@@ -771,8 +780,13 @@
                 console.error('Error loading models:', error);
                 window.mlipModels = [];
                 if (sel) sel.innerHTML = '<option value="">Server default</option>';
+                modelListFailed = true;
             }
             updateModelHint();
+            if (modelListFailed) {
+                const hint = document.getElementById('mlip-model-hint');
+                if (hint) hint.textContent = 'Could not load the model list. The server default model will be used.';
+            }
             applyModelCapabilityUI();
             updateSessionModelDisplay();
         }
@@ -796,6 +810,22 @@
 
         function clearModelLoadError() {
             const el = document.getElementById('modelLoadError');
+            if (!el) return;
+            el.textContent = '';
+            el.style.display = 'none';
+        }
+
+        // General error area at the bottom of the start dialog (atom limit,
+        // supercell failures); model-specific errors use showModelLoadError.
+        function showModalError(message) {
+            const el = document.getElementById('modalError');
+            if (!el) return;
+            el.textContent = message;
+            el.style.display = 'block';
+        }
+
+        function clearModalError() {
+            const el = document.getElementById('modalError');
             if (!el) return;
             el.textContent = '';
             el.style.display = 'none';
@@ -1073,8 +1103,94 @@
             if (typeof clearGhostAtom === 'function') clearGhostAtom();
         }
 
+        // Start-dialog (#cifModal) lifecycle. The dialog is shown by CSS on
+        // first load; DOMContentLoaded calls openCifModal() to attach focus
+        // management and key handling.
+        let cifModalDismissible = false;
+        let cifModalPreviousFocus = null;
+        // Set by "New CIF": the current structure is only discarded once the
+        // user actually picks a new one, so closing the dialog cancels cleanly.
+        let pendingNewCifReset = false;
+
+        // The close button and Esc only apply while dismissible.
+        function setCifModalDismissible(dismissible) {
+            cifModalDismissible = dismissible;
+            const closeBtn = document.getElementById('cifModalClose');
+            if (closeBtn) closeBtn.style.display = dismissible ? 'flex' : 'none';
+        }
+
+        function openCifModal({ dismissible = false } = {}) {
+            const modal = document.getElementById('cifModal');
+            setCifModalDismissible(dismissible);
+            if (document.activeElement && document.activeElement !== document.body) {
+                cifModalPreviousFocus = document.activeElement;
+            }
+            modal.style.display = 'block';
+            document.querySelectorAll('.header, .main-container').forEach(el => { el.inert = true; });
+            document.removeEventListener('keydown', handleCifModalKeydown);
+            document.addEventListener('keydown', handleCifModalKeydown);
+            const firstControl = document.getElementById('mlip-model-select');
+            if (firstControl) firstControl.focus();
+        }
+
+        function closeCifModal() {
+            // Closing without picking a structure cancels a pending New CIF
+            pendingNewCifReset = false;
+            document.getElementById('cifModal').style.display = 'none';
+            document.querySelectorAll('.header, .main-container').forEach(el => { el.inert = false; });
+            document.removeEventListener('keydown', handleCifModalKeydown);
+            if (cifModalPreviousFocus && document.contains(cifModalPreviousFocus)) {
+                cifModalPreviousFocus.focus();
+            }
+            cifModalPreviousFocus = null;
+        }
+
+        // Discard the current structure the first time a new one is chosen
+        // after "New CIF". Call at the start of every structure loader.
+        function ensurePendingReset() {
+            if (!pendingNewCifReset) return;
+            pendingNewCifReset = false;
+            resetApplicationState();
+            hideCrystalInfoCompletely();
+            // The previous structure is gone, so there is nothing to go back to
+            setCifModalDismissible(false);
+        }
+
+        function handleCifModalKeydown(event) {
+            // The ML potential info dialog is stacked above this one and
+            // handles its own keys.
+            const infoModal = document.getElementById('mlipInfoModal');
+            if (infoModal && infoModal.style.display === 'block') return;
+
+            if (event.key === 'Escape') {
+                if (cifModalDismissible) closeCifModal();
+                return;
+            }
+            if (event.key !== 'Tab') return;
+
+            // Keep Tab focus inside the dialog
+            const focusable = Array.from(document.querySelectorAll(
+                '#cifModal button:not([disabled]), #cifModal select:not([disabled]), #cifModal input:not([disabled]):not([type="hidden"]), #cifModal a[href]'
+            )).filter(el => el.offsetParent !== null);
+            if (focusable.length === 0) return;
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            const active = document.activeElement;
+            if (!document.getElementById('cifModal').contains(active)) {
+                event.preventDefault();
+                first.focus();
+            } else if (event.shiftKey && active === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && active === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        }
+
         // Initialize the application
         document.addEventListener('DOMContentLoaded', function () {
+            openCifModal({ dismissible: false });
             loadSampleFiles();
             loadMlipModels();
             const modelSelect = document.getElementById('mlip-model-select');
@@ -1132,13 +1248,8 @@
 
             if (advancedSettingsBtn && advancedSettingsPanel) {
                 advancedSettingsBtn.addEventListener('click', function () {
-                    if (advancedSettingsPanel.style.display === 'none') {
-                        advancedSettingsPanel.style.display = 'block';
-                        this.innerHTML = 'Advanced ▲';
-                    } else {
-                        advancedSettingsPanel.style.display = 'none';
-                        this.innerHTML = 'Advanced ▼';
-                    }
+                    const nowHidden = advancedSettingsPanel.classList.toggle('hidden');
+                    this.innerHTML = nowHidden ? 'Advanced ▼' : 'Advanced ▲';
                 });
             }
         }
@@ -1195,6 +1306,7 @@
         }
 
         async function analyzeSampleFile(filename) {
+            ensurePendingReset();
             // Cancel any in-flight analysis so a stale response cannot clobber globals
             if (analysisAbortController) analysisAbortController.abort();
             analysisAbortController = new AbortController();
@@ -1246,7 +1358,7 @@
                 // Superseded by a newer analysis request; exit silently
                 if (error.name === 'AbortError') return;
                 console.error('Error analyzing sample file:', error);
-                alert(`Error analyzing CIF file: ${error.message}`);
+                showFileLoadError(error.message);
                 // Don't leave the previous file's info displayed with Confirm
                 // still enabled -- a failed load must not let Confirm proceed
                 // with stale data (see F9).
@@ -1255,6 +1367,7 @@
         }
 
         async function analyzeUploadedFile(file) {
+            ensurePendingReset();
             // Cancel any in-flight analysis so a stale response cannot clobber globals
             if (analysisAbortController) analysisAbortController.abort();
             analysisAbortController = new AbortController();
@@ -3453,14 +3566,29 @@ Crystal system: ${data.crystal_system}`;
             document.getElementById('confirmButton').disabled = true;
         }
 
+        // Read an integer input, clamp it to [min, max] (fallback when empty
+        // or not a number) and write the clamped value back to the field.
+        function readIntInput(id, min, max, fallback) {
+            const input = document.getElementById(id);
+            if (!input) return fallback;
+            let value = parseInt(input.value, 10);
+            if (Number.isNaN(value)) value = fallback;
+            value = Math.min(max, Math.max(min, value));
+            input.value = value;
+            return value;
+        }
+
         function validateAtomCount(totalAtoms) {
-            // Try modal input first, then fallback to sidebar input
-            const modalMaxAtomsInput = document.getElementById('modal-max-atoms-limit');
+            // While the start dialog is open its own limit applies; the
+            // sidebar input is only used outside the dialog.
             const sidebarMaxAtomsInput = document.getElementById('max-atoms-limit');
-            const maxAtoms = parseInt(modalMaxAtomsInput?.value || sidebarMaxAtomsInput?.value) || 200;
+            const modalOpen = document.getElementById('cifModal').style.display !== 'none';
+            const maxAtoms = (!modalOpen && sidebarMaxAtomsInput)
+                ? (parseInt(sidebarMaxAtomsInput.value, 10) || 200)
+                : readIntInput('modal-max-atoms-limit', 50, 2000, 200);
 
             if (totalAtoms > maxAtoms) {
-                alert(`Total atoms (${totalAtoms}) exceeds the system limit (${maxAtoms}).\n\nPlease reduce the supercell dimensions or increase the limit in System Limits settings.`);
+                showModalError(`Total atoms (${totalAtoms}) exceeds the system limit (${maxAtoms}). Please reduce the supercell dimensions or increase the limit in the Advanced settings.`);
                 return false;
             }
             return true;
@@ -3469,14 +3597,15 @@ Crystal system: ${data.crystal_system}`;
         async function createSupercell() {
             if (supercellCreationInProgress) return;
             supercellCreationInProgress = true;
+            clearModalError();
 
-            const aSize = document.getElementById('supercell-a').value;
-            const bSize = document.getElementById('supercell-b').value;
-            const cSize = document.getElementById('supercell-c').value;
+            const aSize = readIntInput('supercell-a', 1, 10, 1);
+            const bSize = readIntInput('supercell-b', 1, 10, 1);
+            const cSize = readIntInput('supercell-c', 1, 10, 1);
 
             // Calculate expected total atoms
             const originalAtoms = window.currentCrystalData?.num_atoms || 1;
-            const expectedTotalAtoms = originalAtoms * parseInt(aSize) * parseInt(bSize) * parseInt(cSize);
+            const expectedTotalAtoms = originalAtoms * aSize * bSize * cSize;
 
             // Validate against atom limit
             if (!validateAtomCount(expectedTotalAtoms)) {
@@ -3484,6 +3613,10 @@ Crystal system: ${data.crystal_system}`;
                 return;
             }
 
+
+            const confirmButton = document.getElementById('confirmButton');
+            confirmButton.disabled = true;
+            confirmButton.textContent = 'Creating...';
 
             try {
                 const response = await fetch('/api/create-supercell', {
@@ -3493,7 +3626,7 @@ Crystal system: ${data.crystal_system}`;
                     },
                     body: JSON.stringify({
                         crystal_data: window.currentCrystalData,
-                        supercell_size: [parseInt(aSize), parseInt(bSize), parseInt(cSize)],
+                        supercell_size: [aSize, bSize, cSize],
                         session_id: window.sessionId,
                         ...(getModalModelId() ? { model: getModalModelId() } : {})
                     })
@@ -3512,11 +3645,12 @@ Crystal system: ${data.crystal_system}`;
                         // dialog open so another model can be chosen.
                         showModelLoadError(errorMessage);
                     } else {
-                        alert(errorMessage);
+                        showModalError(errorMessage);
                     }
                     return;
                 }
                 clearModelLoadError();
+                clearModalError();
 
                 const result = await response.json();
 
@@ -3553,13 +3687,13 @@ Crystal system: ${data.crystal_system}`;
                 // Store filename and supercell size for 3D visualization
                 // Use currentFullPath to preserve complete path for API calls
                 window.currentFilename = window.currentFullPath;
-                window.currentSupercellSize = [parseInt(aSize), parseInt(bSize), parseInt(cSize)];
+                window.currentSupercellSize = [aSize, bSize, cSize];
 
                 // Initialize empty operations history
                 window.atomicOperations = [];
 
                 // Close modal and proceed to main application
-                document.getElementById('cifModal').style.display = 'none';
+                closeCifModal();
 
                 // Complete data deletion and display supercell info
                 completeDataDeletion();
@@ -3599,9 +3733,11 @@ Crystal system: ${data.crystal_system}`;
 
             } catch (error) {
                 console.error('Error creating supercell:', error);
-                alert('Error creating supercell');
+                showModalError('Error creating supercell');
             } finally {
                 supercellCreationInProgress = false;
+                confirmButton.disabled = false;
+                confirmButton.textContent = 'Confirm';
             }
         }
 
@@ -6898,16 +7034,15 @@ Crystal system: ${data.crystal_system}`;
             }
 
             // First show the modal, then safely reset state
-            const modal = document.getElementById('cifModal');
-            modal.style.display = 'block';
+            // The reset is deferred until a new structure is chosen (see
+            // ensurePendingReset), so closing the dialog keeps the current
+            // structure. The viewer is still laid out behind the dialog then,
+            // which is what the former 100 ms delay was waiting for.
+            pendingNewCifReset = true;
+            openCifModal({ dismissible: true });
 
             // Initialize crystal info state when modal opens
             hideCrystalInfoCompletely();
-
-            // Delay the state reset to avoid WebGL issues during modal display
-            setTimeout(() => {
-                resetApplicationState();
-            }, 100);
         }
 
         function resetApplicationState() {
