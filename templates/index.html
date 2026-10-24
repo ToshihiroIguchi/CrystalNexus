@@ -21,6 +21,10 @@
             font-size: 14px;
             color: #666;
             cursor: pointer;
+            background: none;
+            border: none;
+            padding: 0;
+            font-family: inherit;
             margin-left: 8px;
             opacity: 0.7;
             transition: opacity 0.2s;
@@ -189,7 +193,7 @@
         .mlip-info-modal {
             display: none;
             position: fixed;
-            z-index: 1000;
+            z-index: 1100;
             left: 0;
             top: 0;
             width: 100%;
@@ -558,9 +562,9 @@
 
     <!-- Modal Window -->
     <div id="cifModal" class="modal">
-        <div class="modal-content">
+        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="cifModalTitle">
             <div class="cif-modal-header" style="grid-area: header;">
-                Select CIF File
+                <h2 id="cifModalTitle">Select CIF File</h2>
             </div>
 
             <div class="modal-main" style="grid-area: main;">
@@ -568,8 +572,9 @@
                     <!-- ML potential: chosen here and fixed for the loaded structure -->
                     <div class="mlip-model-group mlip-model-group-modal" id="mlip-model-group-modal">
                         <label for="mlip-model-select">ML potential:
-                            <span class="info-icon" onclick="showMlipInfo()"
-                                title="Click for more information about the ML potential model">ℹ️</span>
+                            <button type="button" class="info-icon" onclick="showMlipInfo()"
+                                aria-label="About ML potentials"
+                                title="Click for more information about the ML potential model">ℹ️</button>
                         </label>
                         <select id="mlip-model-select" class="full-width-select"
                             title="Select the ML potential used for all calculations on this structure">
@@ -599,7 +604,7 @@
                     <div class="file-selection-group">
                         <div class="selection-header" style="margin-bottom: 8px; font-weight: 500;">Upload your own CIF
                             file:</div>
-                        <div class="file-input-section drop-zone" id="uploadDropZone">
+                        <div class="file-input-section drop-zone" id="uploadDropZone" role="group" aria-label="Upload CIF file by drag and drop">
                             <div class="drop-zone-content">
                                 <p class="drop-instruction">📁 Drop CIF file here or</p>
                                 <div class="custom-file-input-wrapper">
@@ -612,7 +617,7 @@
                             <div class="drop-overlay" id="dropOverlay" style="display: none;">
                                 <div class="drop-message">📎 Drop file to upload</div>
                             </div>
-                            <div id="fileStatusArea" class="file-status-area"></div>
+                            <div id="fileStatusArea" class="file-status-area" aria-live="polite"></div>
 
                             <!-- Link to Materials Project -->
                             <div
@@ -1073,8 +1078,71 @@
             if (typeof clearGhostAtom === 'function') clearGhostAtom();
         }
 
+        // Start-dialog (#cifModal) lifecycle. The dialog is shown by CSS on
+        // first load; DOMContentLoaded calls openCifModal() to attach focus
+        // management and key handling.
+        let cifModalDismissible = false;
+        let cifModalPreviousFocus = null;
+
+        function openCifModal({ dismissible = false } = {}) {
+            const modal = document.getElementById('cifModal');
+            cifModalDismissible = dismissible;
+            if (document.activeElement && document.activeElement !== document.body) {
+                cifModalPreviousFocus = document.activeElement;
+            }
+            modal.style.display = 'block';
+            document.querySelectorAll('.header, .main-container').forEach(el => { el.inert = true; });
+            document.removeEventListener('keydown', handleCifModalKeydown);
+            document.addEventListener('keydown', handleCifModalKeydown);
+            const firstControl = document.getElementById('mlip-model-select');
+            if (firstControl) firstControl.focus();
+        }
+
+        function closeCifModal() {
+            document.getElementById('cifModal').style.display = 'none';
+            document.querySelectorAll('.header, .main-container').forEach(el => { el.inert = false; });
+            document.removeEventListener('keydown', handleCifModalKeydown);
+            if (cifModalPreviousFocus && document.contains(cifModalPreviousFocus)) {
+                cifModalPreviousFocus.focus();
+            }
+            cifModalPreviousFocus = null;
+        }
+
+        function handleCifModalKeydown(event) {
+            // The ML potential info dialog is stacked above this one and
+            // handles its own keys.
+            const infoModal = document.getElementById('mlipInfoModal');
+            if (infoModal && infoModal.style.display === 'block') return;
+
+            if (event.key === 'Escape') {
+                if (cifModalDismissible) closeCifModal();
+                return;
+            }
+            if (event.key !== 'Tab') return;
+
+            // Keep Tab focus inside the dialog
+            const focusable = Array.from(document.querySelectorAll(
+                '#cifModal button:not([disabled]), #cifModal select:not([disabled]), #cifModal input:not([disabled]):not([type="hidden"]), #cifModal a[href]'
+            )).filter(el => el.offsetParent !== null);
+            if (focusable.length === 0) return;
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            const active = document.activeElement;
+            if (!document.getElementById('cifModal').contains(active)) {
+                event.preventDefault();
+                first.focus();
+            } else if (event.shiftKey && active === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && active === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        }
+
         // Initialize the application
         document.addEventListener('DOMContentLoaded', function () {
+            openCifModal({ dismissible: false });
             loadSampleFiles();
             loadMlipModels();
             const modelSelect = document.getElementById('mlip-model-select');
@@ -3559,7 +3627,7 @@ Crystal system: ${data.crystal_system}`;
                 window.atomicOperations = [];
 
                 // Close modal and proceed to main application
-                document.getElementById('cifModal').style.display = 'none';
+                closeCifModal();
 
                 // Complete data deletion and display supercell info
                 completeDataDeletion();
@@ -6898,8 +6966,7 @@ Crystal system: ${data.crystal_system}`;
             }
 
             // First show the modal, then safely reset state
-            const modal = document.getElementById('cifModal');
-            modal.style.display = 'block';
+            openCifModal({ dismissible: false });
 
             // Initialize crystal info state when modal opens
             hideCrystalInfoCompletely();
