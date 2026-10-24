@@ -344,49 +344,42 @@ body {
     color: inherit;
 }
 
-.file-selection-group {
+.modal-main {
     grid-area: main;
+}
+
+.modal-sidebar {
+    grid-area: sidebar;
+}
+
+.modal-confirm {
+    grid-area: confirm;
+}
+
+.file-selection-container {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.selection-header {
+    margin-bottom: 8px;
+    font-weight: 500;
+}
+
+.separator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #888;
+    font-size: 14px;
+}
+
+.file-selection-group {
     margin-bottom: 20px;
 }
 
-.radio-option {
-    display: flex;
-    align-items: center;
-    margin-bottom: 12px;
-    padding: 10px;
-    border: 1px solid #e0e0e0;
-    border-radius: 5px;
-    background-color: #fafafa;
-    transition: background-color 0.2s ease;
-    cursor: pointer;
-}
-
-.radio-option:hover {
-    background-color: #f0f0f0;
-}
-
-.radio-option.selected {
-    background-color: #e8f4fd;
-    border-color: #3498db;
-}
-
-.radio-option input[type="radio"] {
-    margin-right: 12px;
-    margin-left: 0;
-    width: 16px;
-    height: 16px;
-}
-
-.radio-option label {
-    margin: 0;
-    font-weight: 500;
-    color: #2c3e50;
-    cursor: pointer;
-    flex: 1;
-}
-
 .file-input-section {
-    margin-left: 24px;
     margin-top: 8px;
 }
 
@@ -414,25 +407,26 @@ body {
     margin-bottom: 8px;
 }
 
-.file-selection-group input[type="file"] {
-    width: 100%;
-    padding: 8px 12px;
-    border: 1px solid #ddd;
-    border-radius: 6px;
-    margin-bottom: 8px;
-    font-size: 13px;
-    background-color: white;
-    min-height: 36px;
-}
-
 .file-selection-group select:focus,
-.file-selection-group input[type="file"]:focus,
 .full-width-select:focus,
 .mlip-model-group select:focus,
 .setting-group select:focus {
     outline: none;
     border-color: #3498db;
     box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+}
+
+@media (max-width: 720px) {
+    .modal-content {
+        width: calc(100vw - 32px);
+        max-width: none;
+        grid-template-columns: 1fr;
+        grid-template-areas:
+            "header"
+            "main"
+            "sidebar"
+            "confirm";
+    }
 }
 
 .crystal-info {

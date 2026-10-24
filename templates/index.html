@@ -563,14 +563,14 @@
     <!-- Modal Window -->
     <div id="cifModal" class="modal">
         <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="cifModalTitle">
-            <div class="cif-modal-header" style="grid-area: header;">
+            <div class="cif-modal-header">
                 <h2 id="cifModalTitle">Select CIF File</h2>
                 <button type="button" id="cifModalClose" class="modal-close cif-modal-close"
                     onclick="closeCifModal()" aria-label="Close" style="display: none;">&times;</button>
             </div>
 
-            <div class="modal-main" style="grid-area: main;">
-                <div class="file-selection-container" style="display: flex; flex-direction: column; gap: 20px;">
+            <div class="modal-main">
+                <div class="file-selection-container">
                     <!-- ML potential: chosen here and fixed for the loaded structure -->
                     <div class="mlip-model-group mlip-model-group-modal" id="mlip-model-group-modal">
                         <label for="mlip-model-select">ML potential:
@@ -588,7 +588,7 @@
 
                     <!-- Sample File Section -->
                     <div class="file-selection-group">
-                        <div class="selection-header" style="margin-bottom: 8px; font-weight: 500;">Use sample CIF file:
+                        <div class="selection-header">Use sample CIF file:
                         </div>
                         <div class="file-input-section">
                             <select id="sampleFileSelect" class="full-width-select">
@@ -597,14 +597,13 @@
                         </div>
                     </div>
 
-                    <div class="separator"
-                        style="display: flex; align-items: center; justify-content: center; color: #888; font-size: 14px;">
+                    <div class="separator">
                         <span>— OR —</span>
                     </div>
 
                     <!-- Upload File Section -->
                     <div class="file-selection-group">
-                        <div class="selection-header" style="margin-bottom: 8px; font-weight: 500;">Upload your own CIF
+                        <div class="selection-header">Upload your own CIF
                             file:</div>
                         <div class="file-input-section drop-zone" id="uploadDropZone" role="group" aria-label="Upload CIF file by drag and drop">
                             <div class="drop-zone-content">
@@ -663,7 +662,7 @@
                     </div>
 
                     <!-- Advanced Settings Panel -->
-                    <div id="advancedSettingsPanel" class="advanced-settings-panel" style="display: none;">
+                    <div id="advancedSettingsPanel" class="advanced-settings-panel hidden">
                         <div class="advanced-setting-item">
                             <label for="modal-max-atoms-limit">Max total atoms:</label>
                             <input type="number" id="modal-max-atoms-limit" value="200" min="50" max="2000" step="10">
@@ -676,7 +675,7 @@
 
             </div>
 
-            <div class="modal-sidebar" style="grid-area: sidebar;">
+            <div class="modal-sidebar">
                 <div id="crystalInfo" class="crystal-info-sidebar hidden">
                     <div class="crystal-info-header">
                         <strong style="font-size: 13px;">Crystal Information</strong>
@@ -687,7 +686,7 @@
                 </div>
             </div>
 
-            <div class="modal-confirm" style="grid-area: confirm;">
+            <div class="modal-confirm">
                 <div class="mlip-model-error" id="modalError" role="alert" style="display: none;"></div>
                 <button id="confirmButton" class="button" disabled>Confirm</button>
             </div>
@@ -1249,13 +1248,8 @@
 
             if (advancedSettingsBtn && advancedSettingsPanel) {
                 advancedSettingsBtn.addEventListener('click', function () {
-                    if (advancedSettingsPanel.style.display === 'none') {
-                        advancedSettingsPanel.style.display = 'block';
-                        this.innerHTML = 'Advanced ▲';
-                    } else {
-                        advancedSettingsPanel.style.display = 'none';
-                        this.innerHTML = 'Advanced ▼';
-                    }
+                    const nowHidden = advancedSettingsPanel.classList.toggle('hidden');
+                    this.innerHTML = nowHidden ? 'Advanced ▼' : 'Advanced ▲';
                 });
             }
         }
