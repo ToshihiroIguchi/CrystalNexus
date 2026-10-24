@@ -101,6 +101,30 @@
             background: #fafafa;
         }
 
+        .data-table {
+            border-collapse: collapse;
+            margin: 10px 0 15px;
+            font-size: 14px;
+        }
+
+        .data-table caption {
+            caption-side: top;
+            text-align: left;
+            font-weight: bold;
+            margin-bottom: 6px;
+        }
+
+        .data-table th,
+        .data-table td {
+            border: 1px solid #ddd;
+            padding: 4px 10px;
+            text-align: left;
+        }
+
+        .data-table th {
+            background: #fafafa;
+        }
+
         a {
             color: #0066cc;
             text-decoration: none;
@@ -272,10 +296,44 @@
 
     <p><strong>Accuracy.</strong> Universal ML potentials trained on MPtrj tend to systematically soften elastic
         constants (underestimate them), so the values should be treated as estimates and trends rather than
-        quantitative predictions. As an illustrative quick check (not a benchmark) on fcc Cu, fcc Al, diamond Si,
-        NaCl, and bcc Fe, MACE-MP-0 came closer to experiment for Cu, Al, and NaCl (Cu within about 7%), whereas
-        CHGNet deviated more (for example, about +41% in the bulk modulus of Cu and about &minus;89% in $C_{44}$ of
-        Al). Both models were strongly softened for bcc Fe (MACE does not consider magnetic moments) and for Si.</p>
+        quantitative predictions. The table below shows an illustrative check with the current defaults (strain
+        &plusmn;0.25%, ion relaxation fmax 0.001 eV/Å, strain-consistency check on), starting from cells relaxed
+        with FrechetCellFilter + BFGS (fmax 0.01 eV/Å), using MACE-MP-0 (medium, float64) and CHGNet. It is not a
+        benchmark.</p>
+
+    <table class="data-table">
+        <caption>Illustrative check (not a benchmark): Hill Young's modulus E (GPa)</caption>
+        <thead>
+            <tr><th>Material</th><th>Reference E</th><th>MACE-MP-0</th><th>CHGNet</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>Cu</td><td>127</td><td>118 (&minus;7%)</td><td>97 (&minus;23%)</td></tr>
+            <tr><td>Al</td><td>70</td><td>57 (&minus;18%)</td><td>8 (&minus;89%)</td></tr>
+            <tr><td>Si</td><td>163</td><td>70 (&minus;57%)</td><td>130 (&minus;21%), strain-dependent warning</td></tr>
+            <tr><td>NaCl</td><td>37</td><td>35 (&minus;5%)</td><td>12 (&minus;68%), strain-dependent warning</td></tr>
+            <tr><td>bcc Fe</td><td>211</td><td>129 (&minus;39%)</td><td>mechanically unstable ($C_{11} &lt; C_{12}$)</td></tr>
+            <tr><td>BaTiO<sub>3</sub> tetragonal</td><td>161</td><td>mechanically unstable (negative $C_{44}$)</td><td>mechanically unstable</td></tr>
+            <tr><td>BaTiO<sub>3</sub> cubic</td><td>&ndash;</td><td>234</td><td>216</td></tr>
+        </tbody>
+    </table>
+
+    <p>The reference E is the Voigt-Reuss-Hill average computed from approximate experimental single-crystal
+        $C_{11}$, $C_{12}$, and $C_{44}$ taken from the literature.</p>
+
+    <ul>
+        <li>MACE-MP-0 was closer to the reference than CHGNet for these materials and gave stable, consistent
+            tensors except for tetragonal BaTiO<sub>3</sub>. It is too soft for Si and Fe (for Fe, MACE does not
+            consider magnetic moments).</li>
+        <li>CHGNet results vary strongly between materials (for example, $C_{44}$ of Al is about 1 GPa), and the
+            strain-consistency warning appeared for Si, NaCl, and Fe. Treat CHGNet elastic constants with
+            particular caution.</li>
+        <li>Tetragonal BaTiO<sub>3</sub> is flagged as unstable by both models (negative $C_{44}$, large strain
+            dependence). It is a soft-mode (ferroelectric) system, so the warnings are meaningful. The cubic phase
+            is reported as stable, but its atoms sit on symmetric sites with zero force, so zero-centre optical
+            instabilities are not probed.</li>
+        <li>The reference values are approximate and the literature values were not re-verified. For quantitative
+            work, use DFT or experimental data.</li>
+    </ul>
 
     <h2>4. User Interface and Workflow</h2>
 
