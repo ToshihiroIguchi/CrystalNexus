@@ -565,6 +565,8 @@
         <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="cifModalTitle">
             <div class="cif-modal-header" style="grid-area: header;">
                 <h2 id="cifModalTitle">Select CIF File</h2>
+                <button type="button" id="cifModalClose" class="modal-close cif-modal-close"
+                    onclick="closeCifModal()" aria-label="Close" style="display: none;">&times;</button>
             </div>
 
             <div class="modal-main" style="grid-area: main;">
@@ -1083,10 +1085,20 @@
         // management and key handling.
         let cifModalDismissible = false;
         let cifModalPreviousFocus = null;
+        // Set by "New CIF": the current structure is only discarded once the
+        // user actually picks a new one, so closing the dialog cancels cleanly.
+        let pendingNewCifReset = false;
+
+        // The close button and Esc only apply while dismissible.
+        function setCifModalDismissible(dismissible) {
+            cifModalDismissible = dismissible;
+            const closeBtn = document.getElementById('cifModalClose');
+            if (closeBtn) closeBtn.style.display = dismissible ? 'flex' : 'none';
+        }
 
         function openCifModal({ dismissible = false } = {}) {
             const modal = document.getElementById('cifModal');
-            cifModalDismissible = dismissible;
+            setCifModalDismissible(dismissible);
             if (document.activeElement && document.activeElement !== document.body) {
                 cifModalPreviousFocus = document.activeElement;
             }
@@ -1099,6 +1111,8 @@
         }
 
         function closeCifModal() {
+            // Closing without picking a structure cancels a pending New CIF
+            pendingNewCifReset = false;
             document.getElementById('cifModal').style.display = 'none';
             document.querySelectorAll('.header, .main-container').forEach(el => { el.inert = false; });
             document.removeEventListener('keydown', handleCifModalKeydown);
@@ -1106,6 +1120,17 @@
                 cifModalPreviousFocus.focus();
             }
             cifModalPreviousFocus = null;
+        }
+
+        // Discard the current structure the first time a new one is chosen
+        // after "New CIF". Call at the start of every structure loader.
+        function ensurePendingReset() {
+            if (!pendingNewCifReset) return;
+            pendingNewCifReset = false;
+            resetApplicationState();
+            hideCrystalInfoCompletely();
+            // The previous structure is gone, so there is nothing to go back to
+            setCifModalDismissible(false);
         }
 
         function handleCifModalKeydown(event) {
@@ -1263,6 +1288,7 @@
         }
 
         async function analyzeSampleFile(filename) {
+            ensurePendingReset();
             // Cancel any in-flight analysis so a stale response cannot clobber globals
             if (analysisAbortController) analysisAbortController.abort();
             analysisAbortController = new AbortController();
@@ -1323,6 +1349,7 @@
         }
 
         async function analyzeUploadedFile(file) {
+            ensurePendingReset();
             // Cancel any in-flight analysis so a stale response cannot clobber globals
             if (analysisAbortController) analysisAbortController.abort();
             analysisAbortController = new AbortController();
@@ -6966,15 +6993,15 @@ Crystal system: ${data.crystal_system}`;
             }
 
             // First show the modal, then safely reset state
-            openCifModal({ dismissible: false });
+            // The reset is deferred until a new structure is chosen (see
+            // ensurePendingReset), so closing the dialog keeps the current
+            // structure. The viewer is still laid out behind the dialog then,
+            // which is what the former 100 ms delay was waiting for.
+            pendingNewCifReset = true;
+            openCifModal({ dismissible: true });
 
             // Initialize crystal info state when modal opens
             hideCrystalInfoCompletely();
-
-            // Delay the state reset to avoid WebGL issues during modal display
-            setTimeout(() => {
-                resetApplicationState();
-            }, 100);
         }
 
         function resetApplicationState() {

@@ -320,6 +320,23 @@ body {
     padding-bottom: 10px;
 }
 
+.cif-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.cif-modal-close {
+    color: #7f8c8d;
+    font-size: 24px;
+    width: 32px;
+    height: 32px;
+}
+
+.cif-modal-close:hover {
+    background-color: #ecf0f1;
+}
+
 .cif-modal-header h2 {
     margin: 0;
     font-size: inherit;
