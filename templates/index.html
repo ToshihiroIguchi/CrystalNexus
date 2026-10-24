@@ -428,8 +428,8 @@
                             </label>
                         </div>
 
-                        <div class="relax-settings" style="margin-top: 15px;" id="relax-settings">
-                            <details style="margin-bottom: 10px;">
+                        <div class="relax-settings" style="margin-top: 8px;" id="relax-settings">
+                            <details style="margin-bottom: 0;">
                                 <summary style="font-size: 12px; color: #666; cursor: pointer; padding: 5px 0;">
                                     ⚙️ Advanced Settings
                                 </summary>
@@ -474,9 +474,9 @@
                     <!-- Live optimization charts; shown when a relax starts and kept after it ends -->
                     <div id="relax-charts" style="display: none; margin: 8px 0;">
                         <div style="font-size: 12px; font-weight: 600; margin-bottom: 0;">Energy (eV)</div>
-                        <canvas id="relax-energy-chart" style="width: 100%; height: 57px; display: block;"></canvas>
+                        <canvas id="relax-energy-chart" style="width: 100%; height: 38px; display: block;"></canvas>
                         <div style="font-size: 12px; font-weight: 600; margin: 4px 0 0;">Max force (eV/Å)</div>
-                        <canvas id="relax-force-chart" style="width: 100%; height: 57px; display: block;"></canvas>
+                        <canvas id="relax-force-chart" style="width: 100%; height: 38px; display: block;"></canvas>
                     </div>
 
                     <div class="mlip-results" id="mlip-results" style="display: none;">
@@ -3192,7 +3192,9 @@ Crystal system: ${data.crystal_system}`;
                 // Live charts: created on first use, cleared every run, and left
                 // visible afterwards (hideMlipStatus() does not touch them).
                 const relaxChartsEl = document.getElementById('relax-charts');
-                relaxChartsEl.style.display = 'block';
+                // Stay hidden until the first data point arrives (shown below),
+                // so the labels never appear above an empty plot.
+                relaxChartsEl.style.display = 'none';
                 if (!window.relaxEnergyChart) {
                     window.relaxEnergyChart = new RelaxLineChart('relax-energy-chart', { yLabel: 'Energy (eV)' });
                     window.relaxForceChart = new RelaxLineChart('relax-force-chart', { yLabel: 'Max force (eV/Å)', logY: true });
@@ -3219,6 +3221,7 @@ Crystal system: ${data.crystal_system}`;
                             return;
                         }
                         if (Array.isArray(state.history) && state.history.length > 0) {
+                            relaxChartsEl.style.display = 'block';
                             window.relaxEnergyChart.addPoints(state.history.map(h => ({ x: h.step, y: h.energy_eV })));
                             window.relaxForceChart.addPoints(state.history.map(h => ({ x: h.step, y: h.max_force_eV_per_A })));
                         }
@@ -3307,6 +3310,7 @@ Crystal system: ${data.crystal_system}`;
                     // response carries the complete history, so redraw from it.
                     const fullHistory = data.relaxation_info?.progress_history;
                     if (Array.isArray(fullHistory) && fullHistory.length > 0) {
+                        relaxChartsEl.style.display = 'block';
                         window.relaxEnergyChart.reset();
                         window.relaxForceChart.reset();
                         window.relaxEnergyChart.addPoints(fullHistory.map(h => ({ x: h.step, y: h.energy_eV })));
@@ -9125,7 +9129,7 @@ Crystal system: ${data.crystal_system}`;
             </div>
             </div>
 
-            <div id="mlip-info-mace" class="mlip-info-model" style="display: none;">
+            <div id="mlip-info-mace" class="mlip-info-model">
             <h2>MACE-MP-0: A Foundation Model for Atomistic Materials Chemistry</h2>
 
             <div class="mlip-section">
@@ -9206,10 +9210,16 @@ Crystal system: ${data.crystal_system}`;
         }
 
         function showMlipInfo() {
+            // Both models are always described; the selected one comes first.
             const isMace = (getSelectedModelId() || '').startsWith('mace');
-            document.getElementById('mlip-info-chgnet').style.display = isMace ? 'none' : 'block';
-            document.getElementById('mlip-info-mace').style.display = isMace ? 'block' : 'none';
-            document.getElementById('mlipInfoModal').style.display = 'block';
+            const chgnetEl = document.getElementById('mlip-info-chgnet');
+            const maceEl = document.getElementById('mlip-info-mace');
+            maceEl.style.display = 'block';
+            chgnetEl.style.display = 'block';
+            chgnetEl.parentNode.insertBefore(isMace ? maceEl : chgnetEl, (isMace ? chgnetEl : maceEl));
+            const modal = document.getElementById('mlipInfoModal');
+            modal.style.display = 'block';
+            modal.querySelector('.mlip-info-content').scrollTop = 0;
             document.addEventListener('keydown', handleMlipInfoKeydown);
         }
 

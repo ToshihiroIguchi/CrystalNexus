@@ -1339,11 +1339,11 @@ body {
 }
 
 .mlip-controls {
-    margin-bottom: 20px;
+    margin-bottom: 8px;
 }
 
 .mlip-model-group {
-    margin-bottom: 12px;
+    margin-bottom: 8px;
 }
 
 .mlip-model-group label {
@@ -2042,4 +2042,10 @@ body {
 
 .control-btn.active:hover {
     background: rgba(66, 165, 245, 1) !important;
+}
+
+.mlip-info-model + .mlip-info-model {
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid #ddd;
 }
