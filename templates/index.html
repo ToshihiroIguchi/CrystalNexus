@@ -760,8 +760,10 @@
 
         async function loadMlipModels() {
             const sel = document.getElementById('mlip-model-select');
+            let modelListFailed = false;
             try {
                 const response = await fetch('/api/models');
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
                 window.mlipModels = data.models || [];
                 if (sel) {
@@ -779,8 +781,13 @@
                 console.error('Error loading models:', error);
                 window.mlipModels = [];
                 if (sel) sel.innerHTML = '<option value="">Server default</option>';
+                modelListFailed = true;
             }
             updateModelHint();
+            if (modelListFailed) {
+                const hint = document.getElementById('mlip-model-hint');
+                if (hint) hint.textContent = 'Could not load the model list. The server default model will be used.';
+            }
             applyModelCapabilityUI();
             updateSessionModelDisplay();
         }
@@ -3565,11 +3572,26 @@ Crystal system: ${data.crystal_system}`;
             document.getElementById('confirmButton').disabled = true;
         }
 
+        // Read an integer input, clamp it to [min, max] (fallback when empty
+        // or not a number) and write the clamped value back to the field.
+        function readIntInput(id, min, max, fallback) {
+            const input = document.getElementById(id);
+            if (!input) return fallback;
+            let value = parseInt(input.value, 10);
+            if (Number.isNaN(value)) value = fallback;
+            value = Math.min(max, Math.max(min, value));
+            input.value = value;
+            return value;
+        }
+
         function validateAtomCount(totalAtoms) {
-            // Try modal input first, then fallback to sidebar input
-            const modalMaxAtomsInput = document.getElementById('modal-max-atoms-limit');
+            // While the start dialog is open its own limit applies; the
+            // sidebar input is only used outside the dialog.
             const sidebarMaxAtomsInput = document.getElementById('max-atoms-limit');
-            const maxAtoms = parseInt(modalMaxAtomsInput?.value || sidebarMaxAtomsInput?.value) || 200;
+            const modalOpen = document.getElementById('cifModal').style.display !== 'none';
+            const maxAtoms = (!modalOpen && sidebarMaxAtomsInput)
+                ? (parseInt(sidebarMaxAtomsInput.value, 10) || 200)
+                : readIntInput('modal-max-atoms-limit', 50, 2000, 200);
 
             if (totalAtoms > maxAtoms) {
                 showModalError(`Total atoms (${totalAtoms}) exceeds the system limit (${maxAtoms}). Please reduce the supercell dimensions or increase the limit in the Advanced settings.`);
@@ -3583,13 +3605,13 @@ Crystal system: ${data.crystal_system}`;
             supercellCreationInProgress = true;
             clearModalError();
 
-            const aSize = document.getElementById('supercell-a').value;
-            const bSize = document.getElementById('supercell-b').value;
-            const cSize = document.getElementById('supercell-c').value;
+            const aSize = readIntInput('supercell-a', 1, 10, 1);
+            const bSize = readIntInput('supercell-b', 1, 10, 1);
+            const cSize = readIntInput('supercell-c', 1, 10, 1);
 
             // Calculate expected total atoms
             const originalAtoms = window.currentCrystalData?.num_atoms || 1;
-            const expectedTotalAtoms = originalAtoms * parseInt(aSize) * parseInt(bSize) * parseInt(cSize);
+            const expectedTotalAtoms = originalAtoms * aSize * bSize * cSize;
 
             // Validate against atom limit
             if (!validateAtomCount(expectedTotalAtoms)) {
@@ -3610,7 +3632,7 @@ Crystal system: ${data.crystal_system}`;
                     },
                     body: JSON.stringify({
                         crystal_data: window.currentCrystalData,
-                        supercell_size: [parseInt(aSize), parseInt(bSize), parseInt(cSize)],
+                        supercell_size: [aSize, bSize, cSize],
                         session_id: window.sessionId,
                         ...(getModalModelId() ? { model: getModalModelId() } : {})
                     })
@@ -3671,7 +3693,7 @@ Crystal system: ${data.crystal_system}`;
                 // Store filename and supercell size for 3D visualization
                 // Use currentFullPath to preserve complete path for API calls
                 window.currentFilename = window.currentFullPath;
-                window.currentSupercellSize = [parseInt(aSize), parseInt(bSize), parseInt(cSize)];
+                window.currentSupercellSize = [aSize, bSize, cSize];
 
                 // Initialize empty operations history
                 window.atomicOperations = [];
