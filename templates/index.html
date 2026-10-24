@@ -688,6 +688,7 @@
             </div>
 
             <div class="modal-confirm" style="grid-area: confirm;">
+                <div class="mlip-model-error" id="modalError" role="alert" style="display: none;"></div>
                 <button id="confirmButton" class="button" disabled>Confirm</button>
             </div>
         </div>
@@ -803,6 +804,22 @@
 
         function clearModelLoadError() {
             const el = document.getElementById('modelLoadError');
+            if (!el) return;
+            el.textContent = '';
+            el.style.display = 'none';
+        }
+
+        // General error area at the bottom of the start dialog (atom limit,
+        // supercell failures); model-specific errors use showModelLoadError.
+        function showModalError(message) {
+            const el = document.getElementById('modalError');
+            if (!el) return;
+            el.textContent = message;
+            el.style.display = 'block';
+        }
+
+        function clearModalError() {
+            const el = document.getElementById('modalError');
             if (!el) return;
             el.textContent = '';
             el.style.display = 'none';
@@ -1340,7 +1357,7 @@
                 // Superseded by a newer analysis request; exit silently
                 if (error.name === 'AbortError') return;
                 console.error('Error analyzing sample file:', error);
-                alert(`Error analyzing CIF file: ${error.message}`);
+                showFileLoadError(error.message);
                 // Don't leave the previous file's info displayed with Confirm
                 // still enabled -- a failed load must not let Confirm proceed
                 // with stale data (see F9).
@@ -3555,7 +3572,7 @@ Crystal system: ${data.crystal_system}`;
             const maxAtoms = parseInt(modalMaxAtomsInput?.value || sidebarMaxAtomsInput?.value) || 200;
 
             if (totalAtoms > maxAtoms) {
-                alert(`Total atoms (${totalAtoms}) exceeds the system limit (${maxAtoms}).\n\nPlease reduce the supercell dimensions or increase the limit in System Limits settings.`);
+                showModalError(`Total atoms (${totalAtoms}) exceeds the system limit (${maxAtoms}). Please reduce the supercell dimensions or increase the limit in the Advanced settings.`);
                 return false;
             }
             return true;
@@ -3564,6 +3581,7 @@ Crystal system: ${data.crystal_system}`;
         async function createSupercell() {
             if (supercellCreationInProgress) return;
             supercellCreationInProgress = true;
+            clearModalError();
 
             const aSize = document.getElementById('supercell-a').value;
             const bSize = document.getElementById('supercell-b').value;
@@ -3579,6 +3597,10 @@ Crystal system: ${data.crystal_system}`;
                 return;
             }
 
+
+            const confirmButton = document.getElementById('confirmButton');
+            confirmButton.disabled = true;
+            confirmButton.textContent = 'Creating...';
 
             try {
                 const response = await fetch('/api/create-supercell', {
@@ -3607,11 +3629,12 @@ Crystal system: ${data.crystal_system}`;
                         // dialog open so another model can be chosen.
                         showModelLoadError(errorMessage);
                     } else {
-                        alert(errorMessage);
+                        showModalError(errorMessage);
                     }
                     return;
                 }
                 clearModelLoadError();
+                clearModalError();
 
                 const result = await response.json();
 
@@ -3694,9 +3717,11 @@ Crystal system: ${data.crystal_system}`;
 
             } catch (error) {
                 console.error('Error creating supercell:', error);
-                alert('Error creating supercell');
+                showModalError('Error creating supercell');
             } finally {
                 supercellCreationInProgress = false;
+                confirmButton.disabled = false;
+                confirmButton.textContent = 'Confirm';
             }
         }
 

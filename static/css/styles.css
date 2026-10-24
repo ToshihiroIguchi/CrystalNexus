@@ -1384,6 +1384,10 @@ body {
     line-height: 1.4;
 }
 
+.modal-confirm .mlip-model-error {
+    margin: 0 0 10px 0;
+}
+
 .mlip-model-hint {
     font-size: 11px;
     color: #7f8c8d;
