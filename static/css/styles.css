@@ -346,10 +346,12 @@ body {
 
 .modal-main {
     grid-area: main;
+    min-width: 0;
 }
 
 .modal-sidebar {
     grid-area: sidebar;
+    min-width: 0;
 }
 
 .modal-confirm {
@@ -420,7 +422,7 @@ body {
     .modal-content {
         width: calc(100vw - 32px);
         max-width: none;
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr);
         grid-template-areas:
             "header"
             "main"
@@ -709,6 +711,7 @@ body {
     align-items: center;
     gap: 6px;
     flex: 1;
+    min-width: 0;
 }
 
 .supercell-axis-group label {
@@ -720,6 +723,8 @@ body {
 
 .supercell-axis-group input {
     width: 75px;
+    min-width: 0;
+    max-width: 100%;
     padding: 6px 9px;
     border: 1px solid #ddd;
     border-radius: 4px;
