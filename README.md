@@ -272,6 +272,12 @@ python -m pytest tests/ -m "not slow"
 
 ---
 
+## Deployment on Nutanix (Linux VM)
+
+To run CrystalNexus for a small team on a Linux VM (Ubuntu 24.04) on a Nutanix AHV cluster, with systemd, Nginx, HTTPS and Basic authentication, see the step-by-step guide [docs/deployment-nutanix.md](docs/deployment-nutanix.md). Templates are in `deploy/` (cloud-init, systemd unit, Nginx config, `install.sh`).
+
+---
+
 ## Troubleshooting
 
 ### Q: "Backend failed to start" or "Port 8090 is in use"

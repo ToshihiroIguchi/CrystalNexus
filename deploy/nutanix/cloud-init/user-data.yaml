@@ -1,0 +1,60 @@
+#cloud-config
+# CrystalNexus - cloud-init user-data template for Ubuntu Server 24.04 LTS (cloud image)
+# on a Nutanix AHV VM. Paste this into the "Custom Script" / cloud-init field when
+# creating the VM in Prism Central.
+#
+# Edit every value marked REPLACE_ME before use.
+
+# REPLACE_ME: host name of the VM (lowercase letters, digits, hyphens)
+hostname: crystalnexus
+fqdn: crystalnexus.example.internal   # REPLACE_ME: your internal DNS name (or keep a dummy one)
+manage_etc_hosts: true
+
+users:
+  - name: ubuntu                       # admin account you will SSH in with
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: true                  # password login disabled; SSH key only
+    ssh_authorized_keys:
+      # REPLACE_ME: paste your PUBLIC key (the contents of id_ed25519.pub), one line
+      - ssh-ed25519 AAAAREPLACE_ME_WITH_YOUR_PUBLIC_KEY you@example.com
+
+ssh_pwauth: false
+timezone: Asia/Tokyo                   # REPLACE_ME: your time zone (e.g. UTC)
+
+package_update: true
+package_upgrade: true
+
+# Note: Ubuntu 24.04 ships Python 3.12 as the default python3, which matches the
+# version the CrystalNexus lock file requires.
+packages:
+  - python3.12
+  - python3.12-venv
+  - python3-venv
+  - python3-pip
+  - git
+  - nginx
+  - apache2-utils      # provides htpasswd for Basic authentication
+  - openssl
+  - ufw
+  - build-essential
+  - curl
+  - qemu-guest-agent   # harmless on AHV; Nutanix Guest Tools (NGT) is installed separately
+
+runcmd:
+  # Firewall: allow only SSH and HTTPS. Optionally restrict to your internal network.
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw allow 443/tcp
+  # Optional (REPLACE_ME): to restrict to an internal CIDR, replace the two "allow" lines
+  # above with:
+  #   - ufw allow from 192.168.0.0/16 to any port 22 proto tcp
+  #   - ufw allow from 192.168.0.0/16 to any port 443 proto tcp
+  - ufw --force enable
+  - systemctl enable --now qemu-guest-agent || true
+  - systemctl enable nginx
+  - echo "cloud-init finished: $(date)" >> /var/log/crystalnexus-cloud-init.log
+
+final_message: "CrystalNexus base image is ready after $UPTIME seconds. Next: run deploy/scripts/install.sh"
