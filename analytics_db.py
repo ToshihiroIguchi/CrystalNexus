@@ -18,6 +18,15 @@ if not logger.handlers:
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
+def _json_default(obj):
+    """json.dumps fallback: numpy scalars/arrays -> Python, anything else -> str."""
+    if hasattr(obj, "tolist"):
+        return obj.tolist()
+    if hasattr(obj, "item"):
+        return obj.item()
+    return str(obj)
+
+
 class AnalyticsDatabase:
     def __init__(self, db_path=DB_FILE):
         self.db_path = db_path
@@ -91,7 +100,8 @@ class AnalyticsDatabase:
                   num_atoms: int = None, execution_time: float = None, 
                   parameters: dict = None, session_id: str = None):
         try:
-            params_json = json.dumps(parameters) if parameters else None
+            params_json = (json.dumps(parameters, default=_json_default)
+                           if parameters is not None else None)
             
             with self._get_connection() as conn:
                 cursor = conn.cursor()
@@ -139,7 +149,9 @@ class AnalyticsDatabase:
     def get_daily_access_counts(self, days=7):
         """Get daily access counts for the last N days."""
         try:
-            date_threshold = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%d')
+            # Full datetime threshold: a date-only string would sort before every
+            # timestamp on the boundary day and include that whole day (days+1 buckets).
+            date_threshold = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -198,7 +210,7 @@ class AnalyticsDatabase:
                         id, timestamp, event_type, filename, formula, 
                         num_atoms, execution_time, parameters
                     FROM analysis_events 
-                    ORDER BY timestamp DESC 
+                    ORDER BY timestamp DESC, id DESC
                     LIMIT ?
                 """, (limit,))
                 
@@ -220,5 +232,25 @@ class AnalyticsDatabase:
             logger.error(f"Failed to get recent events: {e}")
             return []
 
-# Singleton instance
-analytics_db = AnalyticsDatabase()
+class _LazyAnalyticsDatabase:
+    """Module-level handle that creates the real AnalyticsDatabase on first use.
+
+    Importing this module must not create analytics.db as a side effect.
+    Attribute access is forwarded, so ``analytics_db.log_event(...)`` and
+    friends keep working (and tests can still replace the whole object).
+    """
+
+    def __init__(self):
+        self._instance = None
+
+    def _get(self):
+        if self._instance is None:
+            self._instance = AnalyticsDatabase()
+        return self._instance
+
+    def __getattr__(self, name):
+        return getattr(self._get(), name)
+
+
+# Singleton handle (database file is created lazily on first use)
+analytics_db = _LazyAnalyticsDatabase()
