@@ -1120,8 +1120,13 @@ async def root(request: Request):
     return templates.TemplateResponse(request, "index.html")
 
 @app.get("/health")
-async def health_check():
-    return {"status": "healthy", "service": "CrystalNexus"}
+async def health_check(request: Request):
+    body = {"status": "healthy", "service": "CrystalNexus"}
+    # The pid is only for the local launcher; do not expose it to the LAN.
+    client = request.client
+    if client is not None and client.host in ("127.0.0.1", "::1"):
+        body["pid"] = os.getpid()
+    return body
 
 def _get_session_lock(session_info: Dict) -> asyncio.Lock:
     """

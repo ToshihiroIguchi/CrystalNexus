@@ -66,6 +66,7 @@ if __name__ == "__main__":
     _relaunch_in_venv()
 
 import requests
+import psutil
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", ""})
 
@@ -234,6 +235,7 @@ HEALTH_URL = f"http://localhost:{PORT}/health"
 LAN_MODE = is_lan_binding(HOST)
 ANALYTICS_TOKEN = None
 MAX_STARTUP_WAIT = 30  # seconds
+PORT_FREE_TIMEOUT = 10  # seconds to wait for the port to be released
 
 # Global shutdown flag
 shutdown_requested = False
@@ -278,72 +280,223 @@ def _apply_runtime_config(args):
     ANALYTICS_TOKEN = resolve_analytics_token(LAN_MODE)
 
 
-def check_backend_status():
-    """Check if the backend is already running"""
+def _health_json(response):
+    """Parse a /health response into a dict, or None if it is not a CrystalNexus one."""
     try:
-        response = requests.get(HEALTH_URL, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("service") == "CrystalNexus":
-                return True
+        if response.status_code != 200:
+            return None
+        data = response.json()
+    except (ValueError, AttributeError):
+        return None
+    if isinstance(data, dict) and data.get("service") == "CrystalNexus":
+        return data
+    return None
+
+
+def check_backend_status(expected_pids=None):
+    """Check if a CrystalNexus backend answers on the health URL.
+
+    If expected_pids is given, the responding server's reported pid must be in
+    it. This stops an OLD server that still holds the port from being mistaken
+    for the freshly spawned one.
+    """
+    try:
+        data = _health_json(requests.get(HEALTH_URL, timeout=5))
     except requests.exceptions.RequestException:
+        return False
+    if data is None:
+        return False
+    if expected_pids is None:
+        return True
+    return data.get("pid") in expected_pids
+
+
+def _listening_pids(port):
+    """Return sorted PIDs of all processes listening on the given TCP port.
+
+    psutil.net_connections() raises AccessDenied on macOS for non-root users;
+    fall back to per-process connection lookup, then to lsof.
+    """
+    pids = set()
+    try:
+        for conn in psutil.net_connections(kind="inet"):
+            if (conn.status == psutil.CONN_LISTEN and conn.laddr
+                    and conn.laddr.port == port and conn.pid):
+                pids.add(conn.pid)
+        return sorted(pids)
+    except (psutil.AccessDenied, PermissionError):
         pass
-    return False
+
+    for proc in psutil.process_iter():
+        try:
+            for conn in proc.net_connections(kind="inet"):
+                if (conn.status == psutil.CONN_LISTEN and conn.laddr
+                        and conn.laddr.port == port):
+                    pids.add(proc.pid)
+        except (psutil.Error, OSError):
+            continue
+    if pids:
+        return sorted(pids)
+
+    try:
+        out = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            capture_output=True, text=True, timeout=10).stdout
+        pids.update(int(x) for x in out.split() if x.isdigit())
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return sorted(pids)
+
+
+def _process_tree_pids(pid):
+    """Return {pid} plus the PIDs of all its descendants (empty set if gone).
+
+    In --reload mode the actual worker serving requests is a child of the
+    reloader process we spawned (and on Windows a venv python.exe may itself
+    be a launcher stub), so health responses are matched against the tree.
+    """
+    try:
+        parent = psutil.Process(pid)
+        return {pid} | {c.pid for c in parent.children(recursive=True)}
+    except psutil.Error:
+        return set()
+
+
+def _kill_pid_tree(pid, timeout=5, wait_root=True):
+    """Forcefully kill a process and all its descendants.
+
+    Returns None on success or a string describing why the PID survived.
+    wait_root=False leaves reaping of the root to the caller (needed when the
+    root is our own Popen child, so Popen.wait() still sees its exit status).
+    """
+    if platform.system() == "Windows":
+        result = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                                capture_output=True, text=True)
+        deadline = time.time() + timeout
+        while psutil.pid_exists(pid) and time.time() < deadline:
+            time.sleep(0.1)
+        if psutil.pid_exists(pid):
+            detail = (result.stderr or result.stdout or "").strip()
+            return f"taskkill exit code {result.returncode}: {detail}" if result.returncode else "process still running"
+        return None
+    try:
+        root = psutil.Process(pid)
+        procs = root.children(recursive=True)
+    except psutil.Error:
+        return None  # already gone
+    for p in procs + [root]:
+        try:
+            p.kill()
+        except psutil.NoSuchProcess:
+            pass
+        except psutil.Error as e:
+            return f"cannot kill PID {p.pid}: {e}"
+    wait_list = procs + ([root] if wait_root else [])
+    psutil.wait_procs(wait_list, timeout=timeout)
+    return None
+
+
+def kill_process_tree(process, timeout=5):
+    """Kill a Popen child and its whole process tree, then reap it.
+
+    A plain process.terminate() only stops the uvicorn reloader in DEBUG mode
+    and leaves the worker holding the port.
+    """
+    if process is None:
+        return
+    _kill_pid_tree(process.pid, timeout, wait_root=False)
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def _port_in_use():
+    """True if something accepts connections on the configured port."""
+    try:
+        with socket.create_connection((health_host(HOST).strip("[]"), PORT), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def wait_for_port_free(timeout=10):
+    """Wait (bounded) until nothing is listening on PORT.
+
+    Returns True if free; False on timeout or if shutdown was requested.
+    """
+    deadline = time.time() + timeout
+    while True:
+        if shutdown_requested:
+            return False
+        if not _port_in_use():
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.5)
+
+
+def _is_crystalnexus_server(proc):
+    """True if proc (or an ancestor, e.g. the reloader) looks like our server.
+
+    Only the executable name and command-line tokens are inspected -- never a
+    bare substring of a path, which could match the repo directory itself.
+    """
+    def one(p):
+        name = (p.name() or "").lower()
+        if not (name.startswith("python") or name.startswith("uvicorn")):
+            return False
+        tokens = [os.path.basename(t).lower() for t in p.cmdline()]
+        joined = " ".join(tokens)
+        return ("start_crystalnexus" in joined or "main:app" in joined
+                or "uvicorn" in joined)
+
+    try:
+        if one(proc):
+            return True
+        return any(one(a) for a in proc.parents())
+    except psutil.Error:
+        return False
+
 
 def stop_existing_server():
-    """Stop existing CrystalNexus server if running"""
-    try:
-        # Get process using target port using netstat
-        result = subprocess.run(
-            ['netstat', '-ano'], 
-            capture_output=True, text=True, shell=True
-        )
-        lines = result.stdout.split('\n')
-        for line in lines:
-            if 'LISTENING' not in line:
-                continue
-            parts = line.split()
-            # netstat -ano columns: Proto, Local Address, Foreign Address, State, PID
-            if len(parts) < 5:
-                continue
-            local_address = parts[1]
-            # Match only the LOCAL address port (a foreign-address port must not match)
-            if not local_address.endswith(f':{PORT}'):
-                continue
-            pid = parts[-1]
-            if pid != '0':  # Skip system processes
-                # Verify the process is actually a python/uvicorn server before killing
-                task_result = subprocess.run(
-                    ['tasklist', '/FI', f'PID eq {pid}'],
-                    capture_output=True, text=True
-                )
-                task_output = task_result.stdout.lower()
-                if 'python' not in task_output and 'uvicorn' not in task_output:
-                    print(f"Skipping PID {pid} on port {PORT}: not a python/uvicorn process")
-                    continue
-                print(f"Found existing server process (PID: {pid})")
-                print("Stopping existing server...")
-                # Use taskkill with /T (kill the whole process tree) instead of
-                # Stop-Process, which only kills the PID it's given: for a
-                # uvicorn --reload server, that PID is the reloader, and its
-                # actual worker process (still bound to the port) would
-                # otherwise survive.
-                kill_result = subprocess.run([
-                    'taskkill', '/PID', pid, '/T', '/F'
-                ], capture_output=True, text=True)
+    """Stop every CrystalNexus server process listening on the target port.
 
-                if kill_result.returncode == 0:
-                    print("OK Existing server stopped")
-                    return True
-                else:
-                    print(f"ERROR Failed to stop process: {kill_result.stderr}")
-        
-        print("No existing server found to stop")
-        return False
-        
+    Returns True only if at least one server was stopped and none failed.
+    """
+    stopped = 0
+    failed = 0
+    try:
+        for pid in _listening_pids(PORT):
+            try:
+                proc = psutil.Process(pid)
+                is_ours = _is_crystalnexus_server(proc)
+            except psutil.Error as e:
+                print(f"Skipping PID {pid} on port {PORT}: cannot inspect ({e})")
+                continue
+            # Safety: never kill something that is not our python/uvicorn server
+            if not is_ours:
+                print(f"Skipping PID {pid} on port {PORT}: not a CrystalNexus python/uvicorn process")
+                continue
+            print(f"Found existing server process (PID: {pid})")
+            print("Stopping existing server...")
+            # Kill the whole tree: for a uvicorn --reload server this PID is
+            # the reloader and its worker would otherwise keep the port.
+            error = _kill_pid_tree(pid)
+            if error:
+                failed += 1
+                print(f"ERROR Failed to stop PID {pid}: {error}")
+            else:
+                stopped += 1
+                print(f"OK Existing server (PID: {pid}) stopped")
     except Exception as e:
         print(f"ERROR Failed to stop existing server: {e}")
         return False
+
+    if not stopped and not failed:
+        print("No existing server found to stop")
+    return stopped > 0 and failed == 0
 
 # Bound on lines waiting to be displayed. If the display side is slow or dead,
 # the oldest-unshown lines are dropped instead of ever blocking the reader.
@@ -517,6 +670,20 @@ def start_backend():
         if platform.system() == "Windows":
             kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
 
+        # Make sure no old server still holds the port; otherwise the new child
+        # would die with "address in use" while the old one answers health checks.
+        if not wait_for_port_free(PORT_FREE_TIMEOUT):
+            if shutdown_requested:
+                print("Startup aborted by user")
+                return None
+            print(f"ERROR Port {PORT} is still in use after {PORT_FREE_TIMEOUT}s.")
+            print("Another process (possibly an old CrystalNexus server) holds the port.")
+            return None
+
+        if shutdown_requested:
+            print("Startup aborted by user")
+            return None
+
         print("Starting server with direct output mode...")
         process = subprocess.Popen(
             cmd,
@@ -531,6 +698,9 @@ def start_backend():
             **kwargs,
         )
 
+        global server_process
+        server_process = process  # so the signal handler can stop it during startup
+
         output_tail = collections.deque(maxlen=200)
         output_thread, _display_thread = _start_output_threads(process, output_tail)
         _output_threads.append(output_thread)
@@ -540,6 +710,12 @@ def start_backend():
 
         for i in range(MAX_STARTUP_WAIT):
             time.sleep(1)
+
+            if shutdown_requested:
+                print("Startup aborted by user")
+                kill_process_tree(process)
+                output_thread.join(timeout=2)
+                return None
 
             # Check the process is still alive *before* the health-check probe:
             # if it already exited, the port may still be occupied by a
@@ -552,13 +728,13 @@ def start_backend():
                 _print_captured_output(output_tail)
                 return None
 
-            if check_backend_status():
+            if check_backend_status(_process_tree_pids(process.pid)):
                 print(f"OK Backend started successfully!")
                 print(f"OK CrystalNexus is now available at http://localhost:{PORT}")
                 return process
 
         print("ERROR Backend startup timeout!")
-        process.terminate()
+        kill_process_tree(process)
         output_thread.join(timeout=2)
         _print_captured_output(output_tail)
         return None
@@ -598,6 +774,8 @@ def monitor_process_health(process, status_queue):
                 response = requests.get(HEALTH_URL, timeout=3)
                 if response.status_code != 200:
                     status_queue.put(("health_check_failed", f"Health check failed with status {response.status_code}"))
+                elif _health_json(response) is None:
+                    status_queue.put(("health_check_failed", "Health endpoint is not a CrystalNexus server"))
                 else:
                     status_queue.put(("health_ok", "Server responding normally"))
             except requests.exceptions.RequestException as e:
@@ -673,14 +851,8 @@ def signal_handler(signum, frame):
     # Terminate server process immediately
     if server_process:
         print("Terminating server process...")
-        server_process.terminate()
-        try:
-            server_process.wait(timeout=5)
-            print("Server terminated successfully")
-        except subprocess.TimeoutExpired:
-            print("Force killing server...")
-            server_process.kill()
-            server_process.wait()
+        kill_process_tree(server_process)
+        print("Server terminated successfully")
 
 def main():
     """Main startup routine"""
@@ -702,13 +874,16 @@ def main():
         print("Backend is already running!")
         print("Stopping existing server and restarting...")
         stop_existing_server()
-        # Wait a moment for the port to be freed
-        time.sleep(2)
+        # start_backend() waits (bounded) for the port to be freed
     
     # Try to start the backend
     process = start_backend()
     server_process = process  # Save to global variable
     
+    if process is None and shutdown_requested:
+        print("Startup aborted.")
+        sys.exit(130)
+
     if process is None:
         print("\nERROR Failed to start CrystalNexus backend")
         print("Please check the following:")
@@ -802,6 +977,7 @@ def main():
     
     print("Background monitoring started...")
     
+    unexpected_exit = False
     try:
         # Keep the script running and wait for shutdown signal
         while not shutdown_requested:
@@ -809,6 +985,7 @@ def main():
                 # Check process state at short intervals
                 if process.poll() is not None:
                     print("Server process terminated unexpectedly")
+                    unexpected_exit = True
                     break
                 time.sleep(1)
             except KeyboardInterrupt:
@@ -825,12 +1002,10 @@ def main():
     # Final cleanup
     if process and process.poll() is None:
         print("Final cleanup: terminating server...")
-        process.terminate()
-        try:
-            process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+        kill_process_tree(process, timeout=3)
+
+    if unexpected_exit and not shutdown_requested:
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

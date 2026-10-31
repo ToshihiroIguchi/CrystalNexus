@@ -408,3 +408,342 @@ def test_monitor_warns_when_reader_dead(monkeypatch):
     while not q.empty():
         msgs.append(q.get())
     assert any("reader thread" in m[1] for m in msgs)
+
+
+# ---------------------------------------------------------------------------
+# Launcher robustness: pid-checked health, tree kill, cross-platform stop
+# ---------------------------------------------------------------------------
+
+class _Resp:
+    def __init__(self, status=200, data=None):
+        self.status_code = status
+        self._data = data
+
+    def json(self):
+        if self._data is None:
+            raise ValueError("no json")
+        return self._data
+
+
+def test_check_backend_status_without_expected_pids(monkeypatch):
+    monkeypatch.setattr(sx.requests, "get",
+                        lambda *a, **k: _Resp(200, {"service": "CrystalNexus", "pid": 1}))
+    assert sx.check_backend_status() is True
+
+
+def test_check_backend_status_rejects_foreign_pid(monkeypatch):
+    """An OLD server still holding the port must not count as the new one."""
+    monkeypatch.setattr(sx.requests, "get",
+                        lambda *a, **k: _Resp(200, {"service": "CrystalNexus", "pid": 111}))
+    assert sx.check_backend_status({222, 333}) is False
+    assert sx.check_backend_status({111}) is True
+
+
+def test_check_backend_status_rejects_other_service_and_bad_json(monkeypatch):
+    monkeypatch.setattr(sx.requests, "get",
+                        lambda *a, **k: _Resp(200, {"service": "Other", "pid": 1}))
+    assert sx.check_backend_status({1}) is False
+    monkeypatch.setattr(sx.requests, "get", lambda *a, **k: _Resp(200, None))
+    assert sx.check_backend_status({1}) is False
+
+
+def test_health_endpoint_reports_pid():
+    import os
+    import asyncio
+    import main
+    def req(host):
+        return SimpleNamespace(client=SimpleNamespace(host=host))
+
+    for host in ("127.0.0.1", "::1"):
+        data = asyncio.run(main.health_check(req(host)))
+        assert data["service"] == "CrystalNexus"
+        assert data["pid"] == os.getpid()
+    # Non-loopback (LAN) clients must not see the pid
+    assert "pid" not in asyncio.run(main.health_check(req("192.168.1.5")))
+    assert "pid" not in asyncio.run(main.health_check(SimpleNamespace(client=None)))
+
+
+def test_stop_existing_server_handles_all_pids_and_skips_non_python(monkeypatch):
+    monkeypatch.setattr(sx, "_listening_pids", lambda port: [10, 20, 30])
+
+    repo = r"C:\Users\x\python\CrystalNexus"
+
+    class P:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def name(self):
+            return {10: "python.exe", 20: "nginx.exe", 30: "python3"}[self.pid]
+
+        def cmdline(self):
+            return {10: ["python.exe", "-m", "uvicorn", "main:app"],
+                    20: ["nginx.exe", "-c", repo + r"\nginx.conf"],
+                    30: ["python3", repo + r"\start_crystalnexus.py"]}[self.pid]
+
+        def parents(self):
+            return []
+
+    monkeypatch.setattr(sx.psutil, "Process", P)
+    killed = []
+    monkeypatch.setattr(sx, "_kill_pid_tree", lambda pid, timeout=5, wait_root=True: killed.append(pid))
+    assert sx.stop_existing_server() is True
+    assert killed == [10, 30]
+
+
+def test_is_crystalnexus_server_ignores_repo_path_substring():
+    """The repo lives under ...\\python\\CrystalNexus; that path alone must not match."""
+    class P:
+        def name(self):
+            return "node.exe"
+
+        def cmdline(self):
+            return [r"C:\Users\x\python\CrystalNexus\tool\node.exe", "app.js"]
+
+        def parents(self):
+            return []
+
+    assert sx._is_crystalnexus_server(P()) is False
+
+    class Py(P):
+        def name(self):
+            return "python.exe"
+
+        def cmdline(self):
+            return ["python.exe", r"C:\Users\x\python\other\server.py"]
+
+    assert sx._is_crystalnexus_server(Py()) is False
+
+
+def test_is_crystalnexus_server_accepts_reload_worker_via_parent():
+    class Parent:
+        def name(self):
+            return "python.exe"
+
+        def cmdline(self):
+            return ["python.exe", "-m", "uvicorn", "main:app", "--reload"]
+
+    class Worker:
+        def name(self):
+            return "python.exe"
+
+        def cmdline(self):
+            return ["python.exe", "-c", "from multiprocessing.spawn import spawn_main"]
+
+        def parents(self):
+            return [Parent()]
+
+    assert sx._is_crystalnexus_server(Worker()) is True
+
+
+def test_stop_existing_server_reports_kill_failure(monkeypatch, capsys):
+    monkeypatch.setattr(sx, "_listening_pids", lambda port: [10])
+    monkeypatch.setattr(sx.psutil, "Process", lambda pid: SimpleNamespace(pid=pid))
+    monkeypatch.setattr(sx, "_is_crystalnexus_server", lambda p: True)
+    monkeypatch.setattr(sx, "_kill_pid_tree", lambda pid, timeout=5, wait_root=True: "Access is denied.")
+    assert sx.stop_existing_server() is False
+    out = capsys.readouterr().out
+    assert "Access is denied." in out
+    assert "OK Existing server" not in out
+
+
+def test_listening_pids_falls_back_when_access_denied(monkeypatch):
+    def denied(kind=None):
+        raise sx.psutil.AccessDenied()
+
+    monkeypatch.setattr(sx.psutil, "net_connections", denied)
+    conn = SimpleNamespace(status=sx.psutil.CONN_LISTEN, laddr=SimpleNamespace(port=sx.PORT))
+    other = SimpleNamespace(status=sx.psutil.CONN_LISTEN, laddr=SimpleNamespace(port=1))
+    procs = [SimpleNamespace(pid=7, net_connections=lambda kind=None: [conn]),
+             SimpleNamespace(pid=8, net_connections=lambda kind=None: [other]),
+             SimpleNamespace(pid=9, net_connections=lambda kind=None: (_ for _ in ()).throw(sx.psutil.AccessDenied()))]
+    monkeypatch.setattr(sx.psutil, "process_iter", lambda: procs)
+    assert sx._listening_pids(sx.PORT) == [7]
+
+
+def test_wait_for_port_free_honours_shutdown(monkeypatch):
+    monkeypatch.setattr(sx, "_port_in_use", lambda: False)
+    monkeypatch.setattr(sx, "shutdown_requested", True)
+    assert sx.wait_for_port_free(5) is False
+
+
+def test_start_backend_does_not_spawn_when_shutdown_requested(monkeypatch):
+    monkeypatch.setattr(sx, "wait_for_port_free", lambda t=0: True)
+    monkeypatch.setattr(sx, "shutdown_requested", True)
+    monkeypatch.setattr(sx.os, "chdir", lambda p: None)
+    spawned = []
+    monkeypatch.setattr(sx.subprocess, "Popen", lambda *a, **k: spawned.append(1))
+    assert sx.start_backend() is None
+    assert not spawned
+
+
+def test_kill_process_tree_preserves_child_exit_status_posix():
+    import subprocess
+    import sys
+    if sx.platform.system() == "Windows":
+        pytest.skip("POSIX reaping semantics")
+    proc = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(60)"])
+    sx.kill_process_tree(proc)
+    assert proc.returncode is not None and proc.returncode != 0
+
+
+def test_health_json_helper():
+    assert sx._health_json(_Resp(200, {"service": "CrystalNexus"})) == {"service": "CrystalNexus"}
+    assert sx._health_json(_Resp(500, {"service": "CrystalNexus"})) is None
+    assert sx._health_json(_Resp(200, {"service": "X"})) is None
+    assert sx._health_json(_Resp(200, None)) is None
+    assert sx._health_json(_Resp(200, [1])) is None
+
+
+def test_stop_existing_server_none_found(monkeypatch):
+    monkeypatch.setattr(sx, "_listening_pids", lambda port: [])
+    assert sx.stop_existing_server() is False
+
+
+def test_kill_process_tree_kills_tree_then_waits(monkeypatch):
+    calls = []
+    monkeypatch.setattr(sx, "_kill_pid_tree",
+                        lambda pid, timeout=5, wait_root=True: calls.append(("kill", pid, wait_root)))
+    proc = SimpleNamespace(pid=42, wait=lambda timeout=None: calls.append(("wait", timeout)))
+    sx.kill_process_tree(proc, timeout=3)
+    # root is our own child: reaped by Popen.wait only, not psutil.wait_procs
+    assert calls == [("kill", 42, False), ("wait", 3)]
+
+
+def test_kill_pid_tree_windows_uses_taskkill_tree(monkeypatch):
+    monkeypatch.setattr(sx.platform, "system", lambda: "Windows")
+    seen = []
+    monkeypatch.setattr(sx.subprocess, "run",
+                        lambda cmd, **k: seen.append(cmd) or SimpleNamespace(returncode=0, stdout="", stderr=""))
+    monkeypatch.setattr(sx.psutil, "pid_exists", lambda pid: False)
+    assert sx._kill_pid_tree(99) is None
+    assert seen == [["taskkill", "/PID", "99", "/T", "/F"]]
+
+
+def test_kill_pid_tree_windows_reports_failure(monkeypatch):
+    monkeypatch.setattr(sx.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(sx.subprocess, "run",
+                        lambda cmd, **k: SimpleNamespace(returncode=5, stdout="", stderr="Access is denied."))
+    monkeypatch.setattr(sx.psutil, "pid_exists", lambda pid: True)
+    err = sx._kill_pid_tree(99, timeout=0)
+    assert "Access is denied" in err
+
+
+def test_kill_pid_tree_real_children_psutil_path(monkeypatch):
+    """Spawn parent+child python processes and verify both die (psutil path)."""
+    import subprocess
+    import sys
+    import time
+    monkeypatch.setattr(sx.platform, "system", lambda: "Linux")
+    code = ("import subprocess,sys,time;"
+            "subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);"
+            "time.sleep(60)")
+    proc = subprocess.Popen([sys.executable, "-c", code])
+    try:
+        kids = set()
+        for _ in range(50):
+            kids = sx._process_tree_pids(proc.pid) - {proc.pid}
+            if kids:
+                break
+            time.sleep(0.1)
+        assert kids
+        sx.kill_process_tree(proc)
+        assert proc.poll() is not None
+        time.sleep(0.2)
+        assert not any(sx.psutil.pid_exists(k) for k in kids)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+
+def test_wait_for_port_free_times_out(monkeypatch):
+    monkeypatch.setattr(sx, "_port_in_use", lambda: True)
+    monkeypatch.setattr(sx.time, "sleep", lambda s: None)
+    t = iter([0, 1, 2, 100, 100, 100])
+    monkeypatch.setattr(sx.time, "time", lambda: next(t))
+    assert sx.wait_for_port_free(5) is False
+
+
+def test_wait_for_port_free_true_when_free(monkeypatch):
+    monkeypatch.setattr(sx, "_port_in_use", lambda: False)
+    assert sx.wait_for_port_free(5) is True
+
+
+def test_start_backend_errors_when_port_never_frees(monkeypatch):
+    monkeypatch.setattr(sx, "wait_for_port_free", lambda t=0: False)
+    monkeypatch.setattr(sx.os, "chdir", lambda p: None)
+    popen_called = []
+    monkeypatch.setattr(sx.subprocess, "Popen", lambda *a, **k: popen_called.append(1))
+    assert sx.start_backend() is None
+    assert not popen_called
+
+
+def _fake_popen_setup(monkeypatch):
+    proc = SimpleNamespace(pid=500, poll=lambda: None, stdout=None)
+    monkeypatch.setattr(sx, "wait_for_port_free", lambda t=0: True)
+    monkeypatch.setattr(sx.subprocess, "Popen", lambda *a, **k: proc)
+    monkeypatch.setattr(sx, "_start_output_threads",
+                        lambda p, tail: (SimpleNamespace(join=lambda timeout=None: None), None))
+    monkeypatch.setattr(sx.time, "sleep", lambda s: None)
+    monkeypatch.setattr(sx, "_process_tree_pids", lambda pid: {500, 501})
+    monkeypatch.setattr(sx.os, "chdir", lambda p: None)
+    monkeypatch.setattr(sx, "server_process", None)
+    return proc
+
+
+def test_start_backend_ignores_old_server_pid_then_kills_on_timeout(monkeypatch):
+    proc = _fake_popen_setup(monkeypatch)
+    monkeypatch.setattr(sx, "MAX_STARTUP_WAIT", 3)
+    monkeypatch.setattr(sx.requests, "get",
+                        lambda *a, **k: _Resp(200, {"service": "CrystalNexus", "pid": 999}))
+    killed = []
+    monkeypatch.setattr(sx, "kill_process_tree", lambda p, timeout=5: killed.append(p))
+    assert sx.start_backend() is None
+    assert killed == [proc]
+
+
+def test_start_backend_accepts_worker_descendant_pid(monkeypatch):
+    proc = _fake_popen_setup(monkeypatch)
+    monkeypatch.setattr(sx.requests, "get",
+                        lambda *a, **k: _Resp(200, {"service": "CrystalNexus", "pid": 501}))
+    assert sx.start_backend() is proc
+
+
+def test_start_backend_aborts_on_shutdown_request(monkeypatch):
+    proc = _fake_popen_setup(monkeypatch)
+    monkeypatch.setattr(sx, "shutdown_requested", False)
+
+    def sleep_then_ctrl_c(s):
+        sx.shutdown_requested = True  # Ctrl+C arrives during the startup wait
+    monkeypatch.setattr(sx.time, "sleep", sleep_then_ctrl_c)
+    monkeypatch.setattr(sx.requests, "get",
+                        lambda *a, **k: _Resp(200, {"service": "CrystalNexus", "pid": 500}))
+    killed = []
+    monkeypatch.setattr(sx, "kill_process_tree", lambda p, timeout=5: killed.append(p))
+    assert sx.start_backend() is None
+    assert killed == [proc]
+
+
+def test_signal_handler_kills_tree(monkeypatch):
+    killed = []
+    monkeypatch.setattr(sx, "kill_process_tree", lambda p, timeout=5: killed.append(p))
+    monkeypatch.setattr(sx, "server_process", "PROC")
+    monkeypatch.setattr(sx, "shutdown_requested", False)
+    sx.signal_handler(2, None)
+    assert killed == ["PROC"]
+
+
+def test_monitor_flags_wrong_service(monkeypatch):
+    import queue
+    monkeypatch.setattr(sx, "shutdown_requested", False)
+    monkeypatch.setattr(sx, "_output_threads", [])
+    monkeypatch.setattr(sx.requests, "get",
+                        lambda *a, **k: _Resp(200, {"service": "Other"}))
+
+    def stop(s):
+        sx.shutdown_requested = True
+    monkeypatch.setattr(sx.time, "sleep", stop)
+    q = queue.Queue()
+    sx.monitor_process_health(SimpleNamespace(poll=lambda: None), q)
+    kind, _ = q.get_nowait()
+    assert kind == "health_check_failed"
+    sx.shutdown_requested = False
