@@ -703,6 +703,8 @@
         let mlipElements = [];
         // Models reported by /api/models and the persisted selection.
         window.mlipModels = [];
+        // Largest structure the server relaxes / predicts (from /api/models).
+        window.serverMaxAtoms = null;
         const MLIP_MODEL_STORAGE_KEY = 'crystalnexus.mlipModel';
 
         // Model of the loaded structure (set from the create-supercell
@@ -722,8 +724,16 @@
             return sel && sel.value ? sel.value : null;
         }
 
-        function getSelectedModelInfo() {
-            const id = getSelectedModelId();
+        // While the load dialog is open (including after "New CIF", when the old
+        // session model is still held until a structure is chosen) the dialog's
+        // choice is what the hint / info describe.
+        function getDisplayedModelId() {
+            const modal = document.getElementById('cifModal');
+            const modalOpen = modal && modal.style.display !== 'none' && modal.style.display !== '';
+            return modalOpen ? getModalModelId() : getSelectedModelId();
+        }
+
+        function getSelectedModelInfo(id = getSelectedModelId()) {
             return window.mlipModels.find(m => m.id === id) || null;
         }
 
@@ -748,7 +758,7 @@
         function updateModelHint() {
             const hint = document.getElementById('mlip-model-hint');
             if (!hint) return;
-            const info = getSelectedModelInfo();
+            const info = getSelectedModelInfo(getModalModelId());
             if (!info) { hint.textContent = ''; return; }
             let text = 'The model is fixed for the loaded structure; to change it, load the structure again. Energies from different models are not comparable.';
             if (info.id !== 'chgnet') {
@@ -765,6 +775,14 @@
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
                 window.mlipModels = data.models || [];
+                if (Number.isFinite(data.max_relax_atoms) && data.max_relax_atoms > 0) {
+                    window.serverMaxAtoms = data.max_relax_atoms;
+                    const limitInput = document.getElementById('modal-max-atoms-limit');
+                    if (limitInput) {
+                        limitInput.max = String(Math.min(2000, window.serverMaxAtoms));
+                        if (parseInt(limitInput.value, 10) > window.serverMaxAtoms) limitInput.value = String(window.serverMaxAtoms);
+                    }
+                }
                 if (sel) {
                     sel.innerHTML = window.mlipModels.map(m =>
                         `<option value="${escapeHtml(m.id)}"${m.available ? '' : ' disabled'}>${escapeHtml(m.display_name)}${m.available ? '' : ' (not installed)'}</option>`
@@ -1539,9 +1557,6 @@
             showCrystalInfoConditionally(data);
             document.getElementById('settingsSection').classList.remove('hidden');
             document.getElementById('confirmButton').disabled = false;
-
-            // Setup expand/collapse functionality
-            setupCrystalInfoToggle();
         }
 
         function showCrystalInfoConditionally(data) {
@@ -2649,21 +2664,6 @@
             showCopyFeedback(button, result.success);
         }
 
-        async function copySiteEnergy(siteIndex) {
-            // Explicit undefined/null check -- a site energy of exactly 0 must
-            // still be copyable (see F14).
-            const value = window.currentSiteEnergies ? window.currentSiteEnergies[siteIndex] : undefined;
-            if (value === undefined || value === null) {
-                console.warn('No site energy data available for index:', siteIndex);
-                return;
-            }
-
-            const result = await smartCopyToClipboard(value.toString());
-
-            const button = document.getElementById(`copy-site-energy-${siteIndex}`);
-            showCopyFeedback(button, result.success);
-        }
-
         // Copy magnetic value functions
         async function copyTotalMagnetic() {
             // Explicit undefined/null check -- a total magnetic moment of
@@ -2678,21 +2678,6 @@
             const result = await smartCopyToClipboard(value.toFixed(3));
 
             const button = document.getElementById('copy-total-magnetic');
-            showCopyFeedback(button, result.success);
-        }
-
-        async function copySiteMagnetic(siteIndex) {
-            // Explicit undefined/null check -- a site magnetic moment of
-            // exactly 0 must still be copyable (see F14).
-            const value = window.currentMagneticData?.siteMagnetic ? window.currentMagneticData.siteMagnetic[siteIndex] : undefined;
-            if (value === undefined || value === null) {
-                console.warn('No site magnetic data available for index:', siteIndex);
-                return;
-            }
-
-            const result = await smartCopyToClipboard(value.toFixed(3));
-
-            const button = document.getElementById(`copy-site-magnetic-${siteIndex}`);
             showCopyFeedback(button, result.success);
         }
 
@@ -2814,7 +2799,8 @@
 
             // Fallback: Extract from DOM
             try {
-                const formulaElement = document.querySelector('div strong:contains("Formula:") + span, div:contains("Formula:")');
+                const formulaElement = Array.from(document.querySelectorAll('#main-crystal-info div'))
+                    .find(d => d.textContent.includes('Formula:'));
                 if (formulaElement) {
                     const text = formulaElement.textContent || formulaElement.innerText;
                     const match = text.match(/Formula:\s*(.+?)(?:\s|$)/);
@@ -3218,7 +3204,11 @@ Crystal system: ${data.crystal_system}`;
                 updateStatusDisplay('energy', 'calculating');
                 updateStatusDisplay('magnetic', 'calculating');
 
-                const fmax = parseFloat(document.getElementById('fmax-input').value);
+                // Clamp to the server's accepted range (0.01 - 1.0 eV/A)
+                const fmaxInput = document.getElementById('fmax-input');
+                let fmax = parseFloat(fmaxInput.value);
+                fmax = Number.isFinite(fmax) ? Math.min(1.0, Math.max(0.01, fmax)) : 0.01;
+                fmaxInput.value = String(fmax);
                 const maxSteps = parseInt(document.getElementById('max-steps-input').value);
                 const optimizer = document.getElementById('optimizer-input').value;
 
@@ -3652,13 +3642,13 @@ Crystal system: ${data.crystal_system}`;
         }
 
         function validateAtomCount(totalAtoms) {
-            // While the start dialog is open its own limit applies; the
-            // sidebar input is only used outside the dialog.
-            const sidebarMaxAtomsInput = document.getElementById('max-atoms-limit');
-            const modalOpen = document.getElementById('cifModal').style.display !== 'none';
-            const maxAtoms = (!modalOpen && sidebarMaxAtomsInput)
-                ? (parseInt(sidebarMaxAtomsInput.value, 10) || 200)
-                : readIntInput('modal-max-atoms-limit', 50, 2000, 200);
+            // The dialog's limit applies, but never above what the server accepts.
+            const serverMax = window.serverMaxAtoms || 2000;
+            if (totalAtoms > serverMax) {
+                showModalError(`Total atoms (${totalAtoms}) exceeds the server limit (${serverMax}). Please reduce the supercell dimensions.`);
+                return false;
+            }
+            const maxAtoms = readIntInput('modal-max-atoms-limit', 50, Math.max(50, Math.min(2000, serverMax)), 200);
 
             if (totalAtoms > maxAtoms) {
                 showModalError(`Total atoms (${totalAtoms}) exceeds the system limit (${maxAtoms}). Please reduce the supercell dimensions or increase the limit in the Advanced settings.`);
@@ -3793,11 +3783,6 @@ Crystal system: ${data.crystal_system}`;
                 loadElementLabels();
 
                 // Enable reset button
-                const resetBtn = document.getElementById('reset-btn');
-                if (resetBtn) {
-                    resetBtn.disabled = false;
-                }
-
                 // Initialize 3D viewer (mock for now)
                 initializeViewer();
 
@@ -4012,7 +3997,7 @@ Crystal system: ${data.crystal_system}`;
             }
 
             const mlipOptions = mlipElements.map(element =>
-                `<option value="${element}">${element}</option>`
+                `<option value="${escapeHtml(element)}">${escapeHtml(element)}</option>`
             ).join('');
 
             operationsElement.innerHTML = `
@@ -4052,7 +4037,7 @@ Crystal system: ${data.crystal_system}`;
                         <label for="element-dropdown">Select Atom to Modify:</label>
                         <select id="element-dropdown">
                             <option value="">Choose an atom...</option>
-                            ${labels.map(label => `<option value="${label}">${label}</option>`).join('')}
+                            ${labels.map(label => `<option value="${escapeHtml(label)}">${escapeHtml(label)}</option>`).join('')}
                         </select>
                     </div>
                     
@@ -4207,7 +4192,7 @@ Crystal system: ${data.crystal_system}`;
             if (atomDropdown) {
                 const previousValue = atomDropdown.value;
                 atomDropdown.innerHTML = '<option value="">Choose an atom...</option>' +
-                    labels.map(label => `<option value="${label}">${label}</option>`).join('');
+                    labels.map(label => `<option value="${escapeHtml(label)}">${escapeHtml(label)}</option>`).join('');
                 atomDropdown.value = labels.includes(previousValue) ? previousValue : '';
             }
 
@@ -4310,7 +4295,7 @@ Crystal system: ${data.crystal_system}`;
             const previousValue = operationSelect.value;
             const filteredOptions = mlipElements
                 .filter(element => element !== excludedElement)
-                .map(element => `<option value="${element}">${element}</option>`)
+                .map(element => `<option value="${escapeHtml(element)}">${escapeHtml(element)}</option>`)
                 .join('');
 
             operationSelect.innerHTML = `
@@ -4327,6 +4312,7 @@ Crystal system: ${data.crystal_system}`;
                 : '';
         }
 
+        // Resolves true only when the list was loaded, so callers can retry later.
         async function loadInsertableElements() {
             const dropdown = document.getElementById('insert-element');
             const infoDiv = document.getElementById('insert-void-info');
@@ -4336,11 +4322,12 @@ Crystal system: ${data.crystal_system}`;
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(withModel({ session_id: window.sessionId }))
                 });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
 
                 dropdown.innerHTML = '<option value="">Choose an element to insert...</option>';
                 data.insertable_elements.forEach(el => {
-                    dropdown.innerHTML += `<option value="${el}">${el}</option>`;
+                    dropdown.innerHTML += `<option value="${escapeHtml(el)}">${escapeHtml(el)}</option>`;
                 });
 
                 if (data.max_void_radius) {
@@ -4348,9 +4335,11 @@ Crystal system: ${data.crystal_system}`;
                 } else {
                     infoDiv.textContent = '';
                 }
+                return true;
             } catch (error) {
                 dropdown.innerHTML = '<option value="">Failed to load elements</option>';
                 console.error('Error loading insertable elements:', error);
+                return false;
             }
         }
 
@@ -4602,6 +4591,10 @@ Crystal system: ${data.crystal_system}`;
                         dropdown.appendChild(option);
                     });
                     dropdown.disabled = false;
+                    // Remember which candidate list filled the dropdown: an Auto
+                    // sweep replaces window.insertionCandidates (even when
+                    // cancelled), leaving the dropdown out of sync with it.
+                    window.insertionCandidatesDropdownSource = window.insertionCandidates;
                     showNotification(`Found and evaluated ${window.insertionCandidates.length} potential sites.`, 'success');
                 } else {
                     dropdown.innerHTML = `<option value="">${escapeHtml(result.message || 'Evaluation failed')}</option>`;
@@ -4660,8 +4653,7 @@ Crystal system: ${data.crystal_system}`;
                     modifyWorkflow.style.display = 'none';
                     insertWorkflow.style.display = 'block';
                     if (!insertableElementsLoaded) {
-                        await loadInsertableElements();
-                        insertableElementsLoaded = true;
+                        insertableElementsLoaded = await loadInsertableElements();
                     }
                 } else {
                     tabInsert.classList.remove('active');
@@ -4738,7 +4730,7 @@ Crystal system: ${data.crystal_system}`;
                 insertCandidateDropdown.value = '';
                 if (this.checked) {
                     insertManualSelector.style.display = 'block';
-                    if (insertElementDropdown.value && window.insertionCandidates && window.insertionCandidates.length === 0) {
+                    if (insertElementDropdown.value && window.insertionCandidatesDropdownSource !== window.insertionCandidates) {
                         loadInsertCandidates(insertElementDropdown.value);
                     }
                 }
@@ -7075,46 +7067,6 @@ Apply the best ${actionLabel} anyway?`);
             }, 3000);
         }
 
-        function setupCrystalInfoToggle() {
-            const crystalInfoElement = document.getElementById('crystalInfo');
-            const toggleElement = document.getElementById('expandToggle');
-
-            if (!crystalInfoElement || !toggleElement) return;
-
-            // Add click handlers for both the toggle button and the summary area
-            const toggleHandler = function () {
-                if (crystalInfoElement.classList.contains('summary')) {
-                    // Expand to detailed view
-                    crystalInfoElement.classList.remove('summary');
-                    crystalInfoElement.classList.add('detailed');
-                    toggleElement.textContent = '▲ Collapse';
-                } else {
-                    // Collapse to summary view
-                    crystalInfoElement.classList.remove('detailed');
-                    crystalInfoElement.classList.add('summary');
-                    toggleElement.textContent = '▼ Details';
-                }
-            };
-
-            // Remove existing listeners to prevent duplicates
-            const newToggleElement = toggleElement.cloneNode(true);
-            toggleElement.parentNode.replaceChild(newToggleElement, toggleElement);
-
-            // Add click listener to toggle button
-            newToggleElement.addEventListener('click', function (e) {
-                e.stopPropagation();
-                toggleHandler();
-            });
-
-            // Add click listener to the summary area (only when in summary mode)
-            crystalInfoElement.addEventListener('click', function (e) {
-                if (crystalInfoElement.classList.contains('summary') &&
-                    !e.target.classList.contains('expand-toggle')) {
-                    toggleHandler();
-                }
-            });
-        }
-
         // Analysis Modal Functions
         window.currentAnalysisData = null;
 
@@ -7414,7 +7366,7 @@ Apply the best ${actionLabel} anyway?`);
 
             if (!data || !data.initial_prediction || !data.final_prediction) {
                 dlog('No energy data available');
-                energyTableBody.innerHTML = '<tr><td colspan="4">No energy data available</td></tr>';
+                energyTableBody.innerHTML = '<tr><td colspan="3">No energy data available</td></tr>';
                 energyInsights.innerHTML = '<p>Energy analysis requires completed relaxation calculation.</p>';
                 return;
             }
@@ -7555,9 +7507,9 @@ Apply the best ${actionLabel} anyway?`);
             settingsEl.innerHTML = `
                 <div>Force Tolerance: ${data.relaxation_info?.fmax || 'N/A'} eV/Å</div>
                 <div>Max Steps: ${data.relaxation_info?.max_steps || 'N/A'}</div>
-                <div>Optimizer: ${data.relaxation_info?.optimizer || 'N/A'}</div>
+                <div>Optimizer: ${escapeHtml(String(data.relaxation_info?.optimizer || 'N/A'))}</div>
                 <div>Model: ${escapeHtml(data.model_info?.display_name || 'N/A')}${data.model_info?.version ? ' v' + escapeHtml(String(data.model_info.version)) : ''}</div>
-                <div>Device: ${data.model_info?.device || 'CPU'}</div>
+                <div>Device: ${escapeHtml(String(data.model_info?.device || 'CPU'))}</div>
             `;
         }
 
@@ -7573,6 +7525,9 @@ Apply the best ${actionLabel} anyway?`);
             if (!data.trajectory_data?.energies?.length) {
                 dlog('No trajectory data available');
                 tableBody.innerHTML = '<tr><td colspan="4">Trajectory data not available</td></tr>';
+                // Still refresh the other tables so they cannot keep stale rows.
+                populateAtomicPropertiesTable(data);
+                populateStressDetailTable(data);
                 return;
             }
 
@@ -7738,7 +7693,10 @@ Apply the best ${actionLabel} anyway?`);
             const energies = data.trajectory_data?.energies || [];
 
             if (energies.length === 0) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
                 ctx.fillText('No energy data available', 20, canvas.height / 2);
+                const energyStats = document.getElementById('energy-chart-stats');
+                if (energyStats) energyStats.innerHTML = '';
                 return;
             }
 
@@ -7774,7 +7732,7 @@ Apply the best ${actionLabel} anyway?`);
             // X-axis (Steps) labels
             const stepInterval = Math.max(1, Math.floor(energies.length / 5));
             for (let i = 0; i < energies.length; i += stepInterval) {
-                const x = leftPadding + (i / (energies.length - 1)) * chartWidth;
+                const x = leftPadding + (i / Math.max(1, energies.length - 1)) * chartWidth;
                 const y = canvas.height - bottomPadding + 15;
 
                 // Draw tick mark
@@ -7826,7 +7784,7 @@ Apply the best ${actionLabel} anyway?`);
             ctx.beginPath();
 
             energies.forEach((energy, step) => {
-                const x = leftPadding + (step / (energies.length - 1)) * chartWidth;
+                const x = leftPadding + (step / Math.max(1, energies.length - 1)) * chartWidth;
                 const y = canvas.height - bottomPadding - ((energy - minEnergy) / energyRange) * chartHeight;
 
                 if (step === 0) {
@@ -7841,7 +7799,7 @@ Apply the best ${actionLabel} anyway?`);
             // Draw data points for key points (without overlapping text values)
             ctx.fillStyle = '#3498db';
             energies.forEach((energy, step) => {
-                const x = leftPadding + (step / (energies.length - 1)) * chartWidth;
+                const x = leftPadding + (step / Math.max(1, energies.length - 1)) * chartWidth;
                 const y = canvas.height - bottomPadding - ((energy - minEnergy) / energyRange) * chartHeight;
 
                 // Draw points for first, last, and min/max points
@@ -7863,7 +7821,10 @@ Apply the best ${actionLabel} anyway?`);
             const forceMagnitudes = data.trajectory_data?.force_magnitudes || [];
 
             if (forceMagnitudes.length === 0) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
                 ctx.fillText('No force data available', 20, canvas.height / 2);
+                const forceStats = document.getElementById('force-chart-stats');
+                if (forceStats) forceStats.innerHTML = '';
                 return;
             }
 
@@ -7902,7 +7863,7 @@ Apply the best ${actionLabel} anyway?`);
             // X-axis (Steps) labels
             const stepInterval = Math.max(1, Math.floor(maxForces.length / 5));
             for (let i = 0; i < maxForces.length; i += stepInterval) {
-                const x = leftPadding + (i / (maxForces.length - 1)) * chartWidth;
+                const x = leftPadding + (i / Math.max(1, maxForces.length - 1)) * chartWidth;
                 const y = canvas.height - bottomPadding + 15;
 
                 // Draw tick mark
@@ -7954,7 +7915,7 @@ Apply the best ${actionLabel} anyway?`);
             ctx.beginPath();
 
             maxForces.forEach((force, step) => {
-                const x = leftPadding + (step / (maxForces.length - 1)) * chartWidth;
+                const x = leftPadding + (step / Math.max(1, maxForces.length - 1)) * chartWidth;
                 const y = canvas.height - bottomPadding - ((force - minForce) / forceRange) * chartHeight;
 
                 if (step === 0) {
@@ -7969,7 +7930,7 @@ Apply the best ${actionLabel} anyway?`);
             // Draw data points for key points (without overlapping text values)
             ctx.fillStyle = '#e74c3c';
             maxForces.forEach((force, step) => {
-                const x = leftPadding + (step / (maxForces.length - 1)) * chartWidth;
+                const x = leftPadding + (step / Math.max(1, maxForces.length - 1)) * chartWidth;
                 const y = canvas.height - bottomPadding - ((force - minForce) / forceRange) * chartHeight;
 
                 // Draw points for first, last, and min/max points
@@ -9279,7 +9240,7 @@ Apply the best ${actionLabel} anyway?`);
 
         function showMlipInfo() {
             // Both models are always described; the selected one comes first.
-            const isMace = (getSelectedModelId() || '').startsWith('mace');
+            const isMace = (getDisplayedModelId() || '').startsWith('mace');
             const chgnetEl = document.getElementById('mlip-info-chgnet');
             const maceEl = document.getElementById('mlip-info-mace');
             maceEl.style.display = 'block';

@@ -409,3 +409,129 @@ def test_backend_reset_failure_keeps_ui_in_sync(app):
     page.wait_for_timeout(1000)
     # Server still holds the 7-atom structure; the UI must not pretend otherwise.
     assert atom_count(page) == 7
+
+
+# ---------------------------------------------------------------------------
+# Server atom limit, 429 handling, partial Auto sweeps, small fixes
+# ---------------------------------------------------------------------------
+
+def test_supercell_above_server_atom_limit_is_rejected_in_dialog(app):
+    page = app
+    page.select_option("#sampleFileSelect", SAMPLE_CU)
+    expect(page.locator("#confirmButton")).to_be_enabled()
+    # 4 atoms x 6 x 6 x 6 = 864, above the server's MAX_RELAX_ATOMS (400)
+    for axis in "abc":
+        page.fill(f"#supercell-{axis}", "6")
+    page.click("#confirmButton")
+    expect(page.locator("#modalError")).to_contain_text("server limit")
+    expect(page.locator("#cifModal")).to_be_visible()
+    assert page.evaluate("document.querySelector('#modal-max-atoms-limit').max") == "400"
+
+
+def test_auto_sweep_retries_after_429(app):
+    page = app
+    page.log.allow_errors = True  # the injected 429 is the point
+    load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
+    run_manual_op(page, "Cu0", "Ni")
+    calls = []
+
+    def limited_once(route):
+        calls.append(1)
+        if len(calls) == 1:
+            route.fulfill(status=429, headers={"Retry-After": "1"},
+                          json={"detail": "Rate limit exceeded"})
+        else:
+            route.continue_()
+
+    page.route("**/api/evaluate-candidate-energies", limited_once)
+    start_auto_sweep(page, "Cu", "Ni")
+    page.wait_for_function("window.atomicOperations.length === 2", timeout=60_000)
+    assert len(calls) >= 2
+    assert not [d for d in page.log.dialogs if "failed" in d[1]]
+
+
+def test_auto_sweep_with_failed_candidates_asks_before_applying(app):
+    page = app
+    load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
+    run_manual_op(page, "Cu0", "Ni")
+
+    def fail_first(route):
+        response = route.fetch()
+        body = response.json()
+        body["results"][0]["error"] = "boom"
+        body["results"][0]["energy"] = None
+        route.fulfill(response=response, json=body)
+
+    page.route("**/api/evaluate-candidate-energies", fail_first)
+    start_auto_sweep(page, "Cu", "Ni")
+    # The page fixture accepts every confirm(); the question itself must be asked.
+    page.wait_for_function("window.atomicOperations.length === 2", timeout=60_000)
+    asked = [m for kind, m in page.log.dialogs
+             if kind == "confirm" and "candidate calculations failed" in m]
+    assert asked, page.log.dialogs
+    expect(page.locator("#calculation-report")).to_be_visible()
+
+
+def test_insertable_elements_reload_after_failed_load(app):
+    page = app
+    page.log.allow_errors = True
+    load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
+    state = {"n": 0}
+
+    def fail_once(route):
+        state["n"] += 1
+        if state["n"] == 1:
+            route.fulfill(status=500, json={"detail": "boom"})
+        else:
+            route.continue_()
+
+    page.route("**/api/get-insertable-elements", fail_once)
+    page.click("#tab-insert")
+    expect(page.locator("#insert-element")).to_contain_text("Failed to load elements")
+    page.click("#tab-modify")
+    page.click("#tab-insert")
+    page.wait_for_function("document.querySelector('#insert-element').options.length > 1")
+
+
+def test_fmax_input_is_clamped_to_server_minimum(app):
+    page = app
+    load_sample(page, SAMPLE_CU, supercell=(1, 1, 1))
+    page.evaluate("document.querySelector('#fmax-input').value = '0.001'")
+    with page.expect_request("**/api/relax") as info:
+        analyze(page)
+    assert json.loads(info.value.post_data)["fmax"] == 0.01
+    assert page.evaluate("document.querySelector('#fmax-input').value") == "0.01"
+
+
+def test_details_charts_handle_single_point_and_empty_data(app):
+    page = app
+    load_sample(page, SAMPLE_CU, supercell=(1, 1, 1))
+    html = page.evaluate("""() => {
+        drawEnergyChart({trajectory_data: {energies: [-3.5], force_magnitudes: [[0.1, 0.2]]}});
+        drawForceChart({trajectory_data: {energies: [-3.5], force_magnitudes: [[0.1, 0.2]]}});
+        return document.getElementById('energy-chart-stats').innerHTML +
+               document.getElementById('force-chart-stats').innerHTML;
+    }""")
+    assert "NaN" not in html and "-3.5" in html
+    # An empty data set must clear the previous statistics
+    page.evaluate("drawEnergyChart({trajectory_data: {energies: []}}); "
+                  "drawForceChart({trajectory_data: {force_magnitudes: []}});")
+    assert page.evaluate("document.getElementById('energy-chart-stats').innerHTML") == ""
+    assert page.evaluate("document.getElementById('force-chart-stats').innerHTML") == ""
+
+
+def test_relax_null_energy_shows_na(app):
+    page = app
+    load_sample(page, SAMPLE_CU, supercell=(1, 1, 1))
+
+    def mangle(route):
+        response = route.fetch()
+        body = response.json()
+        body["final_prediction"]["energy_eV_per_atom"] = None
+        body["final_prediction"]["total_energy_eV"] = None
+        route.fulfill(response=response, json=body)
+
+    page.route("**/api/relax", mangle)
+    page.click("#analyze-btn", force=True)
+    expect(page.locator("#analysisActions")).to_be_visible(timeout=60_000)
+    expect(page.locator("#energy-summary")).to_contain_text("N/A")

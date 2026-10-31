@@ -1953,7 +1953,8 @@ async def get_element_labels(data: dict):
 @app.get("/api/models")
 async def get_models():
     """List registered ML potentials (no model is loaded)."""
-    return {"status": "success", "default": default_model_id(), "models": list_models()}
+    return {"status": "success", "default": default_model_id(), "models": list_models(),
+            "max_relax_atoms": MAX_RELAX_ATOMS}
 
 
 @app.get("/api/elements")
