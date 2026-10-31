@@ -30,6 +30,7 @@ e3nn==0.4.4                           # pinned by mace-torch; do not upgrade ind
 
 # ===== Test and maintenance tools =====
 pytest
+pytest-playwright                  # real-browser E2E tests (run `playwright install chromium`)
 httpx
 psutil
 pip-tools

@@ -138,3 +138,20 @@ def fake_backends(monkeypatch):
     monkeypatch.setitem(_mlip_registry.MODEL_REGISTRY, "fake-narrow", FakeNarrowBackend)
     monkeypatch.setenv("CRYSTALNEXUS_DEFAULT_MODEL", "fake-emt")
     return FakeBackend, FakeMagmomBackend
+
+
+# ---------------------------------------------------------------------------
+# E2E opt-in: browser tests only run with `-m e2e` (or RUN_E2E=1)
+# ---------------------------------------------------------------------------
+
+import os  # noqa: E402
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip tests marked ``e2e`` unless explicitly requested."""
+    if os.getenv("RUN_E2E") == "1" or "e2e" in (config.getoption("-m") or ""):
+        return
+    skip_e2e = pytest.mark.skip(reason="e2e tests are opt-in: use `-m e2e` or RUN_E2E=1")
+    for item in items:
+        if "e2e" in item.keywords:
+            item.add_marker(skip_e2e)
