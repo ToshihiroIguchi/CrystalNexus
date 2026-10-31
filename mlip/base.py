@@ -44,6 +44,11 @@ RESULT_KEYS = (
 )
 
 
+# Elements covered by the MPtrj training set shared by CHGNet and MACE-MP-0:
+# Z = 1-83 and 89-94 (89 elements; no Po-Ac, no Z > 94).
+MPTRJ_ATOMIC_NUMBERS = tuple(list(range(1, 84)) + list(range(89, 95)))
+
+
 class MLIPError(Exception):
     """Base class for registry/backend selection errors."""
 
@@ -145,7 +150,11 @@ class MLIPBackend(ABC):
         """Create the ASE calculator (called once, under the lock)."""
 
     async def get_calculator(self):
-        """Shared ASE calculator (lazy, double-checked asyncio.Lock)."""
+        """Shared ASE calculator (lazy, double-checked asyncio.Lock).
+
+        The one calculator is shared across requests; this is safe only because
+        every use runs on the single-worker inference_executor (mlip/executor.py).
+        """
         if self._calculator is None:
             async with self._lock:
                 if self._calculator is None:

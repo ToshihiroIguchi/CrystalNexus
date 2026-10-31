@@ -82,9 +82,15 @@ def test_static_mace_elements_exclude_po_include_pu():
 
 def test_allowed_elements_is_union_of_available_models(monkeypatch):
     elements = main._initial_allowed_elements()
-    assert "Pu" in elements and "Cu" in elements  # Pu only via MACE
+    assert "Pu" in elements and "Cu" in elements
+    # CHGNet shares MACE's MPtrj element set, so only a registry without it
+    # can shrink the union; unavailable models contribute nothing.
     monkeypatch.setattr(MACEBackend, "is_available", classmethod(lambda cls: False))
-    assert "Pu" not in main._initial_allowed_elements()
+    assert "Pu" in main._initial_allowed_elements()
+    monkeypatch.setattr(main, "MODEL_REGISTRY", {"fake": type("F", (), {
+        "is_available": classmethod(lambda cls: True),
+        "supported_elements": lambda self: ["Cu"]})})
+    assert main._initial_allowed_elements() == {"Cu"}
 
 
 # -- model routing and errors ------------------------------------------
@@ -408,3 +414,51 @@ def test_reset_session_structure_keeps_model(client, fake_backends):
     assert r.status_code == 200
     assert session_manager.sessions[sid]["model"] == "fake-narrow"
     assert _relax(client, sid).json()["model_info"]["id"] == "fake-narrow"
+
+
+# -- MACE load error mapping (mocked, no mace import) -------------------------
+
+@pytest.mark.parametrize("exc", [AttributeError("bad torch"), ValueError("bad config"),
+                                 ImportError("e3nn"), OSError("no net")])
+def test_mace_construct_errors_map_to_model_unavailable(monkeypatch, exc):
+    import sys
+    import types
+    from mlip.base import ModelUnavailableError
+
+    def boom(**kwargs):
+        raise exc
+
+    fake = types.ModuleType("mace.calculators")
+    fake.mace_mp = boom
+    monkeypatch.setitem(sys.modules, "mace", types.ModuleType("mace"))
+    monkeypatch.setitem(sys.modules, "mace.calculators", fake)
+    with pytest.raises(ModelUnavailableError):
+        MACEBackend()._load_sync()
+
+
+def test_mace_import_attribute_error_maps_to_model_unavailable(monkeypatch):
+    import sys
+    import types
+    from mlip.base import ModelUnavailableError
+
+    fake = types.ModuleType("mace.calculators")  # has no mace_mp -> ImportError
+    monkeypatch.setitem(sys.modules, "mace", types.ModuleType("mace"))
+    monkeypatch.setitem(sys.modules, "mace.calculators", fake)
+    with pytest.raises(ModelUnavailableError):
+        MACEBackend()._load_sync()
+
+
+def test_mace_download_failure_still_maps_to_unavailable(monkeypatch):
+    import sys
+    import types
+    from mlip.base import ModelUnavailableError
+
+    def boom(**kwargs):
+        raise RuntimeError("Model download failed")
+
+    fake = types.ModuleType("mace.calculators")
+    fake.mace_mp = boom
+    monkeypatch.setitem(sys.modules, "mace", types.ModuleType("mace"))
+    monkeypatch.setitem(sys.modules, "mace.calculators", fake)
+    with pytest.raises(ModelUnavailableError):
+        MACEBackend()._load_sync()

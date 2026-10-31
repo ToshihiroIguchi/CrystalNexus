@@ -21,8 +21,8 @@ from typing import List, Optional
 
 from pymatgen.core import Element
 
-from .base import (CAP_ENERGY, CAP_FORCES, CAP_STRESS, MLIPBackend,
-                   ModelUnavailableError)
+from .base import (CAP_ENERGY, CAP_FORCES, CAP_STRESS, MPTRJ_ATOMIC_NUMBERS,
+                   MLIPBackend, ModelUnavailableError)
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +33,9 @@ if MACE_DTYPE not in ("float32", "float64"):
     logger.warning(f"Invalid MACE_DTYPE '{MACE_DTYPE}', using float64")
     MACE_DTYPE = "float64"
 
-# Elements covered by MACE-MP-0: Z = 1-83 and 89-94 (89 elements). Used until
-# the model is loaded; a slow test checks it equals calc.models[0].atomic_numbers.
-_STATIC_ATOMIC_NUMBERS = tuple(list(range(1, 84)) + list(range(89, 95)))
+# Elements covered by MACE-MP-0 (shared MPtrj set). Used until the model is
+# loaded; a slow test checks it equals calc.models[0].atomic_numbers.
+_STATIC_ATOMIC_NUMBERS = MPTRJ_ATOMIC_NUMBERS
 
 _DOWNLOAD_HINT = (
     "MACE-MP-0 weights are not available locally and could not be downloaded. "
@@ -84,7 +84,9 @@ class MACEBackend(MLIPBackend):
     def _load_sync(self):
         try:
             from mace.calculators import mace_mp
-        except ImportError as e:
+        except (ImportError, AttributeError, ValueError, OSError) as e:
+            # Broken installs (torch/e3nn mismatch, missing DLL) fail at import
+            # with more than ImportError; report them all as "unavailable".
             raise ModelUnavailableError(f"{self.unavailable_message}: {e}")
         try:
             return mace_mp(model="medium", device=self._device,
@@ -95,6 +97,8 @@ class MACEBackend(MLIPBackend):
             raise
         except OSError as e:
             raise ModelUnavailableError(f"{_DOWNLOAD_HINT} ({e})")
+        except (ImportError, AttributeError, ValueError) as e:
+            raise ModelUnavailableError(f"{self.unavailable_message}: {e}")
 
     async def _build_calculator(self):
         # Weights may be downloaded on first use; keep that off the event loop
