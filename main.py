@@ -1121,7 +1121,7 @@ async def root(request: Request):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "service": "CrystalNexus"}
+    return {"status": "healthy", "service": "CrystalNexus", "pid": os.getpid()}
 
 def _get_session_lock(session_info: Dict) -> asyncio.Lock:
     """
