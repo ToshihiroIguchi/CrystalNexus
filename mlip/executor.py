@@ -7,9 +7,27 @@ on which model is selected.
 """
 import asyncio
 import functools
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 inference_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mlip")
+
+# Set at application shutdown so a running relaxation / elastic job stops at
+# its next observer call instead of keeping the non-daemon worker alive.
+_abort_event = threading.Event()
+
+
+def request_abort() -> None:
+    """Ask running inference jobs to stop cooperatively (idempotent)."""
+    _abort_event.set()
+
+
+def clear_abort() -> None:
+    _abort_event.clear()
+
+
+def abort_requested() -> bool:
+    return _abort_event.is_set()
 
 
 async def run_in_inference_executor(func, *args, **kwargs):

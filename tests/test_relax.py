@@ -489,3 +489,26 @@ def test_trajectory_recorder_records_force_source_max_force():
     rec()
     expected = float(np.linalg.norm(FrechetCellFilter(atoms).get_forces(), axis=1).max())
     assert rec.max_forces == [expected]
+
+
+def test_run_relaxation_aborts_when_shutdown_requested():
+    """The global abort flag (set at app shutdown) stops a running relaxation."""
+    from ase.calculators.emt import EMT
+    from mlip import executor
+
+    class _EMTWithMagmoms(EMT):
+        implemented_properties = EMT.implemented_properties + ["magmoms"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=None):
+            super().calculate(atoms, properties, system_changes or [])
+            self.results["magmoms"] = np.zeros(len(atoms))
+
+    executor.request_abort()
+    try:
+        result = main.run_relaxation(_EMTWithMagmoms(), _cu_structure(supercell=(2, 2, 2)),
+                                     fmax=0.001, steps=50, optimizer_name="FIRE",
+                                     timeout_s=1000.0, relax_cell=False)
+    finally:
+        executor.clear_abort()
+    assert result["aborted"] is True
+    assert result["optimizer_steps"] == 0

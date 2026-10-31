@@ -44,7 +44,7 @@ from mlip.chgnet_backend import CHGNetBackend
 from mlip.base import CAP_STRESS
 from mlip.registry import (is_available as _model_is_available, default_model_id,
                            list_models)
-from mlip.executor import inference_executor as _inference_executor
+from mlip.executor import inference_executor as _inference_executor, abort_requested, request_abort, clear_abort
 
 # Configuration constants - must be defined before use
 # Memory management settings
@@ -889,6 +889,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan management (startup and shutdown)"""
     # Startup
     logger.info("CrystalNexus starting up...")
+    clear_abort()
     log_session_statistics()
     # Start the periodic cleanup task
     cleanup_task = asyncio.create_task(periodic_cleanup_task())
@@ -898,6 +899,10 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("Application shutting down, performing final cleanup")
+    # Stop any running relax/elastic job so the non-daemon MLIP worker thread
+    # cannot block process exit (or --reload).
+    request_abort()
+    _inference_executor.shutdown(wait=False, cancel_futures=True)
     cleanup_task.cancel()
     try:
         await cleanup_task
@@ -2522,6 +2527,8 @@ class RelaxationWatcher:
                 "energy_eV": energy,
                 "elapsed_s": time.monotonic() - self.started_at,
             })
+        if abort_requested():
+            raise RelaxationAborted(f"aborted by shutdown at step {self.step}")
         if time.monotonic() > self.deadline:
             raise RelaxationAborted(f"time limit reached at step {self.step}")
 
