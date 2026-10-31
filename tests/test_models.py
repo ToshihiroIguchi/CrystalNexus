@@ -50,6 +50,11 @@ def test_api_models_schema(client, fake_backends):
     assert "batch" not in models["mace-mp-0-medium"]["capabilities"]
 
 
+def test_api_models_exposes_atom_limit(client, fake_backends):
+    # The start dialog uses this to cap the supercell size (F6).
+    assert client.get("/api/models").json()["max_relax_atoms"] == main.MAX_RELAX_ATOMS
+
+
 def test_api_models_marks_unavailable(client, fake_backends, monkeypatch):
     monkeypatch.setattr(MACEBackend, "is_available", classmethod(lambda cls: False))
     m = {x["id"]: x for x in client.get("/api/models").json()["models"]}["mace-mp-0-medium"]

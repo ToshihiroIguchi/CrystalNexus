@@ -1,8 +1,7 @@
 """Real-browser user-flow tests (Playwright) against the fake EMT backend.
 
-Tests marked ``xfail(strict=True, reason="Fn: ...")`` document KNOWN frontend
-bugs; the PR that fixes a bug must remove the matching marker (strict xfail
-turns an unexpected pass into a failure, so it cannot be forgotten).
+Known frontend bugs are documented with ``xfail(strict=True, reason="Fn: ...")``
+until fixed; the PR that fixes a bug removes the matching marker.
 """
 import io
 import json
@@ -123,8 +122,6 @@ def test_relax_with_elastic_shows_elastic_panel(app):
 # 💾 download of the current CIF in three states
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason="F1: downloadCurrentCIF/generateCIFFile only calls "
-                   "/api/generate-relaxed-structure-cif, which 404s for an unrelaxed structure")
 def test_download_current_cif_unrelaxed(app):
     page = app
     load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
@@ -143,8 +140,6 @@ def test_download_current_cif_after_relax(app):
     assert a == pytest.approx(2 * 3.5897, abs=0.01)
 
 
-@pytest.mark.xfail(strict=True, reason="F1: after relax + edit the stored relaxed structure is "
-                   "invalidated (404), so 💾 cannot download the edited structure")
 def test_download_current_cif_after_relax_and_edit(app):
     page = app
     load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
@@ -177,8 +172,6 @@ def _visible(page, selector) -> bool:
         "getComputedStyle(e).display !== 'none' && e.offsetParent !== null; }", selector)
 
 
-@pytest.mark.xfail(strict=True, reason="F3: New CIF leaves the elastic result panel and the open "
-                   "energy/elastic detail drawers of the old structure visible")
 def test_new_cif_hides_elastic_drawers_and_report(app):
     page = app
     load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
@@ -206,8 +199,6 @@ def test_new_cif_hides_elastic_drawers_and_report(app):
     expect(page.locator("#analysisActions")).to_be_hidden()
 
 
-@pytest.mark.xfail(strict=True, reason="F3: New CIF leaves the 'Structure modified - Analysis "
-                   "required' banner (#structure-status) of the old structure visible")
 def test_new_cif_hides_structure_status_banner(app):
     page = app
     load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
@@ -274,8 +265,6 @@ def test_cancel_during_auto_sweep(app):
     page.wait_for_function("window.atomicOperations.length === 2", timeout=60_000)
 
 
-@pytest.mark.xfail(strict=True, reason="F4: Reset during an Auto sweep leaves the progress box "
-                   "and Cancel button visible")
 def test_reset_during_auto_sweep(app):
     page = app
     load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
@@ -320,8 +309,6 @@ def test_invalid_upload_shows_error_and_valid_upload_works(app, tmp_path):
     assert wait
 
 
-@pytest.mark.xfail(strict=True, reason="F14: a failed upload does not clear the file input, so the "
-                   "browser does not fire change when the same (now fixed) file is chosen again")
 def test_failed_upload_clears_file_input_so_same_file_can_be_reselected(app, tmp_path):
     page = app
     page.log.allow_errors = True
@@ -337,8 +324,6 @@ def test_failed_upload_clears_file_input_so_same_file_can_be_reselected(app, tmp
 # Relax edge cases (mocked responses / held requests)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason="F2: a null energy in the /api/relax response throws "
-                   "(null.toFixed) in displayEnergyResults and aborts result display")
 def test_relax_response_with_null_energy_is_handled(app):
     page = app
     load_sample(page, SAMPLE_CU, supercell=(1, 1, 1))
@@ -360,8 +345,6 @@ def test_relax_response_with_null_energy_is_handled(app):
     expect(page.locator("#analysisActions")).to_be_visible()
 
 
-@pytest.mark.xfail(strict=True, reason="F8: the SSE EventSource of an abandoned relax keeps updating "
-                   "the progress status / charts of the newly loaded structure")
 def test_new_cif_mid_relax_does_not_pollute_new_state(app):
     page = app
     load_sample(page, SAMPLE_CU, supercell=(1, 1, 1))
@@ -396,8 +379,6 @@ def test_new_cif_mid_relax_does_not_pollute_new_state(app):
 # Reset races
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason="F9: Reset while a Manual edit is in flight lets the late "
-                   "edit result overwrite the freshly reset structure")
 def test_reset_while_manual_edit_in_flight(app):
     page = app
     load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
@@ -416,9 +397,6 @@ def test_reset_while_manual_edit_in_flight(app):
     assert page.evaluate("window.atomicOperations.length") == 0
 
 
-@pytest.mark.xfail(strict=True, reason="F10: when the backend reset fails the frontend still "
-                   "resets itself, so the UI shows the original structure while the server "
-                   "keeps the edited one")
 def test_backend_reset_failure_keeps_ui_in_sync(app):
     page = app
     page.log.allow_errors = True  # the injected 500 and the app's console.error
@@ -431,3 +409,210 @@ def test_backend_reset_failure_keeps_ui_in_sync(app):
     page.wait_for_timeout(1000)
     # Server still holds the 7-atom structure; the UI must not pretend otherwise.
     assert atom_count(page) == 7
+
+
+# ---------------------------------------------------------------------------
+# Server atom limit, 429 handling, partial Auto sweeps, small fixes
+# ---------------------------------------------------------------------------
+
+def test_supercell_above_server_atom_limit_is_rejected_in_dialog(app):
+    page = app
+    page.select_option("#sampleFileSelect", SAMPLE_CU)
+    expect(page.locator("#confirmButton")).to_be_enabled()
+    # 4 atoms x 6 x 6 x 6 = 864, above the server's MAX_RELAX_ATOMS (400)
+    for axis in "abc":
+        page.fill(f"#supercell-{axis}", "6")
+    page.click("#confirmButton")
+    expect(page.locator("#modalError")).to_contain_text("server limit")
+    expect(page.locator("#cifModal")).to_be_visible()
+    server_max = page.evaluate("fetch('/api/models').then(r => r.json()).then(d => d.max_relax_atoms)")
+    assert page.evaluate("document.querySelector('#modal-max-atoms-limit').max") == str(server_max)
+
+
+def test_auto_sweep_retries_after_429(app):
+    page = app
+    page.log.allow_errors = True  # the injected 429 is the point
+    load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
+    run_manual_op(page, "Cu0", "Ni")
+    calls = []
+
+    def limited_once(route):
+        calls.append(1)
+        if len(calls) == 1:
+            route.fulfill(status=429, headers={"Retry-After": "1"},
+                          json={"detail": "Rate limit exceeded"})
+        else:
+            route.continue_()
+
+    page.route("**/api/evaluate-candidate-energies", limited_once)
+    start_auto_sweep(page, "Cu", "Ni")
+    page.wait_for_function("window.atomicOperations.length === 2", timeout=60_000)
+    assert len(calls) >= 2
+    assert not [d for d in page.log.dialogs if "failed" in d[1]]
+
+
+def test_auto_sweep_with_failed_candidates_asks_before_applying(app):
+    page = app
+    load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
+    run_manual_op(page, "Cu0", "Ni")
+
+    def fail_first(route):
+        response = route.fetch()
+        body = response.json()
+        body["results"][0]["error"] = "boom"
+        body["results"][0]["energy"] = None
+        route.fulfill(response=response, json=body)
+
+    page.route("**/api/evaluate-candidate-energies", fail_first)
+    start_auto_sweep(page, "Cu", "Ni")
+    # The page fixture accepts every confirm(); the question itself must be asked.
+    page.wait_for_function("window.atomicOperations.length === 2", timeout=60_000)
+    asked = [m for kind, m in page.log.dialogs
+             if kind == "confirm" and "candidate calculations failed" in m]
+    assert asked, page.log.dialogs
+    expect(page.locator("#calculation-report")).to_be_visible()
+
+
+def test_insertable_elements_reload_after_failed_load(app):
+    page = app
+    page.log.allow_errors = True
+    load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
+    state = {"n": 0}
+
+    def fail_once(route):
+        state["n"] += 1
+        if state["n"] == 1:
+            route.fulfill(status=500, json={"detail": "boom"})
+        else:
+            route.continue_()
+
+    page.route("**/api/get-insertable-elements", fail_once)
+    page.click("#tab-insert")
+    expect(page.locator("#insert-element")).to_contain_text("Failed to load elements")
+    page.click("#tab-modify")
+    page.click("#tab-insert")
+    page.wait_for_function("document.querySelector('#insert-element').options.length > 1")
+
+
+def test_fmax_input_is_clamped_to_server_minimum(app):
+    page = app
+    load_sample(page, SAMPLE_CU, supercell=(1, 1, 1))
+    page.evaluate("document.querySelector('#fmax-input').value = '0.001'")
+    with page.expect_request("**/api/relax") as info:
+        analyze(page)
+    assert json.loads(info.value.post_data)["fmax"] == 0.01
+    assert page.evaluate("document.querySelector('#fmax-input').value") == "0.01"
+
+
+def test_details_charts_handle_single_point_and_empty_data(app):
+    page = app
+    load_sample(page, SAMPLE_CU, supercell=(1, 1, 1))
+    html = page.evaluate("""() => {
+        drawEnergyChart({trajectory_data: {energies: [-3.5], force_magnitudes: [[0.1, 0.2]]}});
+        drawForceChart({trajectory_data: {energies: [-3.5], force_magnitudes: [[0.1, 0.2]]}});
+        return document.getElementById('energy-chart-stats').innerHTML +
+               document.getElementById('force-chart-stats').innerHTML;
+    }""")
+    assert "NaN" not in html and "-3.5" in html
+    # An empty data set must clear the previous statistics
+    page.evaluate("drawEnergyChart({trajectory_data: {energies: []}}); "
+                  "drawForceChart({trajectory_data: {force_magnitudes: []}});")
+    assert page.evaluate("document.getElementById('energy-chart-stats').innerHTML") == ""
+    assert page.evaluate("document.getElementById('force-chart-stats').innerHTML") == ""
+
+
+def test_relax_null_energy_shows_na(app):
+    page = app
+    load_sample(page, SAMPLE_CU, supercell=(1, 1, 1))
+
+    def mangle(route):
+        response = route.fetch()
+        body = response.json()
+        body["final_prediction"]["energy_eV_per_atom"] = None
+        body["final_prediction"]["total_energy_eV"] = None
+        route.fulfill(response=response, json=body)
+
+    page.route("**/api/relax", mangle)
+    page.click("#analyze-btn", force=True)
+    expect(page.locator("#analysisActions")).to_be_visible(timeout=60_000)
+    expect(page.locator("#energy-summary")).to_contain_text("N/A")
+
+
+def test_exports_tolerate_null_energy(app):
+    page = app
+    load_sample(page, SAMPLE_CU, supercell=(1, 1, 1))
+
+    def mangle(route):
+        response = route.fetch()
+        body = response.json()
+        body["final_prediction"]["energy_eV_per_atom"] = None
+        body["final_prediction"]["total_energy_eV"] = None
+        route.fulfill(response=response, json=body)
+
+    page.route("**/api/relax", mangle)
+    page.click("#analyze-btn", force=True)
+    expect(page.locator("#analysisActions")).to_be_visible(timeout=60_000)
+    text = page.evaluate("generateEnergyMagneticText()")
+    assert "N/A" in text and "NaN" not in text
+    # Headless Chromium denies clipboard writes; only a TypeError would matter.
+    page.log.allow_errors = True
+    page.evaluate("copyToSpreadsheet()")
+    page.wait_for_timeout(500)
+    assert not page.log.page_errors
+    assert not [e for e in page.log.console_errors if "TypeError" in e]
+
+
+def test_download_does_not_pass_off_unrelaxed_cif_when_relaxed_fetch_fails(app):
+    page = app
+    page.log.allow_errors = True
+    load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
+    analyze(page)
+    page.route("**/api/generate-relaxed-structure-cif", lambda route: route.fulfill(
+        status=500, json={"detail": "boom"}))
+    try:
+        with page.expect_download(timeout=3_000):
+            page.click("#downloadCifBtn")
+        downloaded = True
+    except PlaywrightTimeoutError:
+        downloaded = False
+    assert not downloaded
+
+
+def test_failed_reset_does_not_cancel_running_auto_sweep(app):
+    page = app
+    page.log.allow_errors = True
+    load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
+    run_manual_op(page, "Cu0", "Ni")
+    hold = Hold(page, "**/api/evaluate-candidate-energies")
+    start_auto_sweep(page, "Cu", "Ni")
+    hold.wait_held(page)
+    page.route("**/api/reset-session-structure", lambda route: route.fulfill(
+        status=500, json={"detail": "boom"}))
+    page.click("#reset-operations-btn")
+    page.wait_for_timeout(500)
+    expect(page.locator("#cancel-btn")).to_be_visible()
+    hold.release()
+    page.wait_for_function("window.atomicOperations.length === 2", timeout=60_000)
+
+
+def test_new_cif_closes_relax_event_source_immediately(page, live_server):
+    page.add_init_script("""
+        (() => {
+            const Orig = window.EventSource;
+            window.__sources = [];
+            window.EventSource = function (...a) {
+                const es = new Orig(...a);
+                window.__sources.push(es);
+                return es;
+            };
+        })();""")
+    open_app(page, live_server)
+    load_sample(page, SAMPLE_CU, supercell=(1, 1, 1))
+    hold = Hold(page, "**/api/relax")
+    page.click("#analyze-btn", force=True)
+    hold.wait_held(page)
+    assert page.evaluate("window.__sources.some(s => s.readyState !== 2)")
+    new_cif_dialog(page)
+    pick_sample_and_confirm(page, SAMPLE_NI)
+    assert page.evaluate("window.__sources.every(s => s.readyState === 2)")
+    hold.release()

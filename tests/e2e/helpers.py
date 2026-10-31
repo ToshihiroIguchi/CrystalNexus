@@ -101,7 +101,7 @@ def cif_atom_rows(text: str):
     rows = []
     for line in text.splitlines():
         parts = line.split()
-        if len(parts) >= 5 and re.fullmatch(r"[A-Z][a-z]?\d*", parts[0]):
+        if len(parts) >= 5 and re.fullmatch(r"[A-Z][a-z]?\d*[+-]?", parts[0]):
             try:
                 [float(x) for x in parts[2:5]]
             except ValueError:
@@ -111,7 +111,8 @@ def cif_atom_rows(text: str):
 
 
 def cif_symbols(text: str):
-    return sorted(r[0] for r in cif_atom_rows(text))
+    # strip an oxidation-state suffix (pymatgen writes e.g. "Cu0+")
+    return sorted(re.sub(r"\d*[+-]?$", "", r[0]) for r in cif_atom_rows(text))
 
 
 class Hold:
