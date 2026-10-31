@@ -1046,7 +1046,7 @@ def test_get_insertion_voids_rejects_oversized_structure(client, monkeypatch):
         "session_id": session_id,
         "element": "Li",
     })
-    assert response.status_code == 400
+    assert response.status_code == 413
 
 
 @pytest.mark.slow
@@ -1176,7 +1176,7 @@ def test_evaluate_insertion_energies_rejects_oversized_structure(client, monkeyp
         "element": "Li",
         "sites": [{"id": 0, "frac_coords": [0.5, 0.5, 0.5]}],
     })
-    assert response.status_code == 400
+    assert response.status_code == 413
 
 
 def test_evaluate_insertion_energies_exceeds_max_batch(client):
@@ -1209,7 +1209,7 @@ def test_evaluate_insertion_energy_rejects_oversized_structure(client, monkeypat
         "element": "Li",
         "frac_coords": [0.5, 0.5, 0.5],
     })
-    assert response.status_code == 400
+    assert response.status_code == 413
 
 
 def test_evaluate_insertion_energy_rejects_malformed_frac_coords(client):
@@ -1313,7 +1313,7 @@ def test_evaluate_candidate_energies_rejects_oversized_structure(client, monkeyp
         "session_id": session_id,
         "candidates": [{"id": 0, "action": "delete", "index": 0}],
     })
-    assert response.status_code == 400
+    assert response.status_code == 413
 
 
 def test_evaluate_candidate_energies_exceeds_max_batch(client):
@@ -1571,7 +1571,7 @@ def test_equivalent_sites_rejects_oversized_structure(client, monkeypatch):
         "session_id": session_id,
         "element": "Ti",
     })
-    assert response.status_code == 400
+    assert response.status_code == 413
 
 
 # ---------------------------------------------------------------------------
