@@ -130,7 +130,7 @@ def test_normalize_alias_feature_and_site_keys_not_passed_through():
 
 # -- loading --------------------------------------------------------------
 
-def test_model_load_runs_off_the_event_loop_thread(monkeypatch):
+def test_model_load_runs_on_the_inference_executor_thread(monkeypatch):
     b = CHGNetBackend()
     monkeypatch.setattr(b, "_model", None)
     seen = {}
@@ -150,6 +150,7 @@ def test_model_load_runs_off_the_event_loop_thread(monkeypatch):
 
     loop_thread = _run(go())
     assert seen["thread"] is not loop_thread
+    assert seen["thread"].name.startswith("mlip")  # single-worker inference executor
     assert b._model is not None
 
 

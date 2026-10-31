@@ -87,18 +87,18 @@ class MACEBackend(MLIPBackend):
         except (ImportError, AttributeError, ValueError, OSError) as e:
             # Broken installs (torch/e3nn mismatch, missing DLL) fail at import
             # with more than ImportError; report them all as "unavailable".
-            raise ModelUnavailableError(f"{self.unavailable_message}: {e}")
+            raise ModelUnavailableError(f"{self.unavailable_message}: {e}") from e
         try:
             return mace_mp(model="medium", device=self._device,
                            default_dtype=MACE_DTYPE)
         except RuntimeError as e:
             if "download failed" in str(e).lower():
-                raise ModelUnavailableError(_DOWNLOAD_HINT)
+                raise ModelUnavailableError(_DOWNLOAD_HINT) from e
             raise
         except OSError as e:
-            raise ModelUnavailableError(f"{_DOWNLOAD_HINT} ({e})")
+            raise ModelUnavailableError(f"{_DOWNLOAD_HINT} ({e})") from e
         except (ImportError, AttributeError, ValueError) as e:
-            raise ModelUnavailableError(f"{self.unavailable_message}: {e}")
+            raise ModelUnavailableError(f"{self.unavailable_message}: {e}") from e
 
     async def _build_calculator(self):
         # Weights may be downloaded on first use; keep that off the event loop

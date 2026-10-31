@@ -890,6 +890,7 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("CrystalNexus starting up...")
     clear_abort()
+    _inference_executor.ensure_running()  # a previous shutdown may have closed it
     log_session_statistics()
     # Start the periodic cleanup task
     cleanup_task = asyncio.create_task(periodic_cleanup_task())
@@ -2602,6 +2603,7 @@ def run_relaxation(calculator, structure, *, fmax, steps, optimizer_name,
         "ase_converged": ase_converged,
         "optimizer_steps": int(optimizer.get_number_of_steps()),
         "aborted": aborted,
+        "abort_reason": ("shutdown" if abort_requested() else "timeout") if aborted else None,
     }
 
 
@@ -2889,6 +2891,10 @@ async def relax_structure(request: dict):
                                       timeout_s=RELAX_TIMEOUT_SECONDS,
                                       relax_cell=True,
                                       progress_slot=progress_slot))
+            except RuntimeError:
+                if abort_requested():  # executor already shut down
+                    raise HTTPException(status_code=503, detail="Server is shutting down")
+                raise
             finally:
                 # With elastic=true the slot stays alive so the SSE stream can
                 # report the elastic step; the outer finally removes it.
@@ -2900,9 +2906,10 @@ async def relax_structure(request: dict):
                 raise RuntimeError("Relaxation failed: no final structure returned")
             trajectory = result.get("trajectory")
             aborted = result.get("aborted", False)
+            abort_reason = result.get("abort_reason", "timeout") if aborted else None
             if aborted:
-                logger.warning(f"Relaxation for session {session_id[:8]}... hit the "
-                               f"{RELAX_TIMEOUT_SECONDS}s time limit; returning the best "
+                logger.warning(f"Relaxation for session {session_id[:8]}... aborted "
+                               f"({abort_reason}); returning the best "
                                f"structure found so far")
 
             # Predict relaxed structure using optimized prediction
@@ -2964,8 +2971,11 @@ async def relax_structure(request: dict):
                         elastic_info["warnings"] = elastic_warnings
                     except Exception as e:
                         logger.warning(f"Elastic calculation failed: {e}")
+                        shutting_down = abort_requested()
                         elastic_info = {
-                            "error": f"Elastic calculation failed: {e}",
+                            "error": ("Elastic calculation aborted: server is shutting down"
+                                      if shutting_down else f"Elastic calculation failed: {e}"),
+                            "abort_reason": "shutdown" if shutting_down else None,
                             "execution_time_s": round(time.monotonic() - elastic_started, 2),
                             "warnings": elastic_warnings}
 
@@ -3014,7 +3024,7 @@ async def relax_structure(request: dict):
                 "trajectory_frames": steps,
                 "optimizer": optimizer_name,
                 "aborted": aborted,
-                "abort_reason": "timeout" if aborted else None,
+                "abort_reason": abort_reason,
                 # Complete per-step history for the live charts: the SSE
                 # stream can end (slot removed) or be closed by the client
                 # before the last steps are delivered, so the response

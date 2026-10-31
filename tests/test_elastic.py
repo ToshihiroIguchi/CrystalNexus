@@ -400,3 +400,50 @@ def test_compute_elastic_voigt_ordering_anisotropic_linear():
 
     res = compute_elastic(atoms, Calc(), check_consistency=False)
     np.testing.assert_allclose(np.array(res["C_GPa"]), C_true, atol=1e-6)
+
+
+# -- shutdown handling in /api/relax -------------------------------------------
+
+def test_relax_elastic_shutdown_abort_reported_distinctly(client, fake_backends, monkeypatch):
+    from mlip import executor
+
+    def aborted(*a, **k):
+        executor.request_abort()
+        raise elastic_mod.ElasticTimeout("aborted during strained cell 1/24")
+
+    monkeypatch.setattr(main, "_run_elastic_sync", aborted)
+    try:
+        info = _relax(client, _session(), elastic=True).json()["elastic_info"]
+    finally:
+        executor.clear_abort()
+    assert info["abort_reason"] == "shutdown"
+    assert "shutting down" in info["error"]
+
+
+def test_relax_returns_503_when_executor_already_shut_down(client, fake_backends):
+    from mlip import executor
+
+    executor.request_abort()
+    executor.inference_executor.shutdown(wait=False)
+    try:
+        r = _relax(client, _session())
+        assert r.status_code == 503
+    finally:
+        executor.clear_abort()
+        executor.inference_executor.ensure_running()
+    assert _relax(client, _session()).status_code == 200
+
+
+def test_executor_can_be_restarted_after_shutdown():
+    ex = executor_mod_restartable()
+    ex.shutdown(wait=True)
+    with pytest.raises(RuntimeError):
+        ex.submit(int)
+    ex.ensure_running()
+    assert ex.submit(int).result() == 0
+    ex.shutdown(wait=True)
+
+
+def executor_mod_restartable():
+    from mlip.executor import _RestartableExecutor
+    return _RestartableExecutor()

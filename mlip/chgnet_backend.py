@@ -198,9 +198,9 @@ class CHGNetBackend(MLIPBackend):
         try:
             from chgnet.model.model import CHGNet
 
-            # Off the event loop (weights load can take seconds); the caller
-            # still holds self._lock, so concurrent requests wait for it.
-            self._model = await asyncio.to_thread(
+            # On the single-worker inference executor: off the event loop and
+            # serialized with all other model work. The caller holds self._lock.
+            self._model = await run_in_inference_executor(
                 CHGNet.load, use_device=self._device, verbose=False)
             logger.info(f"CHGNet model loaded and cached (device={self._device})")
 
@@ -296,7 +296,7 @@ class CHGNetBackend(MLIPBackend):
         if len(structure) > 100:
             # Force garbage collection before large structure prediction
             import gc
-            await asyncio.to_thread(gc.collect)
+            gc.collect()
             logger.debug(f"Garbage collection performed for large structure ({len(structure)} atoms)")
 
         try:

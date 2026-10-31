@@ -465,6 +465,7 @@ def test_run_relaxation_aborts_when_timeout_already_exhausted():
                                  fmax=0.001, steps=50, optimizer_name="FIRE",
                                  timeout_s=-1.0, relax_cell=False)
     assert result["aborted"] is True
+    assert result["abort_reason"] == "timeout"
     assert result["final_structure"] is not None
 
 
@@ -511,4 +512,5 @@ def test_run_relaxation_aborts_when_shutdown_requested():
     finally:
         executor.clear_abort()
     assert result["aborted"] is True
+    assert result["abort_reason"] == "shutdown"
     assert result["optimizer_steps"] == 0

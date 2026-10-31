@@ -432,8 +432,9 @@ def test_mace_construct_errors_map_to_model_unavailable(monkeypatch, exc):
     fake.mace_mp = boom
     monkeypatch.setitem(sys.modules, "mace", types.ModuleType("mace"))
     monkeypatch.setitem(sys.modules, "mace.calculators", fake)
-    with pytest.raises(ModelUnavailableError):
+    with pytest.raises(ModelUnavailableError) as excinfo:
         MACEBackend()._load_sync()
+    assert excinfo.value.__cause__ is exc  # traceback preserved
 
 
 def test_mace_import_attribute_error_maps_to_model_unavailable(monkeypatch):

@@ -1,5 +1,6 @@
 
 import sqlite3
+import threading
 import logging
 from datetime import datetime, timedelta, timezone
 import json
@@ -149,9 +150,10 @@ class AnalyticsDatabase:
     def get_daily_access_counts(self, days=7):
         """Get daily access counts for the last N days."""
         try:
-            # Full datetime threshold: a date-only string would sort before every
-            # timestamp on the boundary day and include that whole day (days+1 buckets).
-            date_threshold = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+            # Start of the oldest day to include: exactly `days` complete UTC day
+            # buckets (today plus days-1 earlier ones).
+            start_of_today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            date_threshold = (start_of_today - timedelta(days=days - 1)).strftime('%Y-%m-%d %H:%M:%S')
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -242,13 +244,18 @@ class _LazyAnalyticsDatabase:
 
     def __init__(self):
         self._instance = None
+        self._lock = threading.Lock()
 
     def _get(self):
         if self._instance is None:
-            self._instance = AnalyticsDatabase()
+            with self._lock:
+                if self._instance is None:
+                    self._instance = AnalyticsDatabase()
         return self._instance
 
     def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
         return getattr(self._get(), name)
 
 

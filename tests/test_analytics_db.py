@@ -187,6 +187,18 @@ def test_daily_access_counts_day_buckets_not_more_than_days_plus_one(db):
     assert len(db.get_daily_access_counts(days=14)) == 14
 
 
+def test_daily_access_counts_oldest_bucket_is_complete_day(db):
+    from datetime import timezone
+
+    start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    fmt = '%Y-%m-%d %H:%M:%S'
+    _insert_access_log_at(db, (start - timedelta(days=6)).strftime(fmt))  # first second of oldest day
+    _insert_access_log_at(db, (start - timedelta(days=6, seconds=1)).strftime(fmt))  # last of day before
+    counts = db.get_daily_access_counts(days=7)
+    assert [c["count"] for c in counts] == [1]
+    assert counts[0]["date"] == (start - timedelta(days=6)).strftime('%Y-%m-%d')
+
+
 def test_recent_events_ordered_newest_first_with_id_tiebreak(db):
     same = "2030-01-01 00:00:00"
     for name in ("a", "b", "c"):
@@ -225,3 +237,33 @@ def test_lazy_analytics_handle_forwards_calls(tmp_path, monkeypatch):
     handle.log_event("sample_load", filename="Cu.cif")
     assert (tmp_path / "x.db").exists()
     assert handle.get_feature_usage() == [{"type": "sample_load", "count": 1}]
+
+
+def test_lazy_analytics_handle_underscore_names_raise_attribute_error():
+    import analytics_db as mod
+
+    handle = mod._LazyAnalyticsDatabase()
+    with pytest.raises(AttributeError):
+        handle._nope
+    assert handle._instance is None  # no DB built by a private/dunder probe
+
+
+def test_lazy_analytics_handle_builds_single_instance_across_threads(tmp_path, monkeypatch):
+    import threading
+    import analytics_db as mod
+
+    built = []
+    real_cls = mod.AnalyticsDatabase
+
+    def factory():
+        built.append(1)
+        return real_cls(db_path=str(tmp_path / "t.db"))
+
+    monkeypatch.setattr(mod, "AnalyticsDatabase", factory)
+    handle = mod._LazyAnalyticsDatabase()
+    threads = [threading.Thread(target=handle.get_feature_usage) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(built) == 1
