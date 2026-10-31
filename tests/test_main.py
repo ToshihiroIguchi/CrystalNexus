@@ -173,7 +173,7 @@ def test_predict_rejects_oversized_structure(client, monkeypatch):
         "operations": [],
         "supercell_size": [2, 2, 2],
     })
-    assert response.status_code == 400
+    assert response.status_code == 413
 
 
 @pytest.mark.slow

@@ -252,6 +252,23 @@ def substitute_site(structure: Structure, site_index: int, new_element: str) -> 
     return lossy
 
 
+def insertion_overlap_message(structure: Structure, element: str,
+                              frac_coords: List[float]) -> Optional[str]:
+    """
+    Return a description if inserting `element` at `frac_coords` would put it
+    closer than MIN_INSERT_DISTANCE to an existing atom, else None.
+
+    Defense in depth: the UI only sends vetted candidates, but a direct API
+    call could drop an atom on top of an existing one. get_sites_in_sphere
+    accounts for periodic images.
+    """
+    cart_coords = structure.lattice.get_cartesian_coords(frac_coords)
+    if structure.get_sites_in_sphere(cart_coords, MIN_INSERT_DISTANCE):
+        return (f"cannot insert {element} at {frac_coords}; closer than "
+                f"{MIN_INSERT_DISTANCE} A to an existing atom")
+    return None
+
+
 def apply_operations_to_structure(structure: Structure, operations: List[dict],
                                    strict_mode: bool = False,
                                    allowed: Optional[Set[str]] = None) -> "tuple[int, List[str], List[str]]":
@@ -332,14 +349,9 @@ def apply_operations_to_structure(structure: Structure, operations: List[dict],
         elif action == "insert":
             new_element = validate_element(operation["to"], allowed)
             frac_coords = [float(c) % 1.0 for c in operation["coords"]]
-            # Defense in depth: the UI only sends vetted candidates, but a
-            # direct API call could drop an atom on top of an existing one.
-            # get_sites_in_sphere accounts for periodic images.
-            cart_coords = structure.lattice.get_cartesian_coords(frac_coords)
-            if structure.get_sites_in_sphere(cart_coords, MIN_INSERT_DISTANCE):
-                message = (f"Operation {i + 1}: cannot insert {new_element} at "
-                           f"{frac_coords}; closer than {MIN_INSERT_DISTANCE} A "
-                           f"to an existing atom")
+            overlap = insertion_overlap_message(structure, new_element, frac_coords)
+            if overlap:
+                message = f"Operation {i + 1}: {overlap}"
                 if strict_mode:
                     raise ValueError(message)
                 skipped.append(message)
@@ -605,6 +617,33 @@ def check_supercell_site_limit(base_num_sites: int, supercell_size: List[int]) -
                 f"exceeding the limit of {MAX_TOTAL_SITES}"
             )
         )
+
+def validate_operations_list(operations) -> List[dict]:
+    """
+    Require `operations` to be a list of at most MAX_OPERATIONS_PER_REQUEST
+    entries (HTTPException 400 otherwise), so a malformed or oversized
+    history is rejected before any of it is replayed.
+    """
+    if not isinstance(operations, list):
+        raise HTTPException(status_code=400, detail="operations must be a list")
+    if len(operations) > MAX_OPERATIONS_PER_REQUEST:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many operations in one request ({len(operations)}); "
+                   f"the limit is {MAX_OPERATIONS_PER_REQUEST}")
+    return operations
+
+def check_site_limit_after_operations(structure: Structure, limit: int) -> None:
+    """
+    Re-check an atom-count limit after operations were applied: a long run
+    of 'insert' operations can push a structure past a limit that the base
+    supercell satisfied. Raises HTTPException(413).
+    """
+    if len(structure.sites) > limit:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Resulting structure would have {len(structure.sites)} atoms, "
+                   f"exceeding the limit of {limit}")
 
 def validate_element(element: str, allowed: Optional[Set[str]] = None) -> str:
     """Element validation (injection protection).
@@ -985,10 +1024,25 @@ class _TokenBucket:
 # In-process only, like session_manager.sessions and _relax_progress below
 # -- fine for this app's single-worker deployment model, and only ever
 # touched from the event loop thread, so (also like those) no lock is
-# needed. Not evicted on a timer: at realistic client counts this stays
-# far smaller than session_manager's own cap, and a stale entry is only a
-# few floats.
+# needed. Buckets idle long enough to have fully refilled are dropped by a
+# cheap sweep at most once per _RATE_LIMIT_EVICT_INTERVAL_S (a dropped
+# bucket is indistinguishable from a fresh one), so the dict cannot grow
+# with every client address ever seen.
 _rate_limit_buckets: Dict[str, "_TokenBucket"] = {}
+_RATE_LIMIT_EVICT_INTERVAL_S = 60.0
+_rate_limit_last_evict = 0.0
+
+def _rate_limit_evict_stale(now: float) -> None:
+    global _rate_limit_last_evict
+    if now - _rate_limit_last_evict < _RATE_LIMIT_EVICT_INTERVAL_S:
+        return
+    _rate_limit_last_evict = now
+    refill_per_second = RATE_LIMIT_REQUESTS_PER_MINUTE / 60.0
+    full_refill_s = RATE_LIMIT_BURST / refill_per_second if refill_per_second > 0 else float("inf")
+    stale = [host for host, bucket in _rate_limit_buckets.items()
+             if now - bucket.last_refill >= full_refill_s]
+    for host in stale:
+        del _rate_limit_buckets[host]
 
 def _rate_limit_check(client_host: str) -> bool:
     """
@@ -998,6 +1052,7 @@ def _rate_limit_check(client_host: str) -> bool:
     rejected with 429.
     """
     now = time.time()
+    _rate_limit_evict_stale(now)
     refill_per_second = RATE_LIMIT_REQUESTS_PER_MINUTE / 60.0
     bucket = _rate_limit_buckets.get(client_host)
     if bucket is None:
@@ -1065,6 +1120,30 @@ SAMPLE_CIF_DIR = Path(SAMPLE_CIF_DIR_NAME)
 if DEBUG:
     logger.setLevel(logging.DEBUG)
 
+def resolve_replay_supercell_size(session_id, supercell_size) -> List[int]:
+    """
+    Validate the request's `supercell_size` for an operation replay.
+
+    An absent size (None) falls back to the session's own size when
+    `session_id` names a live session, else 1x1x1. An explicit size that
+    differs from the session's is a 400: the operations were recorded
+    against the session's supercell, so replaying them on another one would
+    silently address the wrong atoms. An unknown session is left to
+    load_base_supercell (404).
+    """
+    session_info = (session_manager.get_session_info(session_id)
+                    if isinstance(session_id, str) and session_id else None)
+    session_size = session_info.get('supercell_size', [1, 1, 1]) if session_info else None
+    if supercell_size is None:
+        return list(session_size) if session_size else [1, 1, 1]
+    supercell_size = validate_supercell_size(supercell_size)
+    if session_size and supercell_size != list(session_size):
+        raise HTTPException(
+            status_code=400,
+            detail=f"supercell_size {supercell_size} does not match the session's "
+                   f"supercell size {list(session_size)}")
+    return supercell_size
+
 def load_base_supercell(session_id: Optional[str], filename: Optional[str],
                          supercell_size: List[int]) -> Structure:
     """
@@ -1078,9 +1157,9 @@ def load_base_supercell(session_id: Optional[str], filename: Optional[str],
     session is available.
 
     Uploaded files are deliberately NOT looked up by filename on disk here:
-    the saved filename is a random UUID (see /api/analyze-cif-upload) with
-    no reliable mapping back to the original name, and matching by the
-    original name risked resolving to a different session's upload.
+    uploads are parsed from a private temporary file that is deleted right
+    after analysis (see /api/analyze-cif-upload), so they only exist as the
+    parsed Structure held by their session.
 
     Raises:
         HTTPException(404) if no structure can be resolved, or (400) if
@@ -1161,7 +1240,7 @@ def _apply_atomic_operations_sync(original_structure: Structure, supercell_size:
     `operations` against it in strict mode (fail-fast on the first invalid
     operation). Call via asyncio.to_thread.
 
-    Raises ValueError if an operation is invalid, or HTTPException(400) if
+    Raises ValueError if an operation is invalid, or HTTPException(413) if
     the resulting structure exceeds MAX_TOTAL_SITES -- both propagate
     through asyncio.to_thread into the caller unchanged.
     """
@@ -1189,11 +1268,7 @@ def _apply_atomic_operations_sync(original_structure: Structure, supercell_size:
     # already enforces MAX_TOTAL_SITES on its own scaling factor, but a
     # long enough run of 'insert' operations can independently push the
     # structure past that same limit.
-    if len(structure.sites) > MAX_TOTAL_SITES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Resulting structure would have {len(structure.sites)} atoms, "
-                   f"exceeding the limit of {MAX_TOTAL_SITES}")
+    check_site_limit_after_operations(structure, MAX_TOTAL_SITES)
 
     return structure, operations_applied
 
@@ -1208,14 +1283,7 @@ async def apply_atomic_operations(request: dict):
         if not session_id or not isinstance(session_id, str):
             raise HTTPException(status_code=400, detail="Session ID is required and must be a string")
 
-        if not isinstance(operations, list):
-            raise HTTPException(status_code=400, detail="operations must be a list")
-
-        if len(operations) > MAX_OPERATIONS_PER_REQUEST:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Too many operations in one request ({len(operations)}); "
-                       f"the limit is {MAX_OPERATIONS_PER_REQUEST}")
+        operations = validate_operations_list(operations)
 
         logger.info(f" OPERATIONS: Starting atomic operations for session: {session_id[:8]}...")
         logger.info(f" OPERATIONS: Received {len(operations)} operations: {operations}")
@@ -1366,7 +1434,8 @@ async def analyze_sample_cif(data: dict):
 
         # Analytics Logging
         try:
-            analytics_db.log_event(
+            await asyncio.to_thread(
+                analytics_db.log_event,
                 event_type="sample_load",
                 filename=safe_path_str,
                 formula=result.get("formula"),
@@ -1403,6 +1472,8 @@ async def analyze_uploaded_cif(request: Request, file: UploadFile = File(...)):
         # Filename and size validation
         if not file.filename or not file.filename.lower().endswith('.cif'):
             raise HTTPException(status_code=400, detail="File must be a CIF file")
+        # Reject unsafe names before reading or parsing any of the body.
+        safe_name = safe_filename(file.filename)
 
         # Cheap early rejection based on the client-supplied Content-Length,
         # before reading any of the body. This does not fully defend against
@@ -1472,13 +1543,16 @@ async def analyze_uploaded_cif(request: Request, file: UploadFile = File(...)):
             logger.info(f"✅ UPLOAD: Temp file written, size: {temp_path.stat().st_size} bytes")
 
             logger.info(f" UPLOAD: Starting analysis of uploaded file: {temp_path}")
-            result = await analyze_cif_file(temp_path)
-            safe_name = safe_filename(file.filename)
+            # One parse yields both the analysis and the Structure that is
+            # returned as structure_data for later use in createSupercell.
+            result, structure = await asyncio.to_thread(
+                _analyze_cif_file_and_structure_sync, temp_path)
             result["filename"] = safe_name
 
-            # Analytics Logging
+            # Analytics Logging (sqlite write off the event loop)
             try:
-                analytics_db.log_event(
+                await asyncio.to_thread(
+                    analytics_db.log_event,
                     event_type="upload",
                     filename=safe_name,
                     formula=result.get("formula"),
@@ -1488,24 +1562,11 @@ async def analyze_uploaded_cif(request: Request, file: UploadFile = File(...)):
                 logger.error(f"Failed to log upload event: {e}")
             logger.info(f"✅ UPLOAD: Analysis completed, result keys: {list(result.keys())}")
 
-            # Store the original structure for later use in createSupercell
-            # Parse the structure and add it to the result
             try:
-                from pymatgen.core import Structure
-                logger.info(f" UPLOAD: Loading structure from file for storage")
-                structure = Structure.from_file(str(temp_path))
-                logger.info(f" UPLOAD: Structure loaded - Formula: {structure.formula}, Sites: {len(structure.sites)}")
-
-                # Store structure as a dictionary for JSON serialization
-                structure_dict = structure.as_dict()
-                result["structure_data"] = structure_dict
-                logger.info(f"✅ UPLOAD: Structure data stored, dict keys: {list(structure_dict.keys())}")
+                result["structure_data"] = structure.as_dict()
                 logger.info(f"✅ UPLOAD: Successfully stored structure data for uploaded file: {safe_name}")
             except Exception as struct_error:
                 logger.error(f"❌ UPLOAD: Failed to store structure data: {struct_error}")
-                logger.error(f"❌ UPLOAD: Structure error type: {type(struct_error)}")
-                import traceback
-                logger.error(f"❌ UPLOAD: Structure error traceback: {traceback.format_exc()}")
                 # Continue without structure data - fallback will handle this
 
             logger.info(f" UPLOAD: Returning result with keys: {list(result.keys())}")
@@ -1545,6 +1606,10 @@ async def analyze_uploaded_cif(request: Request, file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail="Internal server error occurred")
 
 def analyze_cif_file_sync(file_path: Path) -> Dict:
+    return _analyze_cif_file_and_structure_sync(file_path)[0]
+
+def _analyze_cif_file_and_structure_sync(file_path: Path) -> "Tuple[Dict, Structure]":
+    """Parse a CIF once and return (analysis dict, parsed Structure)."""
     try:
         # CIF file parsing with enhanced validation
         logger.info(f"Parsing CIF file: {file_path}")
@@ -1579,7 +1644,8 @@ def analyze_cif_file_sync(file_path: Path) -> Dict:
         if structure is None:
             error_msg = "Failed to parse CIF file. Common issues: " + "; ".join(parsing_errors)
             logger.error(f"All parsing methods failed: {error_msg}")
-            raise ValueError(f"Invalid CIF file format. {error_msg}")
+            # Details stay in the log: pymatgen messages can embed local paths.
+            raise ValueError("Invalid CIF file format. Failed to parse CIF file.")
         
         # Validate structure
         if not structure.sites:
@@ -1594,9 +1660,18 @@ def analyze_cif_file_sync(file_path: Path) -> Dict:
         lattice = structure.lattice
         
         # Symmetry analysis - same as ZrO2test.py
-        analyzer = SpacegroupAnalyzer(structure)
-        
-        return {
+        try:
+            analyzer = SpacegroupAnalyzer(structure)
+            space_group = analyzer.get_space_group_symbol()
+            space_group_number = analyzer.get_space_group_number()
+            point_group = analyzer.get_point_group_symbol()
+            crystal_system = analyzer.get_crystal_system()
+        except Exception as sym_error:
+            # spglib fails on degenerate/garbage geometry -- an input problem.
+            logger.warning(f"Symmetry analysis failed: {sym_error}")
+            raise ValueError("Symmetry analysis failed for this structure")
+
+        return ({
             # Basic structure information (same as ZrO2test.py)
             "formula": str(structure.formula),
             "num_atoms": len(structure),
@@ -1616,21 +1691,27 @@ def analyze_cif_file_sync(file_path: Path) -> Dict:
             "volume": float(lattice.volume),
             
             # Symmetry information (same as ZrO2test.py)
-            "space_group": analyzer.get_space_group_symbol(),
-            "space_group_number": analyzer.get_space_group_number(),
-            "point_group": analyzer.get_point_group_symbol(),
-            "crystal_system": analyzer.get_crystal_system(),
-            
+            "space_group": space_group,
+            "space_group_number": space_group_number,
+            "point_group": point_group,
+            "crystal_system": crystal_system,
+
             # Additional information for compatibility
             "num_sites": len(structure.sites)
-        }
+        }, structure)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        # Unparseable / empty / disordered CIF content is a client input
+        # problem (400), not a server fault. Callers map the ValueError;
+        # partial occupancy is reported verbatim.
+        if "Partial occupancy detected" in str(e):
+            raise HTTPException(status_code=400, detail=str(e))
+        raise
     except Exception as e:
         logger.error(f"Error in analyze_cif_file: {e}")
         logger.error(f"Error type: {type(e)}")
         logger.error(f"Error traceback: {str(e)}", exc_info=True)
-        # Handle specific error types appropriately
-        if "Partial occupancy detected" in str(e):
-            raise HTTPException(status_code=400, detail=str(e))
         # Report Windows-specific pymatgen errors in detail
         if WINDOWS_PLATFORM and "fortran" in str(e).lower():
             raise HTTPException(status_code=500, detail="Windows Fortran library error - install Microsoft Visual C++ Redistributable")
@@ -1748,11 +1829,10 @@ def _load_and_build_supercell(crystal_data: dict, filename: str, a_mult: int, b_
                 logger.error(f"❌ SUPERCELL: Failed to parse sample file: {e}")
                 sample_parse_error = str(e)
         else:
-            # Uploaded files are not looked up by filename on disk:
-            # they are saved under a random UUID name (see
-            # /api/analyze-cif-upload), which has no reliable mapping
-            # back to the original filename. Uploaded structures must
-            # come through structure_data (Method 1) instead; if that
+            # Uploaded files are not looked up by filename on disk: they
+            # are parsed from a temporary file that is deleted right after
+            # analysis (see /api/analyze-cif-upload). Uploaded structures
+            # must come through structure_data (Method 1) instead; if that
             # was missing or invalid, this is a genuine error.
             logger.warning(f"⚠️ SUPERCELL: Sample file not found and no structure_data available for: {filename}")
 
@@ -1836,7 +1916,7 @@ async def create_supercell(request: Request, data: dict):
         # (400/404) rather than silently falling back to an approximate,
         # session-less "success" response -- see _load_and_build_supercell
         # for the specific error mapping.
-        filename = crystal_data.get("filename", "unknown.cif")
+        filename = crystal_data.get("filename") or "unknown.cif"
         try:
             original_structure, supercell_structure = await asyncio.to_thread(
                 _load_and_build_supercell, crystal_data, filename, a_mult, b_mult, c_mult
@@ -2023,6 +2103,7 @@ def _generate_modified_structure_cif_sync(session_id: Optional[str], filename: s
 
     logger.info(f"Applied {operations_applied}/{len(operations)} operations successfully")
     logger.info(f"Final structure: {structure.formula} ({len(structure.sites)} sites)")
+    check_site_limit_after_operations(structure, MAX_TOTAL_SITES)
 
     # Generate CIF using pymatgen CifWriter
     apply_element_labels_to_structure(structure)
@@ -2045,13 +2126,14 @@ async def generate_modified_structure_cif(request: dict):
     try:
         session_id = request.get("session_id")
         filename = request.get("filename")
-        supercell_size = request.get("supercell_size", [1, 1, 1])
+        supercell_size = request.get("supercell_size")
         operations = request.get("operations", [])
 
         if not filename:
             raise HTTPException(status_code=400, detail="Filename is required")
         filename = sanitize_display_filename(filename)
-        supercell_size = validate_supercell_size(supercell_size)
+        operations = validate_operations_list(operations)
+        supercell_size = resolve_replay_supercell_size(session_id, supercell_size)
 
         logger.info(f"Generating modified structure CIF for {filename}")
         logger.info(f"Supercell size: {supercell_size}")
@@ -2189,13 +2271,15 @@ async def generate_supercell_cif_direct(request: dict):
         # offloaded to a thread.
         session_structure = None
         if session_id:
-            try:
-                session_info = session_manager.get_session_info(session_id)
-                if session_info and 'original_structure' in session_info:
-                    session_structure = session_info['original_structure']
-                    logger.info(f"Loaded structure from session for uploaded file: {filename}")
-            except Exception as e:
-                logger.warning(f"Could not load structure from session: {e}")
+            # An explicit but unknown/expired session must fail loudly rather
+            # than fall back to a sample file by filename (see
+            # load_base_supercell).
+            session_info = (session_manager.get_session_info(session_id)
+                            if isinstance(session_id, str) else None)
+            if not session_info or 'original_structure' not in session_info:
+                raise HTTPException(status_code=404, detail="Session not found or expired")
+            session_structure = session_info['original_structure']
+            logger.info(f"Loaded structure from session for uploaded file: {filename}")
 
         supercell_structure, cif_content = await asyncio.to_thread(
             _resolve_and_expand_supercell_direct, session_structure, filename, supercell_size
@@ -2689,7 +2773,7 @@ def _load_structure_for_predict(session_id: Optional[str], filename: str,
     MAX_PREDICT_ATOMS, and replay `operations` against it (tolerant mode).
     Call via asyncio.to_thread.
 
-    Raises HTTPException(400) if the base supercell exceeds
+    Raises HTTPException(413) if the base supercell exceeds
     MAX_PREDICT_ATOMS -- propagates through asyncio.to_thread unchanged.
     """
     structure = load_base_supercell(session_id, filename, supercell_size)
@@ -2697,7 +2781,7 @@ def _load_structure_for_predict(session_id: Optional[str], filename: str,
 
     if len(structure) > MAX_PREDICT_ATOMS:
         raise HTTPException(
-            status_code=400,
+            status_code=413,
             detail=f"Structure has {len(structure)} atoms; the prediction limit is "
                    f"{MAX_PREDICT_ATOMS}. Reduce the supercell size.")
 
@@ -2711,6 +2795,8 @@ def _load_structure_for_predict(session_id: Optional[str], filename: str,
 
     if skipped_operations:
         logger.warning(f"Skipping {len(skipped_operations)} invalid operations for MLIP prediction: {skipped_operations}")
+
+    check_site_limit_after_operations(structure, MAX_PREDICT_ATOMS)
 
     return structure, operations_applied, skipped_operations, property_warnings
 
@@ -2732,14 +2818,15 @@ async def predict_structure(request: dict):
         session_id = request.get("session_id")
         filename = request.get("filename")
         operations = request.get("operations", [])
-        supercell_size = request.get("supercell_size", [1, 1, 1])
+        supercell_size = request.get("supercell_size")
         predict_session = (session_manager.sessions.get(session_id)
                            if isinstance(session_id, str) else None)
         model_id = _session_model_id(predict_session, _request_model_id(request))
 
         if not filename:
             raise HTTPException(status_code=400, detail="Filename is required")
-        supercell_size = validate_supercell_size(supercell_size)
+        operations = validate_operations_list(operations)
+        supercell_size = resolve_replay_supercell_size(session_id, supercell_size)
 
         logger.info(f"MLIP prediction for {filename} with {len(operations)} operations")
 
@@ -2980,7 +3067,8 @@ async def relax_structure(request: dict):
             # force as the optimizer/watcher (FrechetCellFilter forces when
             # relax_cell=True, atomic forces otherwise) from the final step.
             # "converged_optimizer" is ASE's own verdict from run_relaxation().
-            steps = len(trajectory) if trajectory else 0
+            trajectory_frames = len(trajectory) if trajectory else 0
+            optimizer_steps = result.get("optimizer_steps", 0)
 
             converged = evaluate_convergence(trajectory, fmax)
 
@@ -2995,12 +3083,12 @@ async def relax_structure(request: dict):
             else:
                 logger.info(f"Convergence evaluation: no force data available, converged={converged}")
 
-            logger.info(f"Final relaxation status: converged={converged}, steps={steps}, aborted={aborted}")
+            logger.info(f"Final relaxation status: converged={converged}, steps={optimizer_steps}, aborted={aborted}")
 
             relaxation_info = {
                 "converged": converged,
                 "converged_optimizer": result.get("ase_converged", False),
-                "steps": steps,
+                "steps": optimizer_steps,
                 "fmax": fmax,
                 "max_steps": max_steps,
                 "energy_change_eV": energy_diff,
@@ -3009,8 +3097,8 @@ async def relax_structure(request: dict):
                 # run_relaxation(), instead of the old len(trajectory) - 2
                 # approximation needed to undo chgnet's duplicated final
                 # observer call.
-                "optimizer_steps": result.get("optimizer_steps", 0),
-                "trajectory_frames": steps,
+                "optimizer_steps": optimizer_steps,
+                "trajectory_frames": trajectory_frames,
                 "optimizer": optimizer_name,
                 "aborted": aborted,
                 "abort_reason": "timeout" if aborted else None,
@@ -3128,7 +3216,8 @@ async def relax_structure(request: dict):
 
             # Analytics Logging - Log successful relaxation
             try:
-                analytics_db.log_event(
+                await asyncio.to_thread(
+                    analytics_db.log_event,
                     event_type="relax",
                     filename=filename,
                     formula=final_formula, # Use final formula
@@ -3534,7 +3623,9 @@ def find_interstitial_candidates(structure: Structure, min_dist: float = 0.9,
             # site distinct rather than collapsing them all into one.
             key = ("__empty__", empty_counter)
             empty_counter += 1
-            min_d = 0.0
+            # Every atom is at least the cutoff away: these are the largest
+            # voids, so rank them by the cutoff (not 0) to sort them first.
+            min_d = fingerprint_cutoff
         else:
             key = tuple(sorted((n.specie.symbol, round(n.nn_distance, 2)) for n in neighbors))
             min_d = min(n.nn_distance for n in neighbors)
@@ -3620,7 +3711,7 @@ async def get_insertion_voids(data: dict):
 
         if len(structure) > MAX_PREDICT_ATOMS:
             raise HTTPException(
-                status_code=400,
+                status_code=413,
                 detail=f"Structure has {len(structure)} atoms; the limit for insertion-void "
                        f"search is {MAX_PREDICT_ATOMS}. Reduce the supercell size.")
 
@@ -3691,9 +3782,13 @@ async def evaluate_insertion_energy(data: dict):
 
         if len(structure) > MAX_PREDICT_ATOMS:
             raise HTTPException(
-                status_code=400,
+                status_code=413,
                 detail=f"Structure has {len(structure)} atoms; the prediction limit is "
                        f"{MAX_PREDICT_ATOMS}. Reduce the supercell size.")
+
+        overlap = insertion_overlap_message(structure, element_symbol, frac_coords)
+        if overlap:
+            return {"status": "error", "energy": None, "detail": overlap}
 
         # Create candidate structure
         cand_structure = structure.copy()
@@ -3763,12 +3858,13 @@ async def evaluate_insertion_energies(data: dict):
 
         if len(structure) > MAX_PREDICT_ATOMS:
             raise HTTPException(
-                status_code=400,
+                status_code=413,
                 detail=f"Structure has {len(structure)} atoms; the prediction limit is "
                        f"{MAX_PREDICT_ATOMS}. Reduce the supercell size.")
 
         cand_structures = []
         site_ids = []
+        rejected = []  # (site id, reason) for sites too close to an atom
         for site in sites:
             if not isinstance(site, dict):
                 raise HTTPException(status_code=400, detail="Each site must be an object with 'id' and 'frac_coords'")
@@ -3780,6 +3876,10 @@ async def evaluate_insertion_energies(data: dict):
                 frac_coords = validate_frac_coords(frac_coords, "frac_coords")
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=f"site {site_id}: {e}")
+            overlap = insertion_overlap_message(structure, element_symbol, frac_coords)
+            if overlap:
+                rejected.append((site_id, overlap))
+                continue
             cand_structure = structure.copy()
             cand_structure.append(element_symbol, frac_coords)
             cand_structures.append(cand_structure)
@@ -3788,10 +3888,13 @@ async def evaluate_insertion_energies(data: dict):
         num_atoms = len(structure) + 1
         backend = _resolve_backend(model_id)
         _ensure_elements_supported(backend, _structure_symbols(structure) | {element_symbol})
-        await _load_or_503(backend)
-        pred_results = await backend.predict(cand_structures, _PROPS_ENERGY)
+        pred_results = []
+        if cand_structures:
+            await _load_or_503(backend)
+            pred_results = await backend.predict(cand_structures, _PROPS_ENERGY)
 
-        results = []
+        results = [{"id": site_id, "energy": None, "energy_eV_per_atom": None, "error": error}
+                   for site_id, error in rejected]
         for site_id, pred_result in zip(site_ids, pred_results):
             if pred_result is None:
                 results.append({"id": site_id, "energy": None, "energy_eV_per_atom": None,
@@ -3857,7 +3960,7 @@ async def evaluate_candidate_energies(data: dict):
 
         if len(structure) > MAX_PREDICT_ATOMS:
             raise HTTPException(
-                status_code=400,
+                status_code=413,
                 detail=f"Structure has {len(structure)} atoms; the prediction limit is "
                        f"{MAX_PREDICT_ATOMS}. Reduce the supercell size.")
 
@@ -3867,6 +3970,7 @@ async def evaluate_candidate_energies(data: dict):
         # else is filled in afterward at its own original slot.
         results: List[Optional[dict]] = [None] * len(candidates)
 
+        substitute_targets: Set[str] = set()
         cand_structures = []
         cand_ids = []
         cand_num_atoms = []
@@ -3895,6 +3999,7 @@ async def evaluate_candidate_energies(data: dict):
                     new_element = validate_element(new_element, allowed_elements)
                 except ValueError as e:
                     raise HTTPException(status_code=400, detail=f"candidate {cand_id}: {e}")
+                substitute_targets.add(new_element)
 
                 old_symbol = _site_element_symbol(structure[index].specie)
                 if new_element == old_symbol:
@@ -3914,10 +4019,7 @@ async def evaluate_candidate_energies(data: dict):
             cand_result_slots.append(slot)
 
         backend = _resolve_backend(model_id)
-        _ensure_elements_supported(
-            backend, _structure_symbols(structure) | {c.get("to") for c in candidates
-                                                      if c.get("action") == "substitute"
-                                                      and isinstance(c.get("to"), str)})
+        _ensure_elements_supported(backend, _structure_symbols(structure) | substitute_targets)
         pred_results = []
         if cand_structures:
             await _load_or_503(backend)
@@ -3991,7 +4093,7 @@ async def equivalent_sites(data: dict):
 
         if len(structure) > MAX_PREDICT_ATOMS:
             raise HTTPException(
-                status_code=400,
+                status_code=413,
                 detail=f"Structure has {len(structure)} atoms; the prediction limit is "
                        f"{MAX_PREDICT_ATOMS}. Reduce the supercell size.")
 
