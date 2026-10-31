@@ -141,3 +141,129 @@ def test_purge_old_data_uses_utc_cutoff(db):
 
     with db._get_connection() as conn:
         assert conn.execute("SELECT COUNT(*) FROM access_logs").fetchone()[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: numpy params, daily-count window, recent ordering, lazy singleton
+# ---------------------------------------------------------------------------
+
+def test_log_event_accepts_numpy_parameters(db):
+    import numpy as np
+
+    db.log_event("relax", parameters={"fmax": np.float32(0.5), "n": np.int64(3),
+                                      "vec": np.array([1, 2]), "obj": object})
+    (ev,) = db.get_recent_events()
+    assert ev["parameters"]["n"] == 3 and ev["parameters"]["vec"] == [1, 2]
+    assert ev["parameters"]["fmax"] == pytest.approx(0.5)
+    assert "object" in ev["parameters"]["obj"]  # unknown types fall back to str()
+
+
+def test_log_event_empty_dict_is_not_null(db):
+    db.log_event("relax", parameters={})
+    db.log_event("relax", parameters=None)
+    with db._get_connection() as conn:
+        rows = conn.execute("SELECT parameters FROM analysis_events ORDER BY id").fetchall()
+    assert rows == [("{}",), (None,)]
+
+
+def test_daily_access_counts_exclude_rows_just_outside_window(db):
+    from datetime import timezone
+
+    now = datetime.now(timezone.utc)
+    fmt = '%Y-%m-%d %H:%M:%S'
+    _insert_access_log_at(db, (now - timedelta(days=1)).strftime(fmt))
+    # one minute older than the 14-day window: on the boundary *date*, but outside
+    _insert_access_log_at(db, (now - timedelta(days=14, minutes=1)).strftime(fmt))
+    counts = db.get_daily_access_counts(days=14)
+    assert sum(c["count"] for c in counts) == 1
+
+
+def test_daily_access_counts_day_buckets_not_more_than_days_plus_one(db):
+    from datetime import timezone
+
+    now = datetime.now(timezone.utc)
+    for d in range(30):
+        _insert_access_log_at(db, (now - timedelta(days=d, minutes=1)).strftime('%Y-%m-%d %H:%M:%S'))
+    assert len(db.get_daily_access_counts(days=14)) == 14
+
+
+def test_daily_access_counts_oldest_bucket_is_complete_day(db):
+    from datetime import timezone
+
+    start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    fmt = '%Y-%m-%d %H:%M:%S'
+    _insert_access_log_at(db, (start - timedelta(days=6)).strftime(fmt))  # first second of oldest day
+    _insert_access_log_at(db, (start - timedelta(days=6, seconds=1)).strftime(fmt))  # last of day before
+    counts = db.get_daily_access_counts(days=7)
+    assert [c["count"] for c in counts] == [1]
+    assert counts[0]["date"] == (start - timedelta(days=6)).strftime('%Y-%m-%d')
+
+
+def test_recent_events_ordered_newest_first_with_id_tiebreak(db):
+    same = "2030-01-01 00:00:00"
+    for name in ("a", "b", "c"):
+        with db._get_connection() as conn:
+            conn.execute("INSERT INTO analysis_events (timestamp, event_type, filename) "
+                         "VALUES (?, 'x', ?)", (same, name))
+            conn.commit()
+    _insert_analysis_event_at(db, "2029-01-01 00:00:00")
+    assert [e["filename"] for e in db.get_recent_events()] == ["c", "b", "a", "Cu.cif"]
+
+
+def test_importing_analytics_db_does_not_create_database_file(tmp_path):
+    import subprocess
+    import sys
+
+    code = (
+        "import analytics_db, os, sys;"
+        "analytics_db.DB_FILE = sys.argv[1];"
+        "assert analytics_db.analytics_db._instance is None;"
+        "assert not os.path.exists(sys.argv[1]);"
+    )
+    target = tmp_path / "lazy.db"
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    subprocess.run([sys.executable, "-c", code, str(target)], cwd=repo, check=True)
+    assert not target.exists()
+
+
+def test_lazy_analytics_handle_forwards_calls(tmp_path, monkeypatch):
+    import analytics_db as mod
+
+    handle = mod._LazyAnalyticsDatabase()
+    real_cls = mod.AnalyticsDatabase
+    monkeypatch.setattr(mod, "AnalyticsDatabase",
+                        lambda: real_cls(db_path=str(tmp_path / "x.db")))
+    assert not (tmp_path / "x.db").exists()
+    handle.log_event("sample_load", filename="Cu.cif")
+    assert (tmp_path / "x.db").exists()
+    assert handle.get_feature_usage() == [{"type": "sample_load", "count": 1}]
+
+
+def test_lazy_analytics_handle_underscore_names_raise_attribute_error():
+    import analytics_db as mod
+
+    handle = mod._LazyAnalyticsDatabase()
+    with pytest.raises(AttributeError):
+        handle._nope
+    assert handle._instance is None  # no DB built by a private/dunder probe
+
+
+def test_lazy_analytics_handle_builds_single_instance_across_threads(tmp_path, monkeypatch):
+    import threading
+    import analytics_db as mod
+
+    built = []
+    real_cls = mod.AnalyticsDatabase
+
+    def factory():
+        built.append(1)
+        return real_cls(db_path=str(tmp_path / "t.db"))
+
+    monkeypatch.setattr(mod, "AnalyticsDatabase", factory)
+    handle = mod._LazyAnalyticsDatabase()
+    threads = [threading.Thread(target=handle.get_feature_usage) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(built) == 1

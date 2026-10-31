@@ -1,10 +1,13 @@
 """Model registry: maps model ids to backend classes."""
+import logging
 import os
 from typing import Dict, List, Optional, Type
 
 from .base import MLIPBackend, ModelUnavailableError, UnknownModelError
 from .chgnet_backend import CHGNetBackend
 from .mace_backend import MACEBackend
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_FALLBACK = "chgnet"
 
@@ -14,9 +17,22 @@ MODEL_REGISTRY: Dict[str, Type[MLIPBackend]] = {
 }
 
 
+_warned_invalid_defaults = set()
+
+
 def default_model_id() -> str:
     """Default model id (env CRYSTALNEXUS_DEFAULT_MODEL, else 'chgnet')."""
-    return os.getenv("CRYSTALNEXUS_DEFAULT_MODEL", "").strip() or DEFAULT_MODEL_FALLBACK
+    mid = os.getenv("CRYSTALNEXUS_DEFAULT_MODEL", "").strip()
+    if not mid:
+        return DEFAULT_MODEL_FALLBACK
+    if mid not in MODEL_REGISTRY:
+        if mid not in _warned_invalid_defaults:
+            _warned_invalid_defaults.add(mid)
+            logger.warning(
+                f"CRYSTALNEXUS_DEFAULT_MODEL='{mid}' is not a registered model "
+                f"({sorted(MODEL_REGISTRY)}); falling back to '{DEFAULT_MODEL_FALLBACK}'")
+        return DEFAULT_MODEL_FALLBACK
+    return mid
 
 
 def is_available(model_id: str) -> bool:

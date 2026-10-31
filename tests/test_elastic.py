@@ -333,3 +333,117 @@ def test_relax_elastic_real_mace_cu(client):
     info = r.json()["elastic_info"]
     assert "error" not in info, info
     assert 100 < info["moduli"]["K"]["hill"] < 220
+
+
+# -- shutdown abort flag -----------------------------------------------------
+
+@pytest.fixture
+def abort_flag():
+    from mlip import executor
+    executor.request_abort()
+    yield
+    executor.clear_abort()
+
+
+def test_compute_elastic_stops_when_abort_requested(abort_flag):
+    with pytest.raises(elastic_mod.ElasticTimeout, match="aborted"):
+        compute_elastic(bulk("Cu", "fcc", a=3.61, cubic=True), EMT())
+
+
+def test_compute_elastic_observer_stops_on_abort_mid_cell():
+    """The per-step observer (not just the per-cell pre-check) honours the flag."""
+    from ase.calculators.calculator import Calculator, all_changes
+    from mlip import executor
+
+    class Calc(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            executor.request_abort()  # flag raised while the first cell is evaluated
+            self.results = {"energy": 0.0, "forces": np.zeros((len(atoms), 3)),
+                            "stress": np.zeros(6)}
+
+    try:
+        with pytest.raises(elastic_mod.ElasticTimeout, match="aborted during"):
+            compute_elastic(bulk("Cu", "fcc", a=3.61, cubic=True), Calc())
+    finally:
+        executor.clear_abort()
+
+
+# -- Voigt ordering regression guard ------------------------------------------
+
+def test_compute_elastic_voigt_ordering_anisotropic_linear():
+    """A linear fake with a full non-cubic stiffness (incl. C45/C16) must be
+    recovered exactly, in ASE Voigt order xx, yy, zz, yz, xz, xy."""
+    from ase import units
+    from ase.calculators.calculator import Calculator, all_changes
+
+    rng = np.random.default_rng(7)
+    A = rng.uniform(-1.0, 1.0, (6, 6))
+    C_true = 150.0 * np.eye(6) + 20.0 * (A + A.T)  # GPa, symmetric, all entries nonzero
+    assert C_true[3, 4] != 0 and C_true[0, 5] != 0
+    atoms = bulk("Cu", "fcc", a=3.61, cubic=True)
+    base_cell = np.array(atoms.get_cell())
+
+    class Calc(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+            super().calculate(atoms, properties, system_changes)
+            e = np.linalg.solve(base_cell, np.array(atoms.get_cell())) - np.eye(3)
+            e = 0.5 * (e + e.T)
+            voigt = np.array([e[0, 0], e[1, 1], e[2, 2],
+                              2 * e[1, 2], 2 * e[0, 2], 2 * e[0, 1]])  # engineering shear
+            self.results = {"energy": 0.0, "forces": np.zeros((len(atoms), 3)),
+                            "stress": (C_true * units.GPa) @ voigt}
+
+    res = compute_elastic(atoms, Calc(), check_consistency=False)
+    np.testing.assert_allclose(np.array(res["C_GPa"]), C_true, atol=1e-6)
+
+
+# -- shutdown handling in /api/relax -------------------------------------------
+
+def test_relax_elastic_shutdown_abort_reported_distinctly(client, fake_backends, monkeypatch):
+    from mlip import executor
+
+    def aborted(*a, **k):
+        executor.request_abort()
+        raise elastic_mod.ElasticTimeout("aborted during strained cell 1/24")
+
+    monkeypatch.setattr(main, "_run_elastic_sync", aborted)
+    try:
+        info = _relax(client, _session(), elastic=True).json()["elastic_info"]
+    finally:
+        executor.clear_abort()
+    assert info["abort_reason"] == "shutdown"
+    assert "shutting down" in info["error"]
+
+
+def test_relax_returns_503_when_executor_already_shut_down(client, fake_backends):
+    from mlip import executor
+
+    executor.request_abort()
+    executor.inference_executor.shutdown(wait=False)
+    try:
+        r = _relax(client, _session())
+        assert r.status_code == 503
+    finally:
+        executor.clear_abort()
+        executor.inference_executor.ensure_running()
+    assert _relax(client, _session()).status_code == 200
+
+
+def test_executor_can_be_restarted_after_shutdown():
+    ex = executor_mod_restartable()
+    ex.shutdown(wait=True)
+    with pytest.raises(RuntimeError):
+        ex.submit(int)
+    ex.ensure_running()
+    assert ex.submit(int).result() == 0
+    ex.shutdown(wait=True)
+
+
+def executor_mod_restartable():
+    from mlip.executor import _RestartableExecutor
+    return _RestartableExecutor()

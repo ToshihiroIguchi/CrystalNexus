@@ -10,7 +10,7 @@ from pymatgen.core import Element
 from .base import (CAP_BATCH, CAP_ENERGY, CAP_FEATURES, CAP_FORCES, CAP_MAGMOM,
                    CAP_SITE_ENERGIES, CAP_STRESS, PROP_ATOM_FEATURES,
                    PROP_CRYSTAL_FEATURES, PROP_ENERGY, PROP_SITE_ENERGIES,
-                   MLIPBackend)
+                   MPTRJ_ATOMIC_NUMBERS, MLIPBackend)
 from .executor import run_in_inference_executor
 
 logger = logging.getLogger(__name__)
@@ -45,130 +45,28 @@ except Exception as e:
 # Configurable batch size for CPU processing (env name kept for now)
 MLIP_BATCH_SIZE = int(os.getenv('MLIP_BATCH_SIZE', '4'))
 
-# CHGNet model settings
-MAX_ATOMIC_NUMBER = int(os.getenv('MAX_ATOMIC_NUMBER', '94'))
-MIN_SUPPORTED_ELEMENTS = int(os.getenv('MIN_SUPPORTED_ELEMENTS', '50'))
-
-
 # ---------------------------------------------------------------------------
-# Supported elements (moved from main.py)
+# Supported elements
 # ---------------------------------------------------------------------------
 
 def get_chgnet_supported_elements() -> Set[str]:
+    """Elements CHGNet supports.
+
+    CHGNet is trained on MPtrj, the same data as MACE-MP-0, so both share
+    MPTRJ_ATOMIC_NUMBERS (Z = 1-83 and 89-94). The set is static: no model
+    load is needed to answer it.
     """
-    Dynamically retrieve supported elements from CHGNet
-    With fallback mechanism
-    """
-    if not CHGNET_AVAILABLE:
-        logger.warning("CHGNet not available, using fallback element list")
-        return _get_fallback_elements()
-
-    try:
-        # Method 1: Try direct retrieval from CHGNet model
-        supported_elements = _get_elements_from_chgnet()
-        if supported_elements:
-            logger.info(f"Retrieved {len(supported_elements)} elements from CHGNet")
-            return supported_elements
-
-    except Exception as e:
-        logger.warning(f"Failed to get elements from CHGNet: {e}")
-
-    try:
-        # Method 2: Get safe range from pymatgen periodic table
-        supported_elements = _get_elements_from_periodic_table()
-        if supported_elements:
-            logger.info(f"Using periodic table range: {len(supported_elements)} elements")
-            return supported_elements
-
-    except Exception as e:
-        logger.error(f"Failed to get elements from periodic table: {e}")
-
-    # Method 3: Final fallback
-    logger.warning("Using hardcoded fallback element list")
-    return _get_fallback_elements()
-
-
-def _get_elements_from_chgnet() -> Optional[Set[str]]:
-    """Get element list supported by CHGNet (atomic-number range with exclusions)"""
-    try:
-        # Note: no model load needed here; the supported set is derived from the
-        # known CHGNet atomic-number range, avoiding a redundant CHGNet.load().
-        supported_elements = set()
-        for z in range(1, MAX_ATOMIC_NUMBER + 1):
-            try:
-                element = Element.from_Z(z)
-                # Exclude noble gases and actinoids (based on CHGNet characteristics)
-                if z not in [2, 10, 18, 36, 54, 86] and z <= 92:  # He, Ne, Ar, Kr, Xe, Rn, exclude U and beyond
-                    supported_elements.add(element.symbol)
-            except (ValueError, AttributeError):
-                continue
-
-        return supported_elements if supported_elements else None
-
-    except Exception as e:
-        logger.debug(f"Direct CHGNet element extraction failed: {e}")
-        return None
-
-
-def _get_elements_from_periodic_table() -> Optional[Set[str]]:
-    """Get valid element range from pymatgen periodic table"""
-    try:
-        supported_elements = set()
-
-        # Range generally supported by Materials Project/CHGNet
-        # Atomic numbers 1-92 (up to U, excluding some noble gases and radioactive elements)
-        excluded_elements = {
-            # Noble gases
-            'He', 'Ne', 'Ar', 'Kr', 'Xe', 'Rn',
-            # Some actinoids (low stability)
-            'Np', 'Pu', 'Am', 'Cm', 'Bk', 'Cf', 'Es', 'Fm', 'Md', 'No', 'Lr'
-        }
-
-        for z in range(1, 93):  # 1-92 (H to U)
-            try:
-                element = Element.from_Z(z)
-                if element.symbol not in excluded_elements:
-                    supported_elements.add(element.symbol)
-            except (ValueError, AttributeError):
-                continue
-
-        return supported_elements if len(supported_elements) > MIN_SUPPORTED_ELEMENTS else None
-
-    except Exception:
-        return None
-
-
-def _get_fallback_elements() -> Set[str]:
-    """
-    Final fallback: only reliably supported elements
-    Safe element list frequently used in Materials Project
-    """
-    return {
-        # Periods 1-2
-        'H', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F',
-        # Period 3
-        'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl',
-        # Period 4
-        'K', 'Ca', 'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn',
-        'Ga', 'Ge', 'As', 'Se', 'Br',
-        # Period 5
-        'Rb', 'Sr', 'Y', 'Zr', 'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd',
-        'In', 'Sn', 'Sb', 'Te', 'I',
-        # Period 6 (main)
-        'Cs', 'Ba', 'La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy',
-        'Ho', 'Er', 'Tm', 'Yb', 'Lu', 'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt',
-        'Au', 'Hg', 'Tl', 'Pb', 'Bi',
-        # Period 7 (stable)
-        'Th', 'U'
-    }
+    return {Element.from_Z(z).symbol for z in MPTRJ_ATOMIC_NUMBERS}
 
 
 # ---------------------------------------------------------------------------
 # Normalization (moved from main.safe_get_prediction)
 # ---------------------------------------------------------------------------
 
-_HANDLED_RAW_KEYS = ("energy", "e", "forces", "f", "stress", "s", "magmom", "m",
-                     "site_energies", "crystal_fea", "atom_fea")
+_HANDLED_RAW_KEYS = ("energy", "e", "energy_per_atom", "e_per_atom",
+                     "forces", "f", "force", "stress", "s", "virial",
+                     "magmom", "m", "magmoms", "site_energies", "site_energy",
+                     "crystal_fea", "crystal_features", "atom_fea", "atom_features")
 
 
 def normalize_chgnet_prediction(pred, num_atoms=None) -> dict:
@@ -300,7 +198,10 @@ class CHGNetBackend(MLIPBackend):
         try:
             from chgnet.model.model import CHGNet
 
-            self._model = CHGNet.load(use_device=self._device, verbose=False)
+            # On the single-worker inference executor: off the event loop and
+            # serialized with all other model work. The caller holds self._lock.
+            self._model = await run_in_inference_executor(
+                CHGNet.load, use_device=self._device, verbose=False)
             logger.info(f"CHGNet model loaded and cached (device={self._device})")
 
         except Exception as load_error:

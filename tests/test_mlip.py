@@ -170,3 +170,26 @@ def test_single_shared_inference_executor():
     from mlip.executor import inference_executor
     assert main._inference_executor is inference_executor
     assert inference_executor._max_workers == 1
+
+
+# -- invalid default model env ------------------------------------------------
+
+def test_invalid_default_model_env_falls_back_to_chgnet(monkeypatch, caplog):
+    from mlip import registry
+
+    monkeypatch.setenv("CRYSTALNEXUS_DEFAULT_MODEL", "no-such-model")
+    monkeypatch.setattr(registry, "_warned_invalid_defaults", set())
+    with caplog.at_level("WARNING", logger="mlip.registry"):
+        assert registry.default_model_id() == "chgnet"
+        assert registry.default_model_id() == "chgnet"
+    assert sum("no-such-model" in r.message for r in caplog.records) == 1  # logged once
+    assert registry.get_backend().id == "chgnet"
+    defaults = [m["id"] for m in registry.list_models() if m["is_default"]]
+    assert defaults == ["chgnet"]
+
+
+def test_api_models_default_is_valid_with_bad_env(client, monkeypatch):
+    monkeypatch.setenv("CRYSTALNEXUS_DEFAULT_MODEL", "bogus")
+    data = client.get("/api/models").json()
+    assert data["default"] == "chgnet"
+    assert [m["id"] for m in data["models"] if m["is_default"]] == ["chgnet"]

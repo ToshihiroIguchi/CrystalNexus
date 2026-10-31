@@ -10,6 +10,7 @@ import time
 import numpy as np
 
 from .base import ase_stress_to_gpa
+from .executor import abort_requested
 
 # Voigt order (same as ASE): xx, yy, zz, yz, xz, xy
 _VOIGT_PAIRS = [(0, 0), (1, 1), (2, 2), (1, 2), (0, 2), (0, 1)]
@@ -62,6 +63,8 @@ def _tensor_at_strain(atoms, calculator, strain, fmax, max_steps, deadline,
             counter += 1
             if progress_cb is not None:
                 progress_cb(counter, total)
+            if abort_requested():
+                raise ElasticTimeout(f"aborted before strained cell {counter}/{total}")
             if deadline is not None and time.monotonic() > deadline:
                 raise ElasticTimeout(
                     f"time limit reached before strained cell {counter}/{total}")
@@ -73,6 +76,9 @@ def _tensor_at_strain(atoms, calculator, strain, fmax, max_steps, deadline,
             opt = FIRE(a, logfile=None)
 
             def _check_deadline(counter=counter):
+                if abort_requested():
+                    raise ElasticTimeout(
+                        f"aborted during strained cell {counter}/{total}")
                 if deadline is not None and time.monotonic() > deadline:
                     raise ElasticTimeout(
                         f"time limit reached during strained cell {counter}/{total}")
