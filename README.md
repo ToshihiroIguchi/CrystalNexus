@@ -270,6 +270,16 @@ For a faster feedback loop, skip the slow tests:
 python -m pytest tests/ -m "not slow"
 ```
 
+### End-to-end (browser) tests
+
+`tests/e2e/` drives the real UI in headless Chromium (pytest-playwright) against an in-process
+server that uses a fast EMT-based fake ML backend (no model download). These tests are skipped by
+default; opt in with `-m e2e` (or `RUN_E2E=1`):
+```bash
+python -m playwright install chromium   # one-time browser download
+python -m pytest -m e2e -q
+```
+
 ---
 
 ## Troubleshooting

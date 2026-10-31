@@ -238,6 +238,9 @@ function setupTestEnvironment() {
             highlightedAtom = null;
         },
         clearGhostAtom: () => {},
+        // Stub: setupOperationListeners calls this on element changes; its
+        // option filtering is irrelevant to the click/hover behavior tested here.
+        filterSubstituteOptions: () => {},
         console: console
     };
 
