@@ -935,7 +935,7 @@
 
             const unit = type === 'energy' ? 'eV' : 'µB total';
 
-            if (statusObj.calculated && statusObj.value !== null) {
+            if (statusObj.calculated && Number.isFinite(statusObj.value)) {
                 // Show calculated value with copy button
                 const copyBtnId = `copy-total-${type}`;
                 const copyFunction = type === 'energy' ? 'copyTotalEnergy()' : 'copyTotalMagnetic()';
@@ -953,7 +953,9 @@
             } else {
                 // Show status message
                 let message;
-                if (statusObj.status === 'ready') {
+                if (statusObj.status === 'calculated') {
+                    message = 'N/A';  // calculated but the value is missing (null from the server)
+                } else if (statusObj.status === 'ready') {
                     message = STATUS_MESSAGES.ready;
                 } else if (statusObj.status === 'calculating') {
                     message = STATUS_MESSAGES.calculating;
@@ -1004,7 +1006,21 @@
         // immediately before calling this function. null is falsy, so
         // existing `if (!accepted) return;`-style call sites keep working
         // unchanged.
+        // The in-flight edit request, so Reset / New CIF can abort it: a late
+        // apply must not land on top of the freshly reset structure.
+        let pendingEditController = null;
+
+        function abortPendingEdit() {
+            if (pendingEditController) {
+                pendingEditController.abort();
+                pendingEditController = null;
+            }
+        }
+
         async function updateSessionWithOperations() {
+            const editController = new AbortController();
+            pendingEditController = editController;
+            const generationAtSend = structureGeneration;
             try {
                 const response = await fetch('/api/apply-atomic-operations', {
                     method: 'POST',
@@ -1014,8 +1030,15 @@
                     body: JSON.stringify({
                         session_id: window.sessionId,
                         operations: window.atomicOperations
-                    })
+                    }),
+                    signal: editController.signal
                 });
+
+                if (editController.signal.aborted || structureGeneration !== generationAtSend) {
+                    // Reset / New CIF superseded this edit while it was in flight.
+                    window.atomicOperations.pop();
+                    return null;
+                }
 
                 if (response.ok) {
                     const result = await response.json();
@@ -1039,10 +1062,16 @@
                 showNotification(`Operation rejected by server (undone): ${detail}`, 'error');
                 return null;
             } catch (error) {
-                console.error('❌ Error updating session:', error);
                 window.atomicOperations.pop();
+                if (error.name === 'AbortError') {
+                    dlog('Edit aborted by Reset / New CIF');
+                    return null;
+                }
+                console.error('❌ Error updating session:', error);
                 showNotification('Operation could not be saved (undone): network error.', 'error');
                 return null;
+            } finally {
+                if (pendingEditController === editController) pendingEditController = null;
             }
         }
 
@@ -1456,6 +1485,10 @@
                 // still enabled -- a failed load must not let Confirm proceed
                 // with stale data (see F9).
                 resetAnalysis();
+                // Clear the chooser too: re-selecting the same (fixed) file
+                // would otherwise not fire `change`.
+                const failedUploadInput = document.getElementById('uploadFile');
+                if (failedUploadInput) failedUploadInput.value = '';
             }
         }
 
@@ -1635,6 +1668,7 @@
 
         // Visual Feedback Functions
         function showFileLoadingStatus() {
+            clearTimeout(fileStatusClearTimer);
             const statusArea = document.getElementById('fileStatusArea');
             const statusHTML = `
                 <div class="file-status loading">
@@ -1644,6 +1678,8 @@
             `;
             statusArea.innerHTML = statusHTML;
         }
+
+        let fileStatusClearTimer = null;
 
         function showFileLoadSuccess(filename) {
             const statusArea = document.getElementById('fileStatusArea');
@@ -1655,13 +1691,16 @@
             `;
             statusArea.innerHTML = statusHTML;
 
-            // Auto-clear success message after 3 seconds
-            setTimeout(() => {
+            // Auto-clear success message after 3 seconds (cancelled by any later
+            // status message so it cannot wipe that one)
+            clearTimeout(fileStatusClearTimer);
+            fileStatusClearTimer = setTimeout(() => {
                 clearFileStatus();
             }, 3000);
         }
 
         function showFileLoadError(message) {
+            clearTimeout(fileStatusClearTimer);
             const statusArea = document.getElementById('fileStatusArea');
             const statusHTML = `
                 <div class="file-status error">
@@ -1718,6 +1757,9 @@
         // Analyze button disabled so a duplicate relax request can't be fired
         // (and 429 / stomp the first run's progress UI) while one is running.
         let relaxInProgress = false;
+        // Identifies the current relax run; New CIF bumps it so an abandoned run's
+        // completion cannot touch the UI/flags of a newer one.
+        let relaxRunId = 0;
 
         function generateStructureHash() {
             try {
@@ -1927,13 +1969,21 @@
             }
         }
 
+        // toFixed that tolerates null/undefined/NaN (server may report null energies)
+        function formatFixed(v, digits, fallback = 'N/A') {
+            return Number.isFinite(v) ? v.toFixed(digits) : fallback;
+        }
+
         function displayEnergyResults(initialPred, finalPred, isRelaxation) {
             const energySummary = document.getElementById('energy-summary');
             const energyDetailBtn = document.getElementById('energy-detail-btn');
             const energyDetailsTable = document.getElementById('energy-details-table');
 
             if (finalPred && finalPred.energy_eV_per_atom !== undefined) {
-                const energyPerAtom = finalPred.energy_eV_per_atom;
+                // Energies may be null (e.g. a model that reports none): keep them
+                // as null and render "N/A" instead of calling .toFixed on null.
+                const fmtEnergy = (v) => formatFixed(v, 6);
+                const energyPerAtom = Number.isFinite(finalPred.energy_eV_per_atom) ? finalPred.energy_eV_per_atom : null;
 
                 // Calculate number of atoms and total energy
                 let numAtoms = 1; // default
@@ -1941,7 +1991,9 @@
                     numAtoms = finalPred.forces_eV_per_A.length;
                 }
                 // Use total_energy_eV from backend if available, otherwise calculate
-                const totalEnergy = finalPred.total_energy_eV !== undefined ? finalPred.total_energy_eV : energyPerAtom * numAtoms;
+                const totalEnergy = Number.isFinite(finalPred.total_energy_eV)
+                    ? finalPred.total_energy_eV
+                    : (energyPerAtom !== null ? energyPerAtom * numAtoms : null);
 
                 // Update status display system
                 updateStatusDisplay('energy', 'calculated', totalEnergy, true);
@@ -1952,9 +2004,9 @@
                 // Add basic energy information
                 detailsHTML += '<table class="detail-table">';
                 detailsHTML += '<tr><th>Energy Details</th><th><button class="copy-btn" onclick="copyAllEnergyData()" title="Copy All Energy Data">📋 Copy All</button></th></tr>';
-                detailsHTML += `<tr><td><strong>Energy per atom:</strong></td><td>${energyPerAtom.toFixed(6)} eV/atom</td></tr>`;
+                detailsHTML += `<tr><td><strong>Energy per atom:</strong></td><td>${fmtEnergy(energyPerAtom)} eV/atom</td></tr>`;
                 detailsHTML += `<tr><td><strong>Number of atoms:</strong></td><td>${numAtoms} atoms</td></tr>`;
-                detailsHTML += `<tr><td><strong>Total energy:</strong></td><td>${totalEnergy.toFixed(6)} eV</td></tr>`;
+                detailsHTML += `<tr><td><strong>Total energy:</strong></td><td>${fmtEnergy(totalEnergy)} eV</td></tr>`;
                 detailsHTML += '</table><br>';
 
                 // Add Site Energies if available
@@ -1969,12 +2021,12 @@
                     siteEnergies.forEach((energy, i) => {
                         // Use current labels to reflect any element substitutions
                         const atomLabel = window.currentLabels && window.currentLabels[i] ? window.currentLabels[i] : `Site ${i + 1}`;
-                        detailsHTML += `<tr><td>${escapeHtml(atomLabel)}:</td><td class="site-energy">${energy.toFixed(6)} eV</td></tr>`;
+                        detailsHTML += `<tr><td>${escapeHtml(atomLabel)}:</td><td class="site-energy">${fmtEnergy(energy)} eV</td></tr>`;
                     });
 
                     // Add verification
-                    const siteSum = siteEnergies.reduce((sum, e) => sum + e, 0);
-                    detailsHTML += `<tr><td style="padding-top: 10px;"><em>Sum of site energies:</em></td><td style="padding-top: 10px;"><em>${siteSum.toFixed(6)} eV</em></td></tr>`;
+                    const siteSum = siteEnergies.every(Number.isFinite) ? siteEnergies.reduce((sum, e) => sum + e, 0) : null;
+                    detailsHTML += `<tr><td style="padding-top: 10px;"><em>Sum of site energies:</em></td><td style="padding-top: 10px;"><em>${fmtEnergy(siteSum)} eV</em></td></tr>`;
                     detailsHTML += '</table>';
                 } else {
                     detailsHTML = '<p>Site energies not available for this calculation.</p>';
@@ -1994,9 +2046,11 @@
                 dlog('Energy analysis data set:', window.energyAnalysisData);
 
                 // Add initial data if available (for relaxation)
-                if (isRelaxation && initialPred && initialPred.energy_eV_per_atom !== undefined) {
-                    const initialEnergyPerAtom = initialPred.energy_eV_per_atom;
-                    const initialTotalEnergy = initialPred.total_energy_eV !== undefined ? initialPred.total_energy_eV : initialEnergyPerAtom * numAtoms;
+                const initialEnergyPerAtom = initialPred && Number.isFinite(initialPred.energy_eV_per_atom) ? initialPred.energy_eV_per_atom : null;
+                const initialTotalEnergy = initialPred && Number.isFinite(initialPred.total_energy_eV)
+                    ? initialPred.total_energy_eV
+                    : (initialEnergyPerAtom !== null ? initialEnergyPerAtom * numAtoms : null);
+                if (isRelaxation && initialEnergyPerAtom !== null && initialTotalEnergy !== null) {
 
                     window.energyAnalysisData.initial = {
                         totalEnergy: initialTotalEnergy,
@@ -2004,10 +2058,13 @@
                         numAtoms: numAtoms
                     };
 
-                    window.energyAnalysisData.changes = {
-                        totalEnergyChange: totalEnergy - initialTotalEnergy,
-                        energyChangePerAtom: energyPerAtom - initialEnergyPerAtom
-                    };
+                    // A missing final energy must not turn into a change from 0.
+                    if (totalEnergy !== null && energyPerAtom !== null) {
+                        window.energyAnalysisData.changes = {
+                            totalEnergyChange: totalEnergy - initialTotalEnergy,
+                            energyChangePerAtom: energyPerAtom - initialEnergyPerAtom
+                        };
+                    }
                 }
             } else {
                 updateStatusDisplay('energy', 'error');
@@ -2649,20 +2706,21 @@
             let energyText = '=== Energy Details ===\n';
             const finalData = window.energyAnalysisData.final;
 
-            energyText += `Energy per atom: ${finalData.energyPerAtom.toFixed(6)} eV/atom\n`;
+            energyText += `Energy per atom: ${formatFixed(finalData.energyPerAtom, 6)} eV/atom\n`;
             energyText += `Number of atoms: ${finalData.numAtoms} atoms\n`;
-            energyText += `Total energy: ${finalData.totalEnergy.toFixed(6)} eV\n`;
+            energyText += `Total energy: ${formatFixed(finalData.totalEnergy, 6)} eV\n`;
 
             // Add site energies if available
             if (window.currentSiteEnergies && window.currentSiteEnergies.length > 0) {
                 energyText += '\n=== Site Energies ===\n';
                 window.currentSiteEnergies.forEach((energy, i) => {
                     const atomLabel = window.currentLabels && window.currentLabels[i] ? window.currentLabels[i] : `Site ${i + 1}`;
-                    energyText += `${atomLabel}: ${energy.toFixed(6)} eV\n`;
+                    energyText += `${atomLabel}: ${formatFixed(energy, 6)} eV\n`;
                 });
 
-                const siteSum = window.currentSiteEnergies.reduce((sum, e) => sum + e, 0);
-                energyText += `Sum of site energies: ${siteSum.toFixed(6)} eV\n`;
+                const siteSum = window.currentSiteEnergies.every(Number.isFinite)
+                    ? window.currentSiteEnergies.reduce((sum, e) => sum + e, 0) : null;
+                energyText += `Sum of site energies: ${formatFixed(siteSum, 6)} eV\n`;
             }
 
             dlog('Copying all energy data:', energyText);
@@ -3146,6 +3204,8 @@ Crystal system: ${data.crystal_system}`;
             // Guard against a duplicate relax request being fired (and 429ing,
             // stomping this run's progress UI) while this one is still in
             // flight -- see F4. Cleared in the finally block below.
+            const myRunId = ++relaxRunId;
+            const isCurrentRun = () => relaxRunId === myRunId;
             relaxInProgress = true;
             try {
                 // Record start time for calculation duration
@@ -3207,6 +3267,12 @@ Crystal system: ${data.crystal_system}`;
 
                 const progressSource = new EventSource('/api/relax-progress/' + window.sessionId);
                 progressSource.onmessage = (event) => {
+                    // The structure was edited/replaced since this run started:
+                    // its progress no longer belongs on screen.
+                    if (!isCurrentRun() || structureGeneration !== generationAtStart) {
+                        progressSource.close();
+                        return;
+                    }
                     try {
                         const state = JSON.parse(event.data);
                         if (state.done) {
@@ -3299,7 +3365,7 @@ Crystal system: ${data.crystal_system}`;
                     // the UI for whatever structure exists now.
                     if (structureGeneration !== generationAtStart) {
                         dlog('Discarding stale relax result — structure changed during analysis');
-                        setMlipButtonState('complete');
+                        if (isCurrentRun()) setMlipButtonState('complete');
                         return;
                     }
 
@@ -3334,7 +3400,7 @@ Crystal system: ${data.crystal_system}`;
                     }
                 } finally {
                     progressSource.close();
-                    hideMlipStatus();
+                    if (isCurrentRun()) hideMlipStatus();
                 }
 
                 // Update structure information with relaxed data
@@ -3361,7 +3427,7 @@ Crystal system: ${data.crystal_system}`;
                 // changed while updateRelaxed3DVisualization was in flight.
                 if (structureGeneration !== generationAtStart) {
                     dlog('Discarding stale relax result — structure changed during analysis');
-                    setMlipButtonState('complete');
+                    if (isCurrentRun()) setMlipButtonState('complete');
                     return;
                 }
 
@@ -3386,6 +3452,7 @@ Crystal system: ${data.crystal_system}`;
 
             } catch (error) {
                 console.error('❌ ML potential analysis failed:', error);
+                if (!isCurrentRun()) return;  // abandoned by New CIF
                 showNotification(`Analysis failed: ${error.message}`, 'error');
 
                 // Restore button on error
@@ -3396,8 +3463,10 @@ Crystal system: ${data.crystal_system}`;
                 updateStatusDisplay('energy', 'error');
                 updateStatusDisplay('magnetic', 'error');
             } finally {
-                relaxInProgress = false;
-                updateAnalyzeButtonState();
+                if (isCurrentRun()) {
+                    relaxInProgress = false;
+                    updateAnalyzeButtonState();
+                }
             }
         }
 
@@ -4419,7 +4488,7 @@ Crystal system: ${data.crystal_system}`;
                     showExecuteStatus(`Evaluating sites ${i + 1}-${lastInChunk}/${voids.length}...`, true, true);
 
                     try {
-                        const energyResponse = await fetch('/api/evaluate-insertion-energies', {
+                        const energyResponse = await fetchWithRetry('/api/evaluate-insertion-energies', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(withModel({
@@ -4440,6 +4509,7 @@ Crystal system: ${data.crystal_system}`;
 
                         if (!energyResponse.ok) {
                             console.warn(`Batch evaluation failed for sites ${i + 1}-${lastInChunk}: HTTP ${energyResponse.status}`);
+                            showNotification(`Energy evaluation failed for sites ${i + 1}-${lastInChunk} (HTTP ${energyResponse.status}); the best site may be missing.`, 'warning');
                         } else {
                             const energyData = await energyResponse.json();
                             const resultById = new Map((energyData.results || []).map(r => [r.id, r]));
@@ -5438,6 +5508,44 @@ Crystal system: ${data.crystal_system}`;
         const UNRELAXED_RANKING_CAVEAT = ' Note: this ranking is based on unrelaxed (single-point) energies and ' +
             'may differ from the relaxed-structure ranking -- run Analyze (relax) to confirm.';
 
+        // fetch() that retries on HTTP 429 (server rate limiter), honoring the
+        // Retry-After header (seconds, capped). Resolves with the last response
+        // once it is not a 429 or the retry budget is spent; aborting via
+        // init.signal rejects with an AbortError like a plain fetch.
+        async function fetchWithRetry(url, init, maxRetries = 4) {
+            for (let attempt = 0; ; attempt++) {
+                const response = await fetch(url, init);
+                if (response.status !== 429 || attempt >= maxRetries) return response;
+                const retryAfter = parseFloat(response.headers.get('Retry-After'));
+                const waitMs = Math.min(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 2000, 15000);
+                dlog(`HTTP 429 from ${url}; retrying in ${waitMs} ms`);
+                await new Promise((resolve, reject) => {
+                    const signal = init && init.signal;
+                    if (signal && signal.aborted) {
+                        reject(new DOMException('Aborted', 'AbortError'));
+                        return;
+                    }
+                    const timer = setTimeout(resolve, waitMs);
+                    if (signal) {
+                        signal.addEventListener('abort', () => {
+                            clearTimeout(timer);
+                            reject(new DOMException('Aborted', 'AbortError'));
+                        }, { once: true });
+                    }
+                });
+            }
+        }
+
+        // When some Auto-sweep candidates failed, the best of the rest may not
+        // be the true optimum: ask before applying it.
+        function confirmPartialSweep(failedCount, totalCount, actionLabel) {
+            return confirm(
+                `${failedCount} of ${totalCount} candidate calculations failed, so the best of the ` +
+                `remaining candidates may not be the true optimum.
+
+Apply the best ${actionLabel} anyway?`);
+        }
+
         // Formats an atom label with its symmetry-equivalent group size
         // (e.g. "Ti0 (×8)") for display in sweep logs/notifications when
         // the equivalent-sites reduction (see runOptimalCandidateSweep) let
@@ -5571,7 +5679,11 @@ Crystal system: ${data.crystal_system}`;
             // Reset/Cancel or a structure edit during the request above:
             // abandon the sweep instead of continuing against stale state.
             if (controller.signal.aborted || structureGeneration !== generationAtStart) {
-                if (currentAbortController === controller) currentAbortController = null;
+                if (currentAbortController === controller) {
+                    currentAbortController = null;
+                    hideExecuteStatus();
+                    hideCurrentBest();
+                }
                 setExecuteButtonState('complete');
                 return;
             }
@@ -5671,7 +5783,7 @@ Crystal system: ${data.crystal_system}`;
                     });
 
                     try {
-                        const response = await fetch('/api/evaluate-candidate-energies', {
+                        const response = await fetchWithRetry('/api/evaluate-candidate-energies', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(withModel({ session_id: window.sessionId, candidates })),
@@ -5764,6 +5876,12 @@ Crystal system: ${data.crystal_system}`;
                     // itself here, so reset the Execute button ourselves --
                     // otherwise button-processing (and isOperationProcessing)
                     // stays stuck forever, blocking 3D click/hover.
+                    // A Reset aborts the controller too: hide the progress UI
+                    // unless a newer run has taken over the shared status box.
+                    if (currentAbortController === controller) {
+                        hideExecuteStatus();
+                        hideCurrentBest();
+                    }
                     setExecuteButtonState('complete');
                     return;
                 }
@@ -5771,6 +5889,7 @@ Crystal system: ${data.crystal_system}`;
                 if (structureGeneration !== generationAtStart) {
                     dlog('Discarding stale candidate sweep — structure changed during evaluation');
                     hideExecuteStatus();
+                    hideCurrentBest();
                     setExecuteButtonState('complete');
                     return;
                 }
@@ -5817,6 +5936,14 @@ Crystal system: ${data.crystal_system}`;
                 failedCalculations: failed.length,
                 successRate: totalProcessed > 0 ? ((successful.length / totalProcessed) * 100).toFixed(1) : '0'
             };
+
+            if (bestResult && failed.length > 0 && !confirmPartialSweep(failed.length, totalProcessed, 'substitution')) {
+                showCalculationReport(summary, successful, failed, bestResult, 'substitution');
+                showNotification(`Auto substitution not applied: ${failed.length} of ${totalProcessed} candidate calculations failed.`, 'warning');
+                showExecutionComplete(`Substitution not applied: ${failed.length} of ${totalProcessed} candidate calculations failed`, results);
+                setExecuteButtonState('complete');
+                return;
+            }
 
             if (bestResult) {
                 showExecuteStatus('Optimal atom found, executing substitution...', false);
@@ -5897,7 +6024,7 @@ Crystal system: ${data.crystal_system}`;
                     <h4>Auto Mode ${operationType} Report</h4>
                     <div class="summary">
                         <p><strong>Success Rate:</strong> ${summary.successRate}% (${summary.successfulCalculations}/${summary.totalAtoms})</p>
-                        <p><strong>Best Result:</strong> ${bestResult.atom} → ${bestResult.energy.toFixed(6)} eV</p>
+                        <p><strong>Best Result:</strong> ${escapeHtml(bestResult.atom)} → ${bestResult.energy.toFixed(6)} eV</p>
                     </div>
                     
                     ${failed.length > 0 ? `
@@ -5970,6 +6097,14 @@ Crystal system: ${data.crystal_system}`;
                 failedCalculations: failed.length,
                 successRate: totalProcessed > 0 ? ((successful.length / totalProcessed) * 100).toFixed(1) : '0'
             };
+
+            if (bestResult && failed.length > 0 && !confirmPartialSweep(failed.length, totalProcessed, 'deletion')) {
+                showCalculationReport(summary, successful, failed, bestResult, 'deletion');
+                showNotification(`Auto deletion not applied: ${failed.length} of ${totalProcessed} candidate calculations failed.`, 'warning');
+                showExecutionComplete(`Deletion not applied: ${failed.length} of ${totalProcessed} candidate calculations failed`, results);
+                setExecuteButtonState('complete');
+                return;
+            }
 
             if (bestResult) {
                 showExecuteStatus('Optimal atom found, executing deletion...', false);
@@ -6080,6 +6215,7 @@ Crystal system: ${data.crystal_system}`;
             if (typeof currentAbortController !== 'undefined' && currentAbortController) {
                 currentAbortController.abort();
             }
+            abortPendingEdit();
 
             try {
                 // Show reset in progress
@@ -6190,28 +6326,10 @@ Crystal system: ${data.crystal_system}`;
 
             } catch (error) {
                 console.error('❌ Structure reset failed:', error);
-                showNotification(`Reset failed: ${error.message}. Please refresh the page.`, 'error');
-
-                // Fallback: try frontend-only reset
-                try {
-                    window.atomicOperations = [];
-                    // See the matching comment in the success path above.
-                    currentStructureCif = null;
-                    structureGeneration++;
-                    hideRelaxCharts();
-                    window.currentStructureData = JSON.parse(JSON.stringify(window.originalSupercellData));
-                    window.currentLabels = [...window.originalLabels];
-                    displaySupercellInfo();
-                    displayStructureOperations(window.currentLabels);
-                    if (window.autoModeChart) window.autoModeChart.reset();
-                    await updateStructureVisualization();
-                    resetCrystalView();
-                    dlog('⚠️ Performed frontend-only fallback reset');
-                    // Notify structure change after fallback reset too
-                    markStructureAsChanged();
-                } catch (fallbackError) {
-                    console.error('❌ Even fallback reset failed:', fallbackError);
-                }
+                // The server may still hold the edited structure, so do not
+                // reset the UI on its own: keep the current (edited) state so the
+                // UI and server stay in sync, and let the user retry.
+                showNotification(`Reset failed: ${error.message}. The structure was left unchanged; please try again.`, 'error');
             }
         }
 
@@ -6732,7 +6850,7 @@ Crystal system: ${data.crystal_system}`;
                 };
 
                 dlog('📡 Requesting structure with operations from API...');
-                const response = await fetch('/api/generate-modified-structure-cif', {
+                const response = await fetchWithRetry('/api/generate-modified-structure-cif', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(requestData)
@@ -7060,9 +7178,21 @@ Crystal system: ${data.crystal_system}`;
                 currentAbortController.abort();
                 currentAbortController = null;
             }
+            abortPendingEdit();
             currentStructureCif = null;
             structureGeneration++;
+            relaxRunId++;  // abandon any relax still running for the old structure
+            relaxInProgress = false;
             hideRelaxCharts();
+            hideMlipStatus();
+
+            // Hide the previous structure's result panels (energy/magnetic/elastic
+            // drawers, Young's modulus, 'Analysis required' banner, Analyze
+            // highlight) and any leftover Auto-sweep report.
+            resetPhysicalProperties();
+            clearStatusMessage();
+            const staleReport = document.getElementById('calculation-report');
+            if (staleReport) staleReport.remove();
 
             // The model is chosen again in the load dialog for the next structure.
             window.sessionModelId = null;
@@ -7162,7 +7292,7 @@ Crystal system: ${data.crystal_system}`;
                     } catch (e) { /* best-effort cleanup */ }
                     try {
                         const canvas = window.viewer3D.getCanvas ? window.viewer3D.getCanvas() : null;
-                        const gl = canvas && (canvas.getContext('webgl') || canvas.getContext('experimental-webgl'));
+                        const gl = canvas && (canvas.getContext('webgl2') || canvas.getContext('webgl'));
                         const ext = gl && gl.getExtension('WEBGL_lose_context');
                         if (ext) ext.loseContext();
                     } catch (e) { /* best-effort cleanup */ }
@@ -7174,12 +7304,6 @@ Crystal system: ${data.crystal_system}`;
 
                 // Clear viewer reference to force re-initialization
                 window.viewer3D = null;
-            }
-
-            // Clear analysis data and reset UI elements
-            const analysisContainer = document.getElementById('analysis-container');
-            if (analysisContainer) {
-                analysisContainer.innerHTML = '';
             }
 
             // Reset main crystal info
@@ -7310,9 +7434,12 @@ Crystal system: ${data.crystal_system}`;
                 const numAtoms = data.structure_info?.num_atoms || finalPred.forces_eV_per_A?.length || 0;
 
                 // Calculate energies
-                const initialTotalEnergy = initialPred ? (initialPred.total_energy_eV !== undefined ? initialPred.total_energy_eV : initialPred.energy_eV_per_atom * numAtoms) : null;
-                const finalTotalEnergy = finalPred.total_energy_eV !== undefined ? finalPred.total_energy_eV : finalPred.energy_eV_per_atom * numAtoms;
-                const energyChange = initialTotalEnergy ? finalTotalEnergy - initialTotalEnergy : null;
+                const totalOf = (pred) => !pred ? null
+                    : (Number.isFinite(pred.total_energy_eV) ? pred.total_energy_eV
+                        : (Number.isFinite(pred.energy_eV_per_atom) ? pred.energy_eV_per_atom * numAtoms : null));
+                const initialTotalEnergy = totalOf(initialPred);
+                const finalTotalEnergy = totalOf(finalPred);
+                const energyChange = (initialTotalEnergy !== null && finalTotalEnergy !== null) ? finalTotalEnergy - initialTotalEnergy : null;
                 const energyChangePerAtom = data.energy_change_eV_per_atom || 0;
 
                 tableHTML += `
@@ -7323,13 +7450,13 @@ Crystal system: ${data.crystal_system}`;
                     </tr>
                     <tr>
                         <td><strong>Total Energy (eV)</strong></td>
-                        <td>${initialTotalEnergy ? initialTotalEnergy.toFixed(6) : '-'}</td>
-                        <td><span class="${finalPred.energy_eV_per_atom < 0 ? 'energy-negative' : 'energy-positive'}">${finalTotalEnergy.toFixed(6)}</span></td>
+                        <td>${formatFixed(initialTotalEnergy, 6, '-')}</td>
+                        <td><span class="${finalPred.energy_eV_per_atom < 0 ? 'energy-negative' : 'energy-positive'}">${formatFixed(finalTotalEnergy, 6)}</span></td>
                     </tr>
                     <tr>
                         <td><strong>Energy per atom (eV/atom)</strong></td>
-                        <td>${initialPred ? initialPred.energy_eV_per_atom.toFixed(6) : '-'}</td>
-                        <td><span class="${finalPred.energy_eV_per_atom < 0 ? 'energy-negative' : 'energy-positive'}">${finalPred.energy_eV_per_atom.toFixed(6)}</span></td>
+                        <td>${formatFixed(initialPred?.energy_eV_per_atom, 6, '-')}</td>
+                        <td><span class="${finalPred.energy_eV_per_atom < 0 ? 'energy-negative' : 'energy-positive'}">${formatFixed(finalPred.energy_eV_per_atom, 6)}</span></td>
                     </tr>
                 `;
             }
@@ -7339,7 +7466,7 @@ Crystal system: ${data.crystal_system}`;
             // Generate insights
             let insights = '<h4>Energy Analysis Insights:</h4><ul>';
 
-            if (finalPred && finalPred.energy_eV_per_atom !== undefined) {
+            if (finalPred && Number.isFinite(finalPred.energy_eV_per_atom)) {
                 const stability = finalPred.energy_eV_per_atom < 0 ? 'stable' : 'unstable';
                 insights += `<li><strong>Stability:</strong> The final structure is ${stability} with ${finalPred.energy_eV_per_atom.toFixed(3)} eV/atom.</li>`;
 
@@ -8350,12 +8477,17 @@ Crystal system: ${data.crystal_system}`;
             dlog('Current filename:', window.currentFilename);
             dlog('Current analysis data:', window.currentAnalysisData);
 
-            // Try to get the current CIF file from backend
+            // Prefer the stored relaxed structure; it is cleared by any edit/Reset
+            // (404), in which case the current structure is rebuilt from the
+            // operation history instead.
             if (window.currentFilename) {
+                let cifContent = null;
+                // currentAnalysisData is cleared by every edit / Reset, so it is
+                // only set while a relaxed structure exists on the server; this
+                // avoids a guaranteed 404 for unrelaxed structures.
                 try {
-                    const url = `/api/generate-relaxed-structure-cif`;
-                    dlog('Fetching CIF from URL:', url);
-                    const response = await fetch(url, {
+                    if (!window.currentAnalysisData) throw new Error('no relaxed structure');
+                    const response = await fetch('/api/generate-relaxed-structure-cif', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
@@ -8367,41 +8499,11 @@ Crystal system: ${data.crystal_system}`;
                     dlog('Response status:', response.status);
 
                     if (response.ok) {
-                        let cifContent = await response.text();
-                        dlog('Original CIF content length:', cifContent.length);
-                        dlog('Original CIF first 500 chars:', cifContent.substring(0, 500));
-
-                        // Modify to P1 space group
-                        cifContent = cifContent.replace(
-                            /_symmetry_space_group_name_H-M\s+.*/,
-                            '_symmetry_space_group_name_H-M    P1'
-                        );
-                        cifContent = cifContent.replace(
-                            /_space_group_IT_number\s+.*/,
-                            '_space_group_IT_number           1'
-                        );
-
-                        if (!cifContent.includes('_symmetry_space_group_name_H-M')) {
-                            cifContent = cifContent.replace(
-                                /data_\w+/,
-                                '$&\n_symmetry_space_group_name_H-M    P1'
-                            );
-                        }
-
-                        if (!cifContent.includes('_space_group_IT_number')) {
-                            cifContent = cifContent.replace(
-                                /_symmetry_space_group_name_H-M\s+P1/,
-                                '$&\n_space_group_IT_number           1'
-                            );
-                        }
-
-                        dlog('CIF modified to P1 space group');
-                        dlog('Modified CIF first 500 chars:', cifContent.substring(0, 500));
-                        return cifContent;
+                        cifContent = await response.text();
                     } else if (response.status === 409) {
                         // Selected model differs from the one that produced the
                         // stored relaxation: surface the server message and do
-                        // not fall back to a client-built CIF of unknown origin.
+                        // not fall back to a CIF of unknown origin.
                         let msg = 'Relaxed structure was produced by a different model; re-run the relaxation first.';
                         try {
                             const err = await response.json();
@@ -8410,101 +8512,67 @@ Crystal system: ${data.crystal_system}`;
                         showNotification(msg, 'warning');
                         return null;
                     } else {
-                        console.warn('Failed to fetch CIF, status:', response.status);
+                        dlog('No relaxed structure available, status:', response.status);
                     }
                 } catch (error) {
-                    console.error('Error fetching CIF from backend:', error);
+                    dlog('Relaxed CIF not fetched:', error.message);
+                }
+
+                if (cifContent === null) {
+                    // No relaxed structure: export the current (possibly edited) structure.
+                    try {
+                        const response = await fetch('/api/generate-modified-structure-cif', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                session_id: window.sessionId,
+                                filename: window.currentFilename,
+                                supercell_size: window.currentSupercellSize,
+                                operations: window.atomicOperations || []
+                            })
+                        });
+                        if (response.ok) {
+                            cifContent = await response.text();
+                        } else {
+                            console.warn('Failed to generate modified CIF, status:', response.status);
+                        }
+                    } catch (error) {
+                        console.error('Error fetching modified CIF from backend:', error);
+                    }
+                }
+
+                if (cifContent !== null) {
+                    // Modify to P1 space group
+                    cifContent = cifContent.replace(
+                        /_symmetry_space_group_name_H-M\s+.*/,
+                        '_symmetry_space_group_name_H-M    P1'
+                    );
+                    cifContent = cifContent.replace(
+                        /_space_group_IT_number\s+.*/,
+                        '_space_group_IT_number           1'
+                    );
+
+                    if (!cifContent.includes('_symmetry_space_group_name_H-M')) {
+                        cifContent = cifContent.replace(
+                            /data_\w+/,
+                            '$&\n_symmetry_space_group_name_H-M    P1'
+                        );
+                    }
+
+                    if (!cifContent.includes('_space_group_IT_number')) {
+                        cifContent = cifContent.replace(
+                            /_symmetry_space_group_name_H-M\s+P1/,
+                            '$&\n_space_group_IT_number           1'
+                        );
+                    }
+                    return cifContent;
                 }
             }
 
-            // Fallback: generate CIF using current analysis data
-            dlog('Using fallback CIF generation with current analysis data');
-            let cif = 'data_relaxed_structure_P1\n';
-            cif += '_symmetry_space_group_name_H-M    P1\n';
-            cif += '_space_group_IT_number           1\n\n';
-
-            // Use direct data access instead of HTML parsing
-            let latticeParams = null;
-            if (window.currentStructureInfo?.lattice_parameters) {
-                dlog('Using lattice parameters from currentStructureInfo');
-                const lp = window.currentStructureInfo.lattice_parameters;
-                latticeParams = {
-                    a: lp.a,
-                    b: lp.b,
-                    c: lp.c,
-                    alpha: lp.alpha,
-                    beta: lp.beta,
-                    gamma: lp.gamma
-                };
-            } else if (window.currentAnalysisData?.relaxed_structure_info?.lattice_parameters) {
-                dlog('Using lattice parameters from analysis data');
-                const lp = window.currentAnalysisData.relaxed_structure_info.lattice_parameters;
-                latticeParams = {
-                    a: lp.a,
-                    b: lp.b,
-                    c: lp.c,
-                    alpha: lp.alpha,
-                    beta: lp.beta,
-                    gamma: lp.gamma
-                };
-            } else {
-                dlog('Fallback: trying to extract from display');
-                const crystalInfo = extractCrystalInfoFromDisplay();
-                if (crystalInfo && crystalInfo.a) {
-                    latticeParams = crystalInfo;
-                }
-            }
-
-            dlog('Using lattice parameters:', latticeParams);
-
-            if (latticeParams) {
-                cif += `_cell_length_a    ${latticeParams.a.toFixed(6)}\n`;
-                cif += `_cell_length_b    ${latticeParams.b.toFixed(6)}\n`;
-                cif += `_cell_length_c    ${latticeParams.c.toFixed(6)}\n`;
-                cif += `_cell_angle_alpha ${latticeParams.alpha.toFixed(6)}\n`;
-                cif += `_cell_angle_beta  ${latticeParams.beta.toFixed(6)}\n`;
-                cif += `_cell_angle_gamma ${latticeParams.gamma.toFixed(6)}\n\n`;
-            } else {
-                console.warn('No lattice parameters available, using defaults');
-                cif += '_cell_length_a    1.000000\n';
-                cif += '_cell_length_b    1.000000\n';
-                cif += '_cell_length_c    1.000000\n';
-                cif += '_cell_angle_alpha 90.000000\n';
-                cif += '_cell_angle_beta  90.000000\n';
-                cif += '_cell_angle_gamma 90.000000\n\n';
-            }
-
-            // Try to get atomic positions from analysis data
-            cif += 'loop_\n';
-            cif += '_atom_site_label\n';
-            cif += '_atom_site_type_symbol\n';
-            cif += '_atom_site_fract_x\n';
-            cif += '_atom_site_fract_y\n';
-            cif += '_atom_site_fract_z\n';
-            cif += '_atom_site_occupancy\n\n';
-
-            // Try to get positions from analysis data
-            if (window.currentAnalysisData?.final_positions && window.currentAnalysisData?.elements) {
-                dlog('Using atomic positions from analysis data');
-                const positions = window.currentAnalysisData.final_positions;
-                const elements = window.currentAnalysisData.elements;
-
-                for (let i = 0; i < positions.length; i++) {
-                    const element = elements[i] || 'X';
-                    const pos = positions[i];
-                    cif += `${element}${i + 1} ${element} ${pos[0].toFixed(6)} ${pos[1].toFixed(6)} ${pos[2].toFixed(6)} 1.000\n`;
-                }
-            } else {
-                // No real atomic position data to fall back on -- a CIF with a
-                // single fake "X1 X 0 0 0" atom would be silently wrong if
-                // saved as-is. Signal failure to the caller instead so it can
-                // skip this file from the export and warn the user (see F13).
-                console.error('No atomic positions available; cannot generate a valid structure CIF for export.');
-                return null;
-            }
-
-            dlog('Generated CIF content:', cif);
-            return cif;
+            // No structure could be obtained from the backend; signal failure so
+            // callers can warn instead of writing a fake single-atom CIF.
+            console.error('Could not generate a CIF for the current structure.');
+            return null;
         }
 
         // Generate Crystal Information CSV

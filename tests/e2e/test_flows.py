@@ -1,8 +1,7 @@
 """Real-browser user-flow tests (Playwright) against the fake EMT backend.
 
-Tests marked ``xfail(strict=True, reason="Fn: ...")`` document KNOWN frontend
-bugs; the PR that fixes a bug must remove the matching marker (strict xfail
-turns an unexpected pass into a failure, so it cannot be forgotten).
+Known frontend bugs are documented with ``xfail(strict=True, reason="Fn: ...")``
+until fixed; the PR that fixes a bug removes the matching marker.
 """
 import io
 import json
@@ -123,8 +122,6 @@ def test_relax_with_elastic_shows_elastic_panel(app):
 # 💾 download of the current CIF in three states
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason="F1: downloadCurrentCIF/generateCIFFile only calls "
-                   "/api/generate-relaxed-structure-cif, which 404s for an unrelaxed structure")
 def test_download_current_cif_unrelaxed(app):
     page = app
     load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
@@ -143,8 +140,6 @@ def test_download_current_cif_after_relax(app):
     assert a == pytest.approx(2 * 3.5897, abs=0.01)
 
 
-@pytest.mark.xfail(strict=True, reason="F1: after relax + edit the stored relaxed structure is "
-                   "invalidated (404), so 💾 cannot download the edited structure")
 def test_download_current_cif_after_relax_and_edit(app):
     page = app
     load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
@@ -177,8 +172,6 @@ def _visible(page, selector) -> bool:
         "getComputedStyle(e).display !== 'none' && e.offsetParent !== null; }", selector)
 
 
-@pytest.mark.xfail(strict=True, reason="F3: New CIF leaves the elastic result panel and the open "
-                   "energy/elastic detail drawers of the old structure visible")
 def test_new_cif_hides_elastic_drawers_and_report(app):
     page = app
     load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
@@ -206,8 +199,6 @@ def test_new_cif_hides_elastic_drawers_and_report(app):
     expect(page.locator("#analysisActions")).to_be_hidden()
 
 
-@pytest.mark.xfail(strict=True, reason="F3: New CIF leaves the 'Structure modified - Analysis "
-                   "required' banner (#structure-status) of the old structure visible")
 def test_new_cif_hides_structure_status_banner(app):
     page = app
     load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
@@ -274,8 +265,6 @@ def test_cancel_during_auto_sweep(app):
     page.wait_for_function("window.atomicOperations.length === 2", timeout=60_000)
 
 
-@pytest.mark.xfail(strict=True, reason="F4: Reset during an Auto sweep leaves the progress box "
-                   "and Cancel button visible")
 def test_reset_during_auto_sweep(app):
     page = app
     load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
@@ -320,8 +309,6 @@ def test_invalid_upload_shows_error_and_valid_upload_works(app, tmp_path):
     assert wait
 
 
-@pytest.mark.xfail(strict=True, reason="F14: a failed upload does not clear the file input, so the "
-                   "browser does not fire change when the same (now fixed) file is chosen again")
 def test_failed_upload_clears_file_input_so_same_file_can_be_reselected(app, tmp_path):
     page = app
     page.log.allow_errors = True
@@ -337,8 +324,6 @@ def test_failed_upload_clears_file_input_so_same_file_can_be_reselected(app, tmp
 # Relax edge cases (mocked responses / held requests)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason="F2: a null energy in the /api/relax response throws "
-                   "(null.toFixed) in displayEnergyResults and aborts result display")
 def test_relax_response_with_null_energy_is_handled(app):
     page = app
     load_sample(page, SAMPLE_CU, supercell=(1, 1, 1))
@@ -360,8 +345,6 @@ def test_relax_response_with_null_energy_is_handled(app):
     expect(page.locator("#analysisActions")).to_be_visible()
 
 
-@pytest.mark.xfail(strict=True, reason="F8: the SSE EventSource of an abandoned relax keeps updating "
-                   "the progress status / charts of the newly loaded structure")
 def test_new_cif_mid_relax_does_not_pollute_new_state(app):
     page = app
     load_sample(page, SAMPLE_CU, supercell=(1, 1, 1))
@@ -396,8 +379,6 @@ def test_new_cif_mid_relax_does_not_pollute_new_state(app):
 # Reset races
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason="F9: Reset while a Manual edit is in flight lets the late "
-                   "edit result overwrite the freshly reset structure")
 def test_reset_while_manual_edit_in_flight(app):
     page = app
     load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
@@ -416,9 +397,6 @@ def test_reset_while_manual_edit_in_flight(app):
     assert page.evaluate("window.atomicOperations.length") == 0
 
 
-@pytest.mark.xfail(strict=True, reason="F10: when the backend reset fails the frontend still "
-                   "resets itself, so the UI shows the original structure while the server "
-                   "keeps the edited one")
 def test_backend_reset_failure_keeps_ui_in_sync(app):
     page = app
     page.log.allow_errors = True  # the injected 500 and the app's console.error
