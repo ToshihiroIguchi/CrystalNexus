@@ -425,7 +425,8 @@ def test_supercell_above_server_atom_limit_is_rejected_in_dialog(app):
     page.click("#confirmButton")
     expect(page.locator("#modalError")).to_contain_text("server limit")
     expect(page.locator("#cifModal")).to_be_visible()
-    assert page.evaluate("document.querySelector('#modal-max-atoms-limit').max") == "400"
+    server_max = page.evaluate("fetch('/api/models').then(r => r.json()).then(d => d.max_relax_atoms)")
+    assert page.evaluate("document.querySelector('#modal-max-atoms-limit').max") == str(server_max)
 
 
 def test_auto_sweep_retries_after_429(app):
@@ -535,3 +536,83 @@ def test_relax_null_energy_shows_na(app):
     page.click("#analyze-btn", force=True)
     expect(page.locator("#analysisActions")).to_be_visible(timeout=60_000)
     expect(page.locator("#energy-summary")).to_contain_text("N/A")
+
+
+def test_exports_tolerate_null_energy(app):
+    page = app
+    load_sample(page, SAMPLE_CU, supercell=(1, 1, 1))
+
+    def mangle(route):
+        response = route.fetch()
+        body = response.json()
+        body["final_prediction"]["energy_eV_per_atom"] = None
+        body["final_prediction"]["total_energy_eV"] = None
+        route.fulfill(response=response, json=body)
+
+    page.route("**/api/relax", mangle)
+    page.click("#analyze-btn", force=True)
+    expect(page.locator("#analysisActions")).to_be_visible(timeout=60_000)
+    text = page.evaluate("generateEnergyMagneticText()")
+    assert "N/A" in text and "NaN" not in text
+    # Headless Chromium denies clipboard writes; only a TypeError would matter.
+    page.log.allow_errors = True
+    page.evaluate("copyToSpreadsheet()")
+    page.wait_for_timeout(500)
+    assert not page.log.page_errors
+    assert not [e for e in page.log.console_errors if "TypeError" in e]
+
+
+def test_download_does_not_pass_off_unrelaxed_cif_when_relaxed_fetch_fails(app):
+    page = app
+    page.log.allow_errors = True
+    load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
+    analyze(page)
+    page.route("**/api/generate-relaxed-structure-cif", lambda route: route.fulfill(
+        status=500, json={"detail": "boom"}))
+    try:
+        with page.expect_download(timeout=3_000):
+            page.click("#downloadCifBtn")
+        downloaded = True
+    except PlaywrightTimeoutError:
+        downloaded = False
+    assert not downloaded
+
+
+def test_failed_reset_does_not_cancel_running_auto_sweep(app):
+    page = app
+    page.log.allow_errors = True
+    load_sample(page, SAMPLE_CU, supercell=(2, 1, 1))
+    run_manual_op(page, "Cu0", "Ni")
+    hold = Hold(page, "**/api/evaluate-candidate-energies")
+    start_auto_sweep(page, "Cu", "Ni")
+    hold.wait_held(page)
+    page.route("**/api/reset-session-structure", lambda route: route.fulfill(
+        status=500, json={"detail": "boom"}))
+    page.click("#reset-operations-btn")
+    page.wait_for_timeout(500)
+    expect(page.locator("#cancel-btn")).to_be_visible()
+    hold.release()
+    page.wait_for_function("window.atomicOperations.length === 2", timeout=60_000)
+
+
+def test_new_cif_closes_relax_event_source_immediately(page, live_server):
+    page.add_init_script("""
+        (() => {
+            const Orig = window.EventSource;
+            window.__sources = [];
+            window.EventSource = function (...a) {
+                const es = new Orig(...a);
+                window.__sources.push(es);
+                return es;
+            };
+        })();""")
+    open_app(page, live_server)
+    load_sample(page, SAMPLE_CU, supercell=(1, 1, 1))
+    hold = Hold(page, "**/api/relax")
+    page.click("#analyze-btn", force=True)
+    hold.wait_held(page)
+    assert page.evaluate("window.__sources.some(s => s.readyState !== 2)")
+    new_cif_dialog(page)
+    pick_sample_and_confirm(page, SAMPLE_NI)
+    assert page.evaluate("window.__sources.every(s => s.readyState === 2)")
+    hold.release()

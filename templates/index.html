@@ -780,6 +780,7 @@
                     const limitInput = document.getElementById('modal-max-atoms-limit');
                     if (limitInput) {
                         limitInput.max = String(Math.min(2000, window.serverMaxAtoms));
+                        limitInput.min = String(Math.min(50, window.serverMaxAtoms));
                         if (parseInt(limitInput.value, 10) > window.serverMaxAtoms) limitInput.value = String(window.serverMaxAtoms);
                     }
                 }
@@ -1013,6 +1014,18 @@
             }, 100);
         }
 
+        // The in-flight edit request, so Reset / New CIF can abort it: a late
+        // apply must not land on top of the freshly reset structure.
+        let pendingEditController = null;
+
+        // Returns true when an edit request was actually in flight.
+        function abortPendingEdit() {
+            if (!pendingEditController) return false;
+            pendingEditController.abort();
+            pendingEditController = null;
+            return true;
+        }
+
         // Update session with atomic operations.
         // Returns the parsed response body (carrying server-authoritative
         // formula/volume/density/labels -- see applyServerStructureState) if
@@ -1024,17 +1037,6 @@
         // immediately before calling this function. null is falsy, so
         // existing `if (!accepted) return;`-style call sites keep working
         // unchanged.
-        // The in-flight edit request, so Reset / New CIF can abort it: a late
-        // apply must not land on top of the freshly reset structure.
-        let pendingEditController = null;
-
-        function abortPendingEdit() {
-            if (pendingEditController) {
-                pendingEditController.abort();
-                pendingEditController = null;
-            }
-        }
-
         async function updateSessionWithOperations() {
             const editController = new AbortController();
             pendingEditController = editController;
@@ -1055,6 +1057,11 @@
                 if (editController.signal.aborted || structureGeneration !== generationAtSend) {
                     // Reset / New CIF superseded this edit while it was in flight.
                     window.atomicOperations.pop();
+                    if (response.ok) {
+                        // The server did accept it, so its state now differs
+                        // from the client's.
+                        showNotification('An edit was applied on the server after the structure changed; the state may be out of sync. Please press Reset.', 'warning');
+                    }
                     return null;
                 }
 
@@ -1775,6 +1782,8 @@
         // Identifies the current relax run; New CIF bumps it so an abandoned run's
         // completion cannot touch the UI/flags of a newer one.
         let relaxRunId = 0;
+        // EventSource of the running relax, closed as soon as New CIF abandons it.
+        let activeProgressSource = null;
 
         function generateStructureHash() {
             try {
@@ -3256,6 +3265,7 @@ Crystal system: ${data.crystal_system}`;
                 window.relaxForceChart.resize();
 
                 const progressSource = new EventSource('/api/relax-progress/' + window.sessionId);
+                activeProgressSource = progressSource;
                 progressSource.onmessage = (event) => {
                     // The structure was edited/replaced since this run started:
                     // its progress no longer belongs on screen.
@@ -3648,7 +3658,7 @@ Crystal system: ${data.crystal_system}`;
                 showModalError(`Total atoms (${totalAtoms}) exceeds the server limit (${serverMax}). Please reduce the supercell dimensions.`);
                 return false;
             }
-            const maxAtoms = readIntInput('modal-max-atoms-limit', 50, Math.max(50, Math.min(2000, serverMax)), 200);
+            const maxAtoms = readIntInput('modal-max-atoms-limit', Math.min(50, serverMax), Math.min(2000, serverMax), Math.min(200, serverMax));
 
             if (totalAtoms > maxAtoms) {
                 showModalError(`Total atoms (${totalAtoms}) exceeds the system limit (${maxAtoms}). Please reduce the supercell dimensions or increase the limit in the Advanced settings.`);
@@ -4325,10 +4335,9 @@ Crystal system: ${data.crystal_system}`;
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
 
-                dropdown.innerHTML = '<option value="">Choose an element to insert...</option>';
-                data.insertable_elements.forEach(el => {
-                    dropdown.innerHTML += `<option value="${escapeHtml(el)}">${escapeHtml(el)}</option>`;
-                });
+                dropdown.innerHTML = '<option value="">Choose an element to insert...</option>' +
+                    data.insertable_elements.map(el =>
+                        `<option value="${escapeHtml(el)}">${escapeHtml(el)}</option>`).join('');
 
                 if (data.max_void_radius) {
                     infoDiv.textContent = `Max void radius: ${data.max_void_radius.toFixed(2)} Å`;
@@ -6201,14 +6210,6 @@ Apply the best ${actionLabel} anyway?`);
                 return;
             }
 
-            // Reset discards whatever the structure currently is, so cancel any
-            // relax/Auto-sweep still in flight against it -- otherwise it could
-            // resolve after the reset and write stale results back in.
-            if (typeof currentAbortController !== 'undefined' && currentAbortController) {
-                currentAbortController.abort();
-            }
-            abortPendingEdit();
-
             try {
                 // Show reset in progress
                 showNotification('Resetting structure...', 'info');
@@ -6244,6 +6245,29 @@ Apply the best ${actionLabel} anyway?`);
 
                 const result = await response.json();
                 dlog('✅ Backend session reset successful:', result);
+
+                // Reset discards whatever the structure currently is, so cancel
+                // any relax/Auto-sweep still in flight against it -- otherwise
+                // it could resolve after the reset and write stale results
+                // back in. Done only now that the server reset succeeded, so a
+                // failed reset does not throw away running work.
+                if (typeof currentAbortController !== 'undefined' && currentAbortController) {
+                    currentAbortController.abort();
+                }
+                if (abortPendingEdit()) {
+                    // The aborted edit may have reached the server after the
+                    // reset above; reset again so both sides agree.
+                    try {
+                        const again = await fetch('/api/reset-session-structure', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ session_id: window.sessionId })
+                        });
+                        if (!again.ok) throw new Error(`HTTP ${again.status}`);
+                    } catch (resyncError) {
+                        showNotification('The state may be out of sync with the server. Please press Reset again.', 'warning');
+                    }
+                }
 
                 // Clear frontend operation history
                 window.atomicOperations = [];
@@ -7134,6 +7158,10 @@ Apply the best ${actionLabel} anyway?`);
             currentStructureCif = null;
             structureGeneration++;
             relaxRunId++;  // abandon any relax still running for the old structure
+            if (activeProgressSource) {
+                activeProgressSource.close();
+                activeProgressSource = null;
+            }
             relaxInProgress = false;
             hideRelaxCharts();
             hideMlipStatus();
@@ -8298,11 +8326,12 @@ Apply the best ${actionLabel} anyway?`);
 
                 // Try multiple possible paths for energy (preserve full precision)
                 let energy = 'N/A';
-                if (data.final_prediction?.total_energy_eV !== undefined) {
+                // (null energies stay "N/A")
+                if (Number.isFinite(data.final_prediction?.total_energy_eV)) {
                     energy = data.final_prediction.total_energy_eV.toString();
-                } else if (window.energyAnalysisData?.final?.totalEnergy !== undefined) {
+                } else if (Number.isFinite(window.energyAnalysisData?.final?.totalEnergy)) {
                     energy = window.energyAnalysisData.final.totalEnergy.toString();
-                } else if (data.final_prediction?.energy_eV_per_atom !== undefined) {
+                } else if (Number.isFinite(data.final_prediction?.energy_eV_per_atom)) {
                     const numAtoms = data.structure_info?.num_atoms || data.final_prediction.forces_eV_per_A?.length || 1;
                     energy = (data.final_prediction.energy_eV_per_atom * numAtoms).toString();
                 }
@@ -8472,11 +8501,20 @@ Apply the best ${actionLabel} anyway?`);
                         } catch (_) { /* keep default message */ }
                         showNotification(msg, 'warning');
                         return null;
+                    } else if (response.status === 404) {
+                        dlog('No relaxed structure stored on the server; exporting the current structure');
                     } else {
-                        dlog('No relaxed structure available, status:', response.status);
+                        // 500, evicted session, ...: do not pass the unrelaxed
+                        // structure off as the relaxed export.
+                        showNotification(`Could not fetch the relaxed structure (HTTP ${response.status}). Please try again.`, 'error');
+                        return null;
                     }
                 } catch (error) {
-                    dlog('Relaxed CIF not fetched:', error.message);
+                    if (error.message !== 'no relaxed structure') {
+                        console.error('Error fetching relaxed CIF from backend:', error);
+                        showNotification('Could not fetch the relaxed structure (network error). Please try again.', 'error');
+                        return null;
+                    }
                 }
 
                 if (cifContent === null) {
@@ -8646,8 +8684,10 @@ Apply the best ${actionLabel} anyway?`);
 
                 // Extract energy data from direct calculation
                 if (analysisData.final_prediction?.energy_eV_per_atom !== undefined) {
-                    const energyPerAtom = analysisData.final_prediction.energy_eV_per_atom;
-                    const totalEnergy = analysisData.final_prediction.total_energy_eV !== undefined ? analysisData.final_prediction.total_energy_eV : energyPerAtom * numAtoms;
+                    const energyPerAtom = Number.isFinite(analysisData.final_prediction.energy_eV_per_atom) ? analysisData.final_prediction.energy_eV_per_atom : null;
+                    const totalEnergy = Number.isFinite(analysisData.final_prediction.total_energy_eV)
+                        ? analysisData.final_prediction.total_energy_eV
+                        : (energyPerAtom !== null ? energyPerAtom * numAtoms : null);
 
                     energyData = {
                         total: totalEnergy,
@@ -8692,8 +8732,8 @@ Apply the best ${actionLabel} anyway?`);
             // Generate text output
             if (energyData) {
                 text += 'Energy Information:\n';
-                text += `Total Energy: ${energyData.total.toFixed(6)} eV\n`;
-                text += `Energy per atom: ${energyData.perAtom.toFixed(6)} eV/atom\n`;
+                text += `Total Energy: ${formatFixed(energyData.total, 6)} eV\n`;
+                text += `Energy per atom: ${formatFixed(energyData.perAtom, 6)} eV/atom\n`;
                 text += `Number of atoms: ${energyData.numAtoms}\n\n`;
             } else {
                 text += 'Energy Information: Not available\n\n';
