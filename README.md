@@ -209,7 +209,7 @@ The HTTP endpoints were renamed likewise: `/api/chgnet-predict` -> `/api/predict
 *   **Endpoints**: `GET /api/models` lists `id`, `display_name`, `available`, `capabilities`, `version`, `is_default`. `GET /api/elements?model=<id>` returns that model's elements (unknown id: 400; not installed: 200 with `available: false` and an empty list).
 *   **First MACE use downloads weights** (about 45 MB) to `~/.cache/mace`, so an internet connection is needed once; offline without cached weights the API returns 503 with an explanatory message.
 *   **MACE precision**: `MACE_DTYPE` (`float64` default, or `float32` for speed/memory).
-*   **Models are never mixed within one structure.** Both models are trained on MPtrj, but absolute energies are not interchangeable between them. Results, relaxed CIF headers and text/CSV exports state which model produced them. Relaxation concurrency is global: a second relaxation returns 429 regardless of the model.
+*   **Models are never mixed within one structure.** Both models are trained on MPtrj, but absolute energies are not interchangeable between them. Results, relaxed CIF headers and text/CSV exports state which model produced them. Relaxation concurrency is global: a second relaxation returns 429 regardless of the model. Closing the page (or starting a new CIF) mid-relaxation cancels the running relaxation on the server, so the slot is freed for others within seconds; an in-flight elastic calculation is cancelled the same way.
 
 ### Workflow Guide
 

@@ -1782,6 +1782,9 @@
         // Identifies the current relax run; New CIF bumps it so an abandoned run's
         // completion cannot touch the UI/flags of a newer one.
         let relaxRunId = 0;
+        // Aborts the in-flight POST /api/relax; the server cancels the run when
+        // the connection closes (New CIF / reset, tab close).
+        let relaxAbortController = null;
         // EventSource of the running relax, closed as soon as New CIF abandons it.
         let activeProgressSource = null;
 
@@ -3201,6 +3204,8 @@ Crystal system: ${data.crystal_system}`;
             // flight -- see F4. Cleared in the finally block below.
             const myRunId = ++relaxRunId;
             const isCurrentRun = () => relaxRunId === myRunId;
+            const relaxController = new AbortController();
+            relaxAbortController = relaxController;
             relaxInProgress = true;
             try {
                 // Record start time for calculation duration
@@ -3332,7 +3337,8 @@ Crystal system: ${data.crystal_system}`;
                         headers: {
                             'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify(requestData)
+                        body: JSON.stringify(requestData),
+                        signal: relaxController.signal
                     });
 
                     if (!response.ok) {
@@ -3386,7 +3392,14 @@ Crystal system: ${data.crystal_system}`;
                     displayMlipResults(data, true);
 
                     if (data.relaxation_info?.aborted) {
-                        showNotification('Relaxation hit the time limit; showing the best structure found so far.', 'warning');
+                        const reason = data.relaxation_info?.abort_reason;
+                        if (reason === 'shutdown') {
+                            showNotification('Relaxation was stopped because the server is shutting down; showing the best structure found so far.', 'warning');
+                        } else if (reason === 'client_disconnected') {
+                            showNotification('Relaxation was cancelled; showing the best structure found so far.', 'warning');
+                        } else {
+                            showNotification('Relaxation hit the time limit; showing the best structure found so far.', 'warning');
+                        }
                     } else if (data.relaxation_info?.converged_optimizer === false &&
                                (data.relaxation_info?.optimizer_steps ?? data.relaxation_info?.steps) === data.relaxation_info?.max_steps) {
                         // "converged" only checks atomic forces; the optimizer
@@ -3451,6 +3464,11 @@ Crystal system: ${data.crystal_system}`;
                 markStructureAsAnalyzed();
 
             } catch (error) {
+                if (error && error.name === 'AbortError') {
+                    // Deliberately cancelled (New CIF / reset): not an error.
+                    dlog('Relax request aborted');
+                    return;
+                }
                 console.error('❌ ML potential analysis failed:', error);
                 if (!isCurrentRun()) return;  // abandoned by New CIF
                 showNotification(`Analysis failed: ${error.message}`, 'error');
@@ -3463,6 +3481,7 @@ Crystal system: ${data.crystal_system}`;
                 updateStatusDisplay('energy', 'error');
                 updateStatusDisplay('magnetic', 'error');
             } finally {
+                if (relaxAbortController === relaxController) relaxAbortController = null;
                 if (isCurrentRun()) {
                     relaxInProgress = false;
                     updateAnalyzeButtonState();
@@ -7158,6 +7177,12 @@ Apply the best ${actionLabel} anyway?`);
             currentStructureCif = null;
             structureGeneration++;
             relaxRunId++;  // abandon any relax still running for the old structure
+            if (relaxAbortController) {
+                // Closing the connection makes the server cancel the run and
+                // free the relax slot for the next request.
+                relaxAbortController.abort();
+                relaxAbortController = null;
+            }
             if (activeProgressSource) {
                 activeProgressSource.close();
                 activeProgressSource = null;
