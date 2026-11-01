@@ -10,7 +10,7 @@ import time
 import numpy as np
 
 from .base import ase_stress_to_gpa
-from .executor import abort_requested
+from .executor import is_aborted
 
 # Voigt order (same as ASE): xx, yy, zz, yz, xz, xy
 _VOIGT_PAIRS = [(0, 0), (1, 1), (2, 2), (1, 2), (0, 2), (0, 1)]
@@ -44,7 +44,7 @@ def _strain_matrix(component, delta):
 
 
 def _tensor_at_strain(atoms, calculator, strain, fmax, max_steps, deadline,
-                      progress_cb, offset, total):
+                      progress_cb, offset, total, cancel_event=None):
     """Raw symmetrized 6x6 stiffness (GPa) from 12 strained cells of magnitude `strain`.
 
     Returns (C, n_ion_relax_steps, n_unconverged_cells). Cell numbering for
@@ -63,7 +63,7 @@ def _tensor_at_strain(atoms, calculator, strain, fmax, max_steps, deadline,
             counter += 1
             if progress_cb is not None:
                 progress_cb(counter, total)
-            if abort_requested():
+            if is_aborted(cancel_event):
                 raise ElasticTimeout(f"aborted before strained cell {counter}/{total}")
             if deadline is not None and time.monotonic() > deadline:
                 raise ElasticTimeout(
@@ -76,7 +76,7 @@ def _tensor_at_strain(atoms, calculator, strain, fmax, max_steps, deadline,
             opt = FIRE(a, logfile=None)
 
             def _check_deadline(counter=counter):
-                if abort_requested():
+                if is_aborted(cancel_event):
                     raise ElasticTimeout(
                         f"aborted during strained cell {counter}/{total}")
                 if deadline is not None and time.monotonic() > deadline:
@@ -117,7 +117,8 @@ def strain_consistency(C_full, C_half):
 
 def compute_elastic(atoms, calculator, strain=DEFAULT_STRAIN, fmax=ELASTIC_ION_FMAX,
                     max_steps=ELASTIC_ION_MAX_STEPS,
-                    deadline=None, progress_cb=None, check_consistency=True):
+                    deadline=None, progress_cb=None, check_consistency=True,
+                    cancel_event=None):
     """Compute the 6x6 elastic tensor (GPa) of an already relaxed structure.
 
     Args:
@@ -134,6 +135,8 @@ def compute_elastic(atoms, calculator, strain=DEFAULT_STRAIN, fmax=ELASTIC_ION_F
         progress_cb: called as ``progress_cb(k, total)`` before strained cell k
             (1-based); total is 24 with the consistency check, else 12.
         check_consistency: also compute the tensor at strain/2 and compare.
+        cancel_event: optional per-run ``threading.Event``; when set, ElasticTimeout
+            is raised at the next check (same as the global shutdown flag).
 
     Returns a dict with C_GPa, moduli, stable, min_eigenvalue_GPa, strain,
     n_strained_cells, n_ion_relax_steps (summed over passes),
@@ -145,13 +148,14 @@ def compute_elastic(atoms, calculator, strain=DEFAULT_STRAIN, fmax=ELASTIC_ION_F
 
     total = 2 * N_STRAINED_CELLS if check_consistency else N_STRAINED_CELLS
     C, steps, unconv = _tensor_at_strain(
-        atoms, calculator, strain, fmax, max_steps, deadline, progress_cb, 0, total)
+        atoms, calculator, strain, fmax, max_steps, deadline, progress_cb, 0, total,
+        cancel_event=cancel_event)
 
     consistency = None
     if check_consistency:
         C_half, steps2, unconv2 = _tensor_at_strain(
             atoms, calculator, strain / 2.0, fmax, max_steps, deadline,
-            progress_cb, N_STRAINED_CELLS, total)
+            progress_cb, N_STRAINED_CELLS, total, cancel_event=cancel_event)
         steps += steps2
         unconv += unconv2
         max_diff, worst, ok = strain_consistency(C, C_half)
