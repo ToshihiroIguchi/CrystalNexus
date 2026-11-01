@@ -409,7 +409,7 @@ def test_relax_elastic_shutdown_abort_reported_distinctly(client, fake_backends,
 
     def aborted(*a, **k):
         executor.request_abort()
-        raise elastic_mod.ElasticTimeout("aborted during strained cell 1/24")
+        raise elastic_mod.ElasticTimeout("aborted during strained cell 1/24", "shutdown")
 
     monkeypatch.setattr(main, "_run_elastic_sync", aborted)
     try:

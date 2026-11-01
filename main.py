@@ -6,6 +6,7 @@ import json
 import math
 import logging
 import secrets
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -42,9 +43,11 @@ from mlip import (MODEL_REGISTRY, MLIPError, ModelUnavailableError,
                   UnknownModelError, get_backend)
 from mlip.chgnet_backend import CHGNetBackend
 from mlip.base import CAP_STRESS
+from asgi_disconnect import (RelaxDisconnectMiddleware, RELAX_PATH,
+                             STATE_KEY as _DISCONNECT_STATE_KEY)
 from mlip.registry import (is_available as _model_is_available, default_model_id,
                            list_models)
-from mlip.executor import inference_executor as _inference_executor, abort_requested, request_abort, clear_abort
+from mlip.executor import inference_executor as _inference_executor, abort_requested, request_abort, clear_abort, is_aborted, abort_reason as _abort_reason
 
 # Configuration constants - must be defined before use
 # Memory management settings
@@ -1119,6 +1122,11 @@ async def analytics_middleware(request: Request, call_next):
             logger.error(f"Analytics logging failed: {e}")
             
     return response
+
+# Must be added after every @app.middleware("http") so it is the outermost
+# layer: BaseHTTPMiddleware breaks Request.is_disconnected(), so disconnects of
+# POST /api/relax are detected here instead (see asgi_disconnect.py).
+app.add_middleware(RelaxDisconnectMiddleware)
 
 SAMPLE_CIF_DIR = Path(SAMPLE_CIF_DIR_NAME)
 
@@ -2485,7 +2493,14 @@ class RelaxationAborted(Exception):
     asyncio.wait_for() would abandon the awaiting coroutine while the
     executor thread kept running and kept the single MLIP worker
     (_inference_executor, max_workers=1) busy for the rest of its steps.
+
+    ``reason`` is recorded at raise time ("shutdown" | "client_disconnected" |
+    "timeout") so it cannot be misreported from flags that change afterwards.
     """
+
+    def __init__(self, message="", reason="timeout"):
+        super().__init__(message)
+        self.reason = reason
 
 
 def _get_magmoms_or_none(atoms):
@@ -2581,7 +2596,7 @@ class RelaxationWatcher:
     """
 
     def __init__(self, atoms, fmax, max_steps, deadline, progress_slot=None,
-                 force_source=None):
+                 force_source=None, cancel_event=None):
         self.atoms = atoms  # the UNFILTERED Atoms object (energy, raw forces)
         # Object whose get_forces() ASE's convergence test actually uses: the
         # FrechetCellFilter when relax_cell=True (atomic forces + cell DOF
@@ -2591,6 +2606,7 @@ class RelaxationWatcher:
         self.fmax = fmax
         self.max_steps = max_steps
         self.deadline = deadline
+        self.cancel_event = cancel_event
         self.progress_slot = progress_slot
         self.started_at = time.monotonic()
         self.step = -1
@@ -2618,14 +2634,15 @@ class RelaxationWatcher:
                 "energy_eV": energy,
                 "elapsed_s": time.monotonic() - self.started_at,
             })
-        if abort_requested():
-            raise RelaxationAborted(f"aborted by shutdown at step {self.step}")
+        if is_aborted(self.cancel_event):
+            reason = _abort_reason(self.cancel_event)
+            raise RelaxationAborted(f"aborted ({reason}) at step {self.step}", reason)
         if time.monotonic() > self.deadline:
-            raise RelaxationAborted(f"time limit reached at step {self.step}")
+            raise RelaxationAborted(f"time limit reached at step {self.step}", "timeout")
 
 
 def run_relaxation(calculator, structure, *, fmax, steps, optimizer_name,
-                    timeout_s, relax_cell=True, progress_slot=None):
+                    timeout_s, relax_cell=True, progress_slot=None, cancel_event=None):
     """Run an ASE relaxation with full control over observers and stopping.
 
     Reimplements chgnet.model.dynamics.StructOptimizer.relax (which this
@@ -2644,7 +2661,7 @@ def run_relaxation(calculator, structure, *, fmax, steps, optimizer_name,
             now agree with evaluate_convergence(), which uses the same force.
         optimizer_steps: int, optimizer.get_number_of_steps() -- exact,
             unlike the old len(trajectory) - 2 approximation.
-        aborted: bool, True if the wall-clock deadline was hit first.
+        aborted: bool, True if the deadline was hit or the run was cancelled.
     """
     from ase.filters import FrechetCellFilter
     from ase.optimize import BFGS, FIRE, LBFGS, LBFGSLineSearch
@@ -2666,12 +2683,13 @@ def run_relaxation(calculator, structure, *, fmax, steps, optimizer_name,
     target = FrechetCellFilter(atoms) if relax_cell else atoms
     obs = TrajectoryRecorder(atoms, force_source=target)
     watcher = RelaxationWatcher(atoms, fmax, steps, deadline, progress_slot,
-                                force_source=target)
+                                force_source=target, cancel_event=cancel_event)
     optimizer = optimizers[optimizer_name](target, logfile=None)
     optimizer.attach(obs, interval=1)
     optimizer.attach(watcher, interval=1)
 
     aborted = False
+    abort_reason_value = None
     try:
         # ASE 3.27's Optimizer.run() returns the convergence verdict
         # directly; Optimizer.converged() takes a mandatory gradient
@@ -2680,6 +2698,7 @@ def run_relaxation(calculator, structure, *, fmax, steps, optimizer_name,
     except RelaxationAborted as e:
         logger.warning(f"Relaxation aborted: {e}")
         aborted = True
+        abort_reason_value = e.reason
         ase_converged = False
 
     final_structure = AseAtomsAdaptor.get_structure(atoms)
@@ -2693,7 +2712,7 @@ def run_relaxation(calculator, structure, *, fmax, steps, optimizer_name,
         "ase_converged": ase_converged,
         "optimizer_steps": int(optimizer.get_number_of_steps()),
         "aborted": aborted,
-        "abort_reason": ("shutdown" if abort_requested() else "timeout") if aborted else None,
+        "abort_reason": abort_reason_value if aborted else None,
     }
 
 
@@ -2748,7 +2767,7 @@ def _validate_relax_params(request: dict) -> Tuple[float, int, str, bool, float]
 
 
 def _run_elastic_sync(calculator, structure, *, strain_fraction, fmax, timeout_s,
-                      progress_slot):
+                      progress_slot, cancel_event=None):
     """Executor-thread worker: build Atoms from `structure` and compute elastic data."""
     from pymatgen.io.ase import AseAtomsAdaptor
     from mlip.elastic import compute_elastic
@@ -2770,7 +2789,8 @@ def _run_elastic_sync(calculator, structure, *, strain_fraction, fmax, timeout_s
 
     return compute_elastic(atoms, calculator, strain=strain_fraction, fmax=fmax,
                            max_steps=ELASTIC_ION_MAX_STEPS,
-                           deadline=deadline, progress_cb=_progress)
+                           deadline=deadline, progress_cb=_progress,
+                           cancel_event=cancel_event)
 
 
 def _load_structure_for_predict(session_id: Optional[str], filename: str,
@@ -2893,11 +2913,54 @@ async def predict_structure(request: dict):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@app.post("/api/relax")
-async def relax_structure(request: dict):
+_warned_no_disconnect_state = False
+
+
+async def _relax_cancelled_response(phase: str, session_id: str, filename: str, structure):
+    """Minimal reply for a relaxation whose client has gone away.
+
+    Skips every remaining step (final prediction, elastic, session write-back)
+    so the global relax semaphore is released quickly. Nobody reads the body.
+    """
+    logger.info(f"Relaxation for session {session_id[:8]}... cancelled ({phase}): "
+                f"client disconnected")
+    try:
+        await asyncio.to_thread(
+            analytics_db.log_event,
+            event_type="relax_cancelled",
+            filename=filename,
+            formula=str(structure.formula),
+            num_atoms=len(structure),
+            execution_time=None,
+            parameters={"phase": phase, "abort_reason": "client_disconnected"},
+            session_id=session_id)
+    except Exception as e:
+        logger.error(f"Failed to log relax_cancelled event: {e}")
+    return {"status": "cancelled",
+            "relaxation_info": {"aborted": True, "abort_reason": "client_disconnected"}}
+
+
+@app.post(RELAX_PATH)
+async def relax_structure(request: dict, http_request: Request):
     """
     Relax structure using the ML potential - uses pre-prepared structure from session
+
+    If the client disconnects (tab closed, fetch aborted) the run is cancelled
+    cooperatively: RelaxDisconnectMiddleware sets a per-request threading.Event
+    that the optimizer observers poll, so the global semaphore frees quickly.
     """
+    # Per-request cancel token (see asgi_disconnect.py). A fresh, never-set
+    # Event when the handler runs without that middleware (direct calls).
+    cancel_event = http_request.scope.get("state", {}).get(_DISCONNECT_STATE_KEY)
+    if cancel_event is None:
+        global _warned_no_disconnect_state
+        if not _warned_no_disconnect_state:
+            _warned_no_disconnect_state = True
+            logger.warning(
+                "Client-disconnect detection is inactive for /api/relax "
+                "(RelaxDisconnectMiddleware did not see this request, e.g. a "
+                "proxy path prefix mismatch); closed browsers will not cancel runs.")
+        cancel_event = threading.Event()
     try:
         session_id = request.get("session_id")
         if not session_id or not isinstance(session_id, str):
@@ -2962,6 +3025,9 @@ async def relax_structure(request: dict):
                 calculator = await backend.get_calculator()
             except RuntimeError as e:
                 raise HTTPException(status_code=503, detail=str(e))
+            if cancel_event.is_set():
+                return await _relax_cancelled_response(
+                    "after model load", session_id, filename, structure)
 
             # Predict initial structure using optimized prediction
             try:
@@ -2970,6 +3036,9 @@ async def relax_structure(request: dict):
             except Exception as e:
                 logger.warning(f"Initial prediction failed: {e}")
                 initial_results = {"energy_eV_per_atom": None}
+            if cancel_event.is_set():
+                return await _relax_cancelled_response(
+                    "after initial prediction", session_id, filename, structure)
 
             # MLIP structure relaxation
             logger.info(f"Starting MLIP relaxation: fmax={fmax}, max_steps={max_steps}, optimizer={optimizer_name}")
@@ -2983,7 +3052,8 @@ async def relax_structure(request: dict):
                                       optimizer_name=optimizer_name,
                                       timeout_s=RELAX_TIMEOUT_SECONDS,
                                       relax_cell=True,
-                                      progress_slot=progress_slot))
+                                      progress_slot=progress_slot,
+                                      cancel_event=cancel_event))
             except RuntimeError:
                 if abort_requested():  # executor already shut down
                     raise HTTPException(status_code=503, detail="Server is shutting down")
@@ -3005,6 +3075,10 @@ async def relax_structure(request: dict):
                                f"({abort_reason}); returning the best "
                                f"structure found so far")
 
+            if cancel_event.is_set():
+                return await _relax_cancelled_response(
+                    "after relaxation", session_id, filename, final_structure)
+
             # Predict relaxed structure using optimized prediction
             try:
                 final_results = _prediction_payload(
@@ -3016,6 +3090,9 @@ async def relax_structure(request: dict):
             # Optional elastic constants on the relaxed structure. Failures
             # never fail the relaxation: they are reported in elastic_info.
             elastic_info = None
+            if elastic and cancel_event.is_set():
+                return await _relax_cancelled_response(
+                    "before elastic", session_id, filename, final_structure)
             if elastic:
                 elastic_warnings = []
                 if CAP_STRESS not in backend.capabilities:
@@ -3043,7 +3120,8 @@ async def relax_structure(request: dict):
                                               strain_fraction=elastic_strain / 100.0,
                                               fmax=ELASTIC_ION_FMAX,
                                               timeout_s=ELASTIC_TIMEOUT_SECONDS,
-                                              progress_slot=progress_slot))
+                                              progress_slot=progress_slot,
+                                              cancel_event=cancel_event))
                         elastic_info["execution_time_s"] = round(time.monotonic() - elastic_started, 2)
                         if elastic_info.get("n_unconverged_cells", 0) > 0:
                             elastic_warnings.append(
@@ -3064,13 +3142,23 @@ async def relax_structure(request: dict):
                         elastic_info["warnings"] = elastic_warnings
                     except Exception as e:
                         logger.warning(f"Elastic calculation failed: {e}")
-                        shutting_down = abort_requested()
+                        reason = getattr(e, "reason", None)
+                        shutting_down = (reason == "shutdown" if reason is not None
+                                         else abort_requested())
+                        disconnected = reason == "client_disconnected"
                         elastic_info = {
                             "error": ("Elastic calculation aborted: server is shutting down"
-                                      if shutting_down else f"Elastic calculation failed: {e}"),
-                            "abort_reason": "shutdown" if shutting_down else None,
+                                      if shutting_down else
+                                      "Elastic calculation aborted: client disconnected"
+                                      if disconnected else f"Elastic calculation failed: {e}"),
+                            "abort_reason": ("shutdown" if shutting_down else
+                                             "client_disconnected" if disconnected else None),
                             "execution_time_s": round(time.monotonic() - elastic_started, 2),
                             "warnings": elastic_warnings}
+
+            if cancel_event.is_set():
+                return await _relax_cancelled_response(
+                    "after final prediction", session_id, filename, final_structure)
 
             # Calculate energy difference in total eV
             energy_diff = None
