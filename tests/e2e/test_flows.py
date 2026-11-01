@@ -6,6 +6,7 @@ until fixed; the PR that fixes a bug removes the matching marker.
 import io
 import json
 import re
+import time
 import zipfile
 
 import pytest
@@ -616,3 +617,83 @@ def test_new_cif_closes_relax_event_source_immediately(page, live_server):
     pick_sample_and_confirm(page, SAMPLE_NI)
     assert page.evaluate("window.__sources.every(s => s.readyState === 2)")
     hold.release()
+
+
+# -- relax cancellation on client disconnect --------------------------------
+
+@pytest.fixture
+def slow_relax(live_server):
+    """Make the fake model's relaxations slow and never-converging.
+
+    The calculator of the (singleton) fake backend is swapped for a slow one
+    and restored on request (``fast()``) or at teardown. Test-only hook.
+    """
+    import time as _time
+    import numpy as _np
+    from ase.calculators.emt import EMT as _EMT
+    from mlip.registry import get_backend
+
+    class SlowEMT(_EMT):
+        def calculate(self, atoms=None, properties=("energy",), system_changes=None):
+            super().calculate(atoms, properties, system_changes or [])
+            _time.sleep(0.1)
+            self.results["forces"] = self.results["forces"] + _np.array([0.5, 0.0, 0.0])
+
+    backend = get_backend("fake-emt")
+    backend._calculator = SlowEMT()
+
+    def fast():
+        backend._calculator = None  # rebuilt lazily as a plain EMT
+
+    yield fast
+    fast()
+
+
+def _wait_relax_started(timeout=15):
+    import main as _main
+    deadline = time.time() + timeout
+    while not _main._relax_semaphore.locked():
+        assert time.time() < deadline, "relax never started"
+        time.sleep(0.05)
+    time.sleep(1.0)  # let the optimizer take a few steps
+
+
+def _wait_relax_freed(timeout=8):
+    import main as _main
+    deadline = time.time() + timeout
+    while _main._relax_semaphore.locked():
+        assert time.time() < deadline, "relax slot not released after cancel"
+        time.sleep(0.05)
+
+
+def test_closing_page_mid_relax_frees_slot_for_other_page(page, live_server, slow_relax):
+    open_app(page, live_server)
+    load_sample(page, SAMPLE_CU, supercell=(2, 2, 2))
+    page.click("#analyze-btn", force=True)
+    _wait_relax_started()
+    page.close()
+    _wait_relax_freed()
+    slow_relax()  # plain fast calculator again
+
+    other = page.context.new_page()
+    try:
+        other.set_default_timeout(20_000)
+        other.on("response", lambda r: (_ for _ in ()).throw(AssertionError("429"))
+                 if r.status == 429 else None)
+        open_app(other, live_server)
+        load_sample(other, SAMPLE_CU)
+        analyze(other)
+    finally:
+        other.close()
+
+
+def test_new_cif_mid_relax_frees_slot_for_next_relax(page, live_server, slow_relax):
+    open_app(page, live_server)
+    load_sample(page, SAMPLE_CU, supercell=(2, 2, 2))
+    page.click("#analyze-btn", force=True)
+    _wait_relax_started()
+    new_cif_dialog(page)
+    pick_sample_and_confirm(page, SAMPLE_NI)
+    _wait_relax_freed()
+    slow_relax()
+    analyze(page)
