@@ -10,7 +10,7 @@ import time
 import numpy as np
 
 from .base import ase_stress_to_gpa
-from .executor import is_aborted
+from .executor import is_aborted, abort_reason
 
 # Voigt order (same as ASE): xx, yy, zz, yz, xz, xy
 _VOIGT_PAIRS = [(0, 0), (1, 1), (2, 2), (1, 2), (0, 2), (0, 1)]
@@ -29,7 +29,15 @@ CONSISTENCY_REL = 0.05
 
 
 class ElasticTimeout(Exception):
-    """Raised when the wall-clock deadline is exceeded."""
+    """Raised when the wall-clock deadline is exceeded or the run is aborted.
+
+    ``reason`` ("shutdown" | "client_disconnected" | "timeout") is recorded at
+    raise time.
+    """
+
+    def __init__(self, message="", reason="timeout"):
+        super().__init__(message)
+        self.reason = reason
 
 
 def _strain_matrix(component, delta):
@@ -64,7 +72,8 @@ def _tensor_at_strain(atoms, calculator, strain, fmax, max_steps, deadline,
             if progress_cb is not None:
                 progress_cb(counter, total)
             if is_aborted(cancel_event):
-                raise ElasticTimeout(f"aborted before strained cell {counter}/{total}")
+                raise ElasticTimeout(f"aborted before strained cell {counter}/{total}",
+                                     abort_reason(cancel_event))
             if deadline is not None and time.monotonic() > deadline:
                 raise ElasticTimeout(
                     f"time limit reached before strained cell {counter}/{total}")
@@ -78,7 +87,8 @@ def _tensor_at_strain(atoms, calculator, strain, fmax, max_steps, deadline,
             def _check_deadline(counter=counter):
                 if is_aborted(cancel_event):
                     raise ElasticTimeout(
-                        f"aborted during strained cell {counter}/{total}")
+                        f"aborted during strained cell {counter}/{total}",
+                        abort_reason(cancel_event))
                 if deadline is not None and time.monotonic() > deadline:
                     raise ElasticTimeout(
                         f"time limit reached during strained cell {counter}/{total}")

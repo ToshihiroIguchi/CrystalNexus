@@ -192,11 +192,104 @@ def test_wrapper_is_outermost_in_main_app():
     assert main.app.user_middleware[0].cls is RelaxDisconnectMiddleware
 
 
-def test_handler_without_wrapper_state_gets_fresh_event(client, monkeypatch):
+def test_rate_limit_still_applies_to_relax(client, monkeypatch):
     """Rate limiting still applies in front of /api/relax (wrapper is transparent)."""
     monkeypatch.setattr(main, "_rate_limit_check", lambda host: False)
     r = client.post("/api/relax", json={"session_id": "x"})
     assert r.status_code == 429
+
+
+def test_handler_without_wrapper_state_warns_once_and_uses_fresh_event(caplog):
+    """Direct call (no middleware state): handler still runs, and logs a visible
+    one-time warning that disconnect detection is inactive."""
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    main._warned_no_disconnect_state = False
+    req = SimpleNamespace(scope={})
+    with caplog.at_level("WARNING", logger=main.logger.name):
+        for _ in range(2):
+            with pytest.raises(HTTPException) as ei:
+                asyncio.run(main.relax_structure({"session_id": "nope"}, req))
+            assert ei.value.status_code == 404  # got past the cancel_event setup
+    warnings = [r for r in caplog.records if "disconnect detection is inactive" in r.getMessage()]
+    assert len(warnings) == 1
+
+
+def test_deadline_abort_stays_timeout_even_if_cancel_set_afterwards():
+    ev = threading.Event()
+    watcher = RelaxationWatcher(_FakeAtoms(), fmax=0.1, max_steps=10,
+                                deadline=time.monotonic() - 1, cancel_event=ev)
+    with pytest.raises(RelaxationAborted) as ei:
+        watcher()
+    ev.set()  # client leaves only after the deadline abort
+    assert ei.value.reason == "timeout"
+
+
+def test_run_relaxation_timeout_reason_not_rewritten_by_later_flags():
+    ev = threading.Event()
+    result = run_relaxation(EMT(), _cu(), fmax=0.01, steps=50, optimizer_name="FIRE",
+                            timeout_s=-1, cancel_event=ev)
+    ev.set()  # only after the run ended
+    assert result["abort_reason"] == "timeout"
+
+
+def test_elastic_timeout_reason_recorded_at_raise():
+    ev = threading.Event()
+    with pytest.raises(elastic_mod.ElasticTimeout) as ei:
+        compute_elastic(bulk("Cu", "fcc", a=3.61, cubic=True), EMT(),
+                        deadline=time.monotonic() - 1, cancel_event=ev)
+    ev.set()
+    assert ei.value.reason == "timeout"
+    with pytest.raises(elastic_mod.ElasticTimeout) as ei:
+        compute_elastic(bulk("Cu", "fcc", a=3.61, cubic=True), EMT(), cancel_event=ev)
+    assert ei.value.reason == "client_disconnected"
+
+
+def test_wrapper_matches_with_root_path():
+    seen = {}
+
+    async def inner(scope, receive, send):
+        seen["state"] = STATE_KEY in scope.get("state", {})
+
+    mw = RelaxDisconnectMiddleware(inner)
+
+    async def shim(scope, receive, send):
+        scope["root_path"] = "/proxy"
+        await mw(scope, receive, send)
+
+    for path in ("/proxy/api/relax", "/api/relax"):
+        seen.clear()
+        _drive(shim, path=path)
+        assert seen["state"] is True, path
+    seen.clear()
+    _drive(shim, path="/proxy/api/other")
+    assert seen["state"] is False
+
+
+def test_wrapper_rejects_oversized_content_length_and_chunked_body():
+    called = []
+
+    async def inner(scope, receive, send):
+        called.append(1)
+
+    mw = RelaxDisconnectMiddleware(inner, max_body=10)
+
+    async def shim(scope, receive, send):
+        scope["headers"] = [(b"content-length", b"1000")]
+        await mw(scope, receive, send)
+
+    sent, _ = _drive(shim, chunks=(b"x" * 5,))
+    assert sent[0]["status"] == 413 and not called
+    sent, _ = _drive(mw, chunks=(b"x" * 6, b"x" * 6))
+    assert sent[0]["status"] == 413 and not called
+    _drive(mw, chunks=(b"x" * 10,))
+    assert called == [1]
+
+
+def test_oversized_relax_body_gets_413_via_main_app(client):
+    r = client.post("/api/relax", content=b"x" * (2 * 1024 * 1024),
+                    headers={"content-type": "application/json"})
+    assert r.status_code == 413
 
 
 def test_relax_still_logged_by_analytics_middleware(client):
@@ -308,15 +401,22 @@ def _slow_payload(sid, **kw):
             "optimizer": "FIRE", **kw}
 
 
-@pytest.mark.parametrize("elastic", [False])
-def test_disconnect_mid_relax_frees_semaphore_and_skips_rest(live_url, elastic):
+def _steps_done(sid):
+    return len(main._relax_progress.get(sid, {}).get("history", []))
+
+
+def _elastic_started(sid):
+    msg = (main._relax_progress.get(sid, {}).get("state") or {}).get("message", "")
+    return msg.startswith("Elastic")
+
+
+def test_disconnect_mid_relax_frees_semaphore_and_skips_rest(live_url):
     sid = _session()
-    c = _raw_post(live_url, _slow_payload(sid, elastic=elastic))
-    assert _wait_until(lambda: main._relax_semaphore.locked(), 10) is not None
-    time.sleep(1.0)  # let it run a few steps
+    c = _raw_post(live_url, _slow_payload(sid))
+    assert _wait_until(lambda: _steps_done(sid) >= 3, 60) is not None  # optimizer running
     assert main._relax_semaphore.locked()
     c.close()
-    freed_after = _wait_until(lambda: not main._relax_semaphore.locked(), 8)
+    freed_after = _wait_until(lambda: not main._relax_semaphore.locked(), 60)
     assert freed_after is not None, "semaphore not released after client disconnect"
     assert not executor.abort_requested()
     # Only the initial prediction ran; no final prediction.
@@ -341,3 +441,19 @@ def test_no_disconnect_completes_normally(live_url):
     assert body["relaxation_info"]["abort_reason"] is None
     assert _SlowBackend.predict_calls == 2
     assert session_manager.get_session_info(sid).get("relaxed_structure") is not None
+
+
+def test_disconnect_during_elastic_stage_cancels_and_frees_semaphore(live_url):
+    sid = _session()
+    c = _raw_post(live_url, _slow_payload(sid, max_steps=3, elastic=True))
+    assert _wait_until(lambda: _elastic_started(sid), 120) is not None
+    assert main._relax_semaphore.locked()
+    c.close()
+    assert _wait_until(lambda: not main._relax_semaphore.locked(), 60) is not None
+    assert not executor.abort_requested()
+    assert _SlowBackend.predict_calls == 2  # initial + final; elastic then cancelled
+    assert session_manager.get_session_info(sid).get("relaxed_structure") is None
+    c2 = _raw_post(live_url, _slow_payload(_session(), max_steps=3))
+    status, body = _recv_http(c2)
+    c2.close()
+    assert status == 200 and body["status"] == "success"
